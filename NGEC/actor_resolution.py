@@ -8,7 +8,6 @@ import pandas as pd
 import pickle
 import dateparser
 import unidecode
-import elasticsearch
 from elasticsearch import Elasticsearch
 from elasticsearch_dsl import Search
 from collections import Counter
@@ -89,7 +88,6 @@ def load_spacy_lg():
     nlp = spacy.load("en_core_web_lg", disable=["pos", "dep"])
     return nlp
 
-#def load_trf_model(model_dir='sentence-transformers/paraphrase-MiniLM-L6-v2'): ## Change to offline!!
 def load_trf_model(model_dir='sentence-transformers/all-MiniLM-L12-v2'): ## Change to offline!!
     model = SentenceTransformer(model_dir)
     return model
@@ -459,7 +457,7 @@ class ActorResolver:
         qt = re.sub(r"(?<=\d\d)(st|nd|rd|th)\b", '', qt).strip()
         qt = re.sub(r"(?<=\d)(st|nd|rd|th)\b", '', qt).strip()
         qt = re.sub("^\d+? ", "", qt).strip()
-        qt = qt.rstrip("'s").strip()
+        qt = re.sub("'s$", "", qt).strip()
         if len(qt) < 2:
             return ""
         return qt
@@ -467,7 +465,7 @@ class ActorResolver:
 
     def search_wiki(self, 
                     query_term, 
-                    limit_search_by_term="", 
+                    limit_term="", 
                     fuzziness="AUTO", 
                     max_results=200,
                     fields=['title^50', 'redirects^50', 'alternative_names'],
@@ -487,7 +485,7 @@ class ActorResolver:
         #if text:
         #    query_term = query_term + " " + text
         logger.debug(f"Using query term: '{query_term}'")
-        if not limit_search_by_term:
+        if not limit_term:
             q = {"multi_match": {"query": query_term,
                              "fields": fields,
                              "type": score_type,
@@ -503,7 +501,7 @@ class ActorResolver:
                              "fuzziness" : fuzziness,
                              "operator": "and"
                         }},
-                          {"multi_match": {"query": limit_search_by_term,
+                          {"multi_match": {"query": limit_term,
                              "fields": limit_fields,
                              "type": "most_fields"}}]}}
 
@@ -761,25 +759,27 @@ class ActorResolver:
                 best = good_res[np.argmax(sims)]
                 best['wiki_reason'] = f"Multiple redirect exact matches *and* context text provided: picking by neural similarity. Similarity = {max(sims)}"
                 return best
+            
         logger.debug("Falling back to title neural similarity")
         titles = [i['title'] for i in good_res[0:50]] # just look at first 10? HACK
-        if not titles:
-            logger.debug("No titles. Returning None")
-            return None
-        enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
-        enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
-        actor_sims = cos_sim(enc_query, enc_titles)
-        if torch.max(actor_sims) > 0.9:
-            match = torch.argmax(actor_sims)
-            best = good_res[match]
-            best['wiki_reason'] = "High neural similarity between query and Wiki title"
-            logger.debug(f"High neural similarity between query and Wiki title: {torch.max(actor_sims)}")
-            return best
+        if titles:
+            enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
+            enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
+            actor_sims = cos_sim(enc_query, enc_titles)
+            if torch.max(actor_sims) > 0.9:
+                match = torch.argmax(actor_sims)
+                best = good_res[match]
+                best['wiki_reason'] = "High neural similarity between query and Wiki title"
+                logger.debug(f"High neural similarity between query and Wiki title: {torch.max(actor_sims)}")
+                return best
+            else:
+                logger.debug(f"Not a close enough match on neural title sim. Closest was {torch.max(actor_sims)} on {good_res[torch.argmax(actor_sims)]['title']}")
         else:
-            logger.debug(f"Not a close enough match on neural title sim. Closest was {torch.max(actor_sims)} on {good_res[torch.argmax(actor_sims)]['title']}")
+            logger.debug("No titles. Returning None")
         
-
+        logger.debug("Continuing to alt name matches")
         if len(alt_match) == 1: 
+            logger.debug("Only a single alt name match--check for decent title neural similarity")
             best = alt_match[0]
             enc_titles = self.actor_sim.encode([best['title']], show_progress_bar=False)
             enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
@@ -790,21 +790,35 @@ class ActorResolver:
         elif alt_match:
             logger.debug("Falling back to title neural similarity on alt name matches")
             titles = [i['title'] for i in alt_match[0:10]] # just look at first 10? HACK
-            if not titles:
-                logger.debug("No titles. Returning None")
-                return None
-            enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
-            enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
-            actor_sims = cos_sim(enc_query, enc_titles)
-            if torch.max(actor_sims) > 0.9:
-                match = torch.argmax(actor_sims)
-                best = alt_match[match]
-                best['wiki_reason'] = "High neural similarity between query and Wiki title on alt name match"
-                logger.debug(f"High neural similarity between query and Wiki title on alt name match: {torch.max(actor_sims)}")
-                return best
-            else:
-                logger.debug(f"Not a close enough match on neural title sim. Closest was {torch.max(actor_sims)} on {alt_match[torch.argmax(actor_sims)]['title']}")
+            if titles:
+                enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
+                enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
+                actor_sims = cos_sim(enc_query, enc_titles)
+                if torch.max(actor_sims) > 0.9:
+                    match = torch.argmax(actor_sims)
+                    best = alt_match[match]
+                    best['wiki_reason'] = "High neural similarity between query and Wiki title on alt name match"
+                    logger.debug(f"High neural similarity between query and Wiki title on alt name match: {torch.max(actor_sims)}")
+                    return best
+                else:
+                    logger.debug(f"Not a close enough match on neural title sim. Closest was {torch.max(actor_sims)} on {alt_match[torch.argmax(actor_sims)]['title']}")
         
+        # last shot: neural similarity on intro paras for all results
+        logger.debug("Checking for neural similarity on all intro paras")
+        if context:
+            logger.debug("Falling back to text--intro neural similarity")
+            intro_paras = [i['intro_para'][0:200] for i in good_res[0:50]]
+            logger.debug(f"Provided text: {context}")
+            logger.debug(f"intro paras: {intro_paras}")
+            encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
+            encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
+            sims = cos_sim(encoded_text, encoded_intros)[0]
+            if max(sims) > 0.25:
+                best = good_res[np.argmax(sims)]
+                best['wiki_reason'] = f"No title/redirect/alt matches: picking by intro para neural similarity. Similarity = {max(sims)}"
+                return best 
+        else:
+            logger.debug("No context text provided.")
         return None
 
         
