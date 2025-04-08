@@ -4,7 +4,6 @@ import re
 import spacy
 import numpy as np
 from sentence_transformers import SentenceTransformer
-import pandas as pd
 import pickle
 import dateparser
 import unidecode
@@ -22,1496 +21,2082 @@ import pylcs
 from sentence_transformers.util import cos_sim
 import torch
 
-import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+# Constants
+#DEFAULT_MODEL_PATH = 'sentence-transformers/all-MiniLM-L12-v2'
+DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
+DEFAULT_SIM_MODEL_PATH = 'actor_sim_model2'
+DEFAULT_BASE_PATH = "./assets"
+
+# Threshold constants
+THRESHOLD_COSINE_SIMILARITY = 0.8
+THRESHOLD_DOT_SIMILARITY = 45
+THRESHOLD_NEURAL_TITLE_MATCH = 0.9
+THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
+THRESHOLD_CONTEXT_MATCH = 0.7
+THRESHOLD_HIGH_CONFIDENCE = 0.90
+THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
+
+
 def setup_es():
-    CLIENT = Elasticsearch()
+    """Establish connection to Elasticsearch and return search object."""
     try:
-        CLIENT.ping()
-        #logger.info("Successfully connected to Elasticsearch.")
-    except:
-        ConnectionError("Could not locate Elasticsearch. Are you sure it's running?")
-    conn = Search(using=CLIENT, index="wiki")
-    return conn
+        client = Elasticsearch()
+        client.ping()
+        conn = Search(using=client, index="wiki")
+        return conn
+    except Exception as e:
+        raise ConnectionError(f"Could not connect to Elasticsearch: {e}")
+
 
 def check_wiki(conn):
     """
+    Verify that the Wikipedia index is using the correct format.
+    
     We changed the Wikipedia format on 2022-04-21, so make sure we're using the
     right one.
     """
-    q = {"multi_match": {"query": "Massachusetts",
-                                        "fields": ['title^2', 'alternative_names'],
-                                        "type" : "phrase"}
-                                        }
-    res = conn.query(q)[0:1].execute()
-    top = res['hits']['hits'][0].to_dict()['_source']
-    if 'redirects' not in top.keys():
-        raise ValueError("You seem to be using an outdated Wikipedia index that doesn't have a 'redirects' field. Please talk to Andy.")
+    query = {
+        "multi_match": {
+            "query": "Massachusetts",
+            "fields": ['title^2', 'alternative_names'],
+            "type": "phrase"
+        }
+    }
+    
+    try:
+        res = conn.query(query)[0:1].execute()
+        top = res['hits']['hits'][0].to_dict()['_source']
+        if 'redirects' not in top.keys():
+            raise ValueError("You seem to be using an outdated Wikipedia index that doesn't have a 'redirects' field. Please talk to Andy.")
+    except Exception as e:
+        raise ValueError(f"Error checking Wikipedia index: {e}")
+
 
 def load_county_dict(base_path):
     """
-    Construct a list of regular expressions to find countries by their name and nationality 
-    (e.g. Germany, German).
-
-    Update: sometimes we want countries from the categories, but those are much messier. For example:
-    - countries recognized by Germany
-    - Russian-speaking countries.
-
-    To handle those, have a second set of patterns that start with "of" or "in". This is hacky!
+    Construct a list of regular expressions to find countries by their name and nationality.
+    
+    Returns two lists of pattern tuples:
+    1. Regular patterns for direct country mentions (e.g., Germany, German)
+    2. Category patterns for indirect mentions (e.g., of German, in Germany)
     """
     file = os.path.join(base_path, "countries.csv")
     countries = pd.read_csv(file)
-    #nat_dict = {}
+    
+    # Direct country name/nationality patterns
     nat_list = []
-    for n, i in countries.iterrows():
-        nats = [i.strip() for i in i['Nationality'].split(",")]
-        for nat in nats:
-            patt = (re.compile(nat + "(?=[^a-z]|$)"), i['CCA3'])
-            nat_list.append(patt)
-        patt = (re.compile(i['Name']), i['CCA3'])
-        nat_list.append(patt)
+    for _, row in countries.iterrows():
+        # Handle nationalities
+        nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
+        for nat in nationalities:
+            pattern = (re.compile(nat + r"(?=[^a-z]|$)"), row['CCA3'])
+            nat_list.append(pattern)
+        
+        # Handle country names
+        pattern = (re.compile(row['Name']), row['CCA3'])
+        nat_list.append(pattern)
+    
+    # Category patterns (for "of X" or "in X" constructions)
     nat_list_cat = []
     for prefix in ['of ', 'in ']: 
-        for n, i in countries.iterrows():
-            nats = [i.strip() for i in i['Nationality'].split(",")]
-            for nat in nats:
-                patt = (re.compile(prefix + nat), i['CCA3'])
-                nat_list_cat.append(patt)
-            patt = (re.compile(i['Name']), i['CCA3'])
-            nat_list_cat.append(patt)
+        for _, row in countries.iterrows():
+            # Handle nationalities in categories
+            nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
+            for nat in nationalities:
+                pattern = (re.compile(prefix + nat), row['CCA3'])
+                nat_list_cat.append(pattern)
+            
+            # Handle country names in categories
+            pattern = (re.compile(prefix + row['Name']), row['CCA3'])
+            nat_list_cat.append(pattern)
+    
     return nat_list, nat_list_cat
 
 
 def load_spacy_lg():
-    nlp = spacy.load("en_core_web_lg", disable=["pos", "dep"])
-    return nlp
+    """Load and return the spaCy language model."""
+    return spacy.load("en_core_web_lg", disable=["pos", "dep"])
 
-def load_trf_model(model_dir='sentence-transformers/all-MiniLM-L12-v2'): ## Change to offline!!
-    model = SentenceTransformer(model_dir)
-    return model
 
-def load_actor_sim_model(base_path, model_dir='actor_sim_model2'): 
+def load_trf_model(model_dir=DEFAULT_MODEL_PATH):
+    """Load and return the sentence transformer model."""
+    return SentenceTransformer(model_dir, trust_remote_code=True)
+
+
+def load_actor_sim_model(base_path, model_dir=DEFAULT_SIM_MODEL_PATH):
     """
-    This is the model that was trained on Wikipedia redirects to figure out if two names
-    are equivalent. Used to identify Wikipedia articles if no exact matches are available.
+    Load the actor similarity model trained on Wikipedia redirects.
+    
+    This model helps identify if two names refer to the same entity.
     """
     combo_path = os.path.join(base_path, model_dir)
-    model = SentenceTransformer(combo_path)
-    return model
+    return SentenceTransformer(combo_path)
 
 
 class ActorResolver:
+    # Actor type priority dictionary - used for sorting/ranking actor codes
+    ACTOR_TYPE_PRIORITIES = {
+        "IGO": 200, "ISM": 195, "IMG": 192, "PRE": 190, "REB": 130,
+        "SPY": 110, "JUD": 105, "OPP": 102, "GOV": 100, "LEG": 90,
+        "MIL": 80, "COP": 75, "PRM": 72, "ELI": 70, "PTY": 65,
+        "BUS": 60, "UAF": 50, "CRM": 48, "LAB": 47, "MED": 45,
+        "NGO": 43, "SOC": 42, "EDU": 41, "JRN": 40, "ENV": 39,
+        "HRI": 38, "UNK": 37, "REF": 35, "AGR": 30, "RAD": 20,
+        "CVL": 10, "JEW": 5, "MUS": 5, "BUD": 5, "CHR": 5,
+        "HIN": 5, "REL": 1, "": 0, "JNK": 51, "NON": 60
+    }
+    
+    # Actor types that should be treated as countries themselves
+    SPECIAL_ACTOR_TYPES = ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]
+
     def __init__(self, 
                 spacy_model=None,
-                base_path="./assets",
+                base_path=DEFAULT_BASE_PATH,
                 save_intermediate=False,
                 wiki_sort_method="neural",
                 gpu=False):
-        if gpu:  
-            self.device='cuda'
-        else:
-            self.device = None
+        """
+        Initialize the ActorResolver with the necessary models and data.
+        
+        Parameters
+        ----------
+        spacy_model : spaCy model, optional
+            Pre-loaded spaCy model to use
+        base_path : str, optional
+            Path to the directory containing assets
+        save_intermediate : bool, optional
+            Whether to save intermediate results
+        wiki_sort_method : str, optional
+            Method to use for sorting Wikipedia results
+        gpu : bool, optional
+            Whether to use GPU for model inference
+        """
+        # Set device for model inference
+        self.device = 'cuda' if gpu else None
+        
+        # Initialize Elasticsearch connection
         self.conn = setup_es()
-        if spacy_model:
-            self.nlp = spacy_model
-        else:
-            self.nlp = load_spacy_lg()
+        
+        # Load models
+        self.nlp = spacy_model if spacy_model else load_spacy_lg()
         self.trf = load_trf_model()
         self.actor_sim = load_actor_sim_model(base_path)
-        self.agents = self.clean_agents(base_path)
-        self.trf_matrix = self.load_embeddings(base_path)
+        
+        # Load and preprocess data
+        self.agents = self._load_and_clean_agents(base_path)
+        self.trf_matrix = self._load_embeddings(base_path)
         self.nat_list, self.nat_list_cat = load_county_dict(base_path)
+        
+        # Store configuration
         self.base_path = base_path
         self.cache = {}
-        self.save_intermediate=save_intermediate
+        self.save_intermediate = save_intermediate
         self.wiki_sort_method = wiki_sort_method
 
+    def _load_and_clean_agents(self, base_path):
+        """
+        Load the PLOVER/CAMEO agents file and clean the data.
+        
+        This method replaces the previous clean_agents method.
+        """
+        file = os.path.join(base_path, "PLOVER_agents.txt")
+        with open(file, "r", encoding="utf-8") as f:
+            data = f.read()
 
-    def load_embeddings(self, base_path):
+        # Remove curly braces content
+        data = re.sub(r"\{.+?\}", "", data)
+        
+        # Split into lines and filter
+        lines = [line for line in data.split("\n") if line and not line.startswith("#")]
+        lines = [re.sub(r"#.+", "", line).strip() for line in lines if not line.startswith("!")]
+        
+        logger.debug(f"Total agents: {len(lines)}")
+        
+        # Parse patterns
+        patterns = []
+        for line in lines:
+            try:
+                # Extract code from square brackets
+                code_match = re.findall(r"\[.+?\]", line)
+                if not code_match:
+                    continue
+                    
+                code = re.sub(r"[\[\]~]", "", code_match[0]).strip()
+                
+                # Extract pattern
+                pattern = re.sub(r"(\[.+?\])", "", line)
+                pattern = re.sub(r"_", " ", pattern).lower().strip()
+                
+                patterns.append({
+                    "pattern": pattern,
+                    "code_1": code[0:3],
+                    "code_2": code[3:]
+                })
+            except Exception as e:
+                logger.info(f"Error loading {line}: {e}")
+        
+        # Handle special pattern replacements
+        cleaned_patterns = []
+        for pattern in patterns:
+            if 'code_1' not in pattern:
+                continue
+                
+            # Handle !minist! placeholder
+            if re.search("!minist!", pattern['pattern']):
+                for replacement in ["Minister", "Ministers", "Ministry", "Ministries"]:
+                    new_pattern = {
+                        "code_1": pattern['code_1'],
+                        "code_2": pattern['code_2'],
+                        "pattern": re.sub(r"!minist!", replacement, pattern['pattern']).title()
+                    }
+                    cleaned_patterns.append(new_pattern)
+            
+            # Handle !person! placeholder
+            elif re.search("!person!", pattern['pattern']):
+                for replacement in ["person", "man", "woman", "men", "women"]:
+                    new_pattern = {
+                        "code_1": pattern['code_1'],
+                        "code_2": pattern['code_2'],
+                        "pattern": re.sub(r"!person!", replacement, pattern['pattern'])
+                    }
+                    cleaned_patterns.append(new_pattern)
+            else:
+                cleaned_patterns.append(pattern)
+                
+        return cleaned_patterns
+
+    def _load_embeddings(self, base_path):
         """
-        Load pre-computed embedding matrices from disk, or, if
-        the precomputed matrices are out-of-date, re-compute and
-        save them.
+        Load pre-computed embedding matrices or compute and save them if needed.
+        
+        This method checks if the agent embeddings are up-to-date and recomputes
+        them if necessary.
         """
-        # Check if the agents file and bert matrix are mismatched.
-        # If so, recompute bert matrix and save.
+        # Check if the agents file and embedding matrix are mismatched
         hash_file = os.path.join(base_path, "PLOVER_agents.hash")
         try:
             with open(hash_file, "r") as f:
                 existing_hash = f.read()
         except FileNotFoundError:
             existing_hash = ""
+            
+        # Get current hash of agents file
         agent_file = os.path.join(base_path, "PLOVER_agents.txt")
         with open(agent_file, "r", encoding="utf-8") as f:
             data = f.read() 
-        hashed_agents = hash(data)
-        if str(existing_hash) != str(hashed_agents):
+        current_hash = hash(data)
+        
+        # Recompute embeddings if hash mismatch
+        if str(existing_hash) != str(current_hash):
             logger.info("Agents file and pre-computed matrix are mismatched. Recomputing...")
-            patterns = [i['pattern'] for i in self.agents]
+            patterns = [agent['pattern'] for agent in self.agents]
             trf_matrix = self.trf.encode(patterns, device=self.device)
+            
+            # Save new embeddings and hash
             file_bert = os.path.join(base_path, "bert_matrix.pkl")
             with open(file_bert, "wb") as f:
                 pickle.dump(trf_matrix, f)
             with open(hash_file, "w") as f:
-                f.write(str(hashed_agents))
-
-        # now read in the matrix
+                f.write(str(current_hash))
+        
+        # Load embeddings
         logger.info("Reading in BERT matrix")
         file_bert = os.path.join(base_path, "bert_matrix.pkl")
         with open(file_bert, "rb") as f:
-            trf_matrix = pickle.load(f)
-        return trf_matrix
+            return pickle.load(f)
 
-
-    def clean_agents(self, base_path):
+    def clean_query(self, qt):
         """
-        Read, parse, and clean a PLOVER/CAMEO agents file.
+        Clean and normalize a query string.
+        
+        Removes articles, ordinals, possessives, and other noise from text.
         """
-        file = os.path.join(base_path, "PLOVER_agents.txt")
-        with open(file, "r", encoding="utf-8") as f:
-            data = f.read()
+        # Handle empty or simple cases
+        qt = str(qt).strip()
+        if qt in ['The', 'the', 'a', 'an', '']:
+            return ""
+            
+        # Normalize whitespace
+        qt = re.sub(' +', ' ', qt)  # remove multiple spaces
+        qt = re.sub('\n+', ' ', qt)  # newline to space
+        
+        # Remove starting articles and ending prepositions
+        qt = re.sub(r"^the ", "", qt, flags=re.IGNORECASE).strip()
+        qt = re.sub(r"^an ", "", qt, flags=re.IGNORECASE).strip()
+        qt = re.sub(r"^a ", "", qt, flags=re.IGNORECASE).strip()
+        qt = re.sub(r" of$", "", qt).strip()
+        qt = re.sub(r"^'s", "", qt).strip()
+        
+        # Remove ordinals
+        qt = re.sub(r"(?<=\d\d)(st|nd|rd|th)\b", '', qt).strip()  # two-digit ordinals
+        qt = re.sub(r"(?<=\d)(st|nd|rd|th)\b", '', qt).strip()    # one-digit ordinals
+        
+        # Remove leading numbers and possessives
+        qt = re.sub(r"^\d+? ", "", qt).strip()
+        qt = re.sub(r"'s$", "", qt).strip()
+        
+        # Return empty string if too short
+        if len(qt) < 2:
+            return ""
+            
+        return qt
 
-        data = re.sub(r"\{.+?\}", "", data)
-        ags = data.split("\n")
-        ags = [i for i in ags if i]
-        ags = [i for i in ags if i[0] != "#"]
-        logger.debug(f"Total agents: {len(ags)}")
-        ags = [i for i in ags if i[0] != "!"]
-        ags = [re.sub(r"#.+", "", i).strip() for i in ags]
-
-        patterns = []
-        for i in ags:
-            try:
-                code = re.findall(r"\[.+?\]", i)[0]
-                code = re.sub(r"[\[\]]", "", code)
-                code = re.sub(r"~", "", code).strip()
-                # convert from CAMEO to PLOVER style
-                patt = re.sub(r"(\[.+?\])", "", i)
-                patt = re.sub(r"_", " ", patt).lower()
-            except Exception as e:
-                logger.info(f"Error loading {i}:", e)
-            d = {"pattern": patt.strip(), "code_1": code[0:3], "code_2": code[3:]}
-            patterns.append(d)
-
-        cleaned = []
-        for i in patterns:
-            if 'code_1' not in i.keys():
-                continue
-            if re.search("!minist!", i['pattern']):
-                for p in ["Minister", "Ministers", "Ministry", "Ministries"]:
-                    new_p = {"code_1": i['code_1'], "code_2": i['code_2']}
-                    new_p['pattern'] = re.sub(r"!minist!", p, i['pattern']).title()
-                    cleaned.append(new_p)
-            if re.search("!person!", i['pattern']):
-                new_p = [re.sub(r"!person!", p, i['pattern']) for p in ["person", "man", "woman", "men", "women"]]
-                new_p = [{"code_1": i['code_1'], "code_2": i['code_2'], 'pattern': p} for p in new_p]
-                cleaned.extend(new_p)
-            else:
-                cleaned.append(i)
-        return cleaned
-
-
-    def trf_agent_match(self, 
-                        non_ent_text, 
-                        country="", 
-                        method="cosine",
-                        threshold=0.6):
+    def trf_agent_match(self, text, country="", method="cosine", threshold=THRESHOLD_COSINE_SIMILARITY):
         """
-        Compare an input string to the agent file using a sentence transformer
-        representation, returning the closest match
-
+        Compare input text to the agent file using sentence transformer embeddings.
+        
         Parameters
         ----------
-        non_ent_text: str
-          The input string to match
-        country: str
-          The name of the country (previously detected) to add to the resulting 
-          entry.
-        threshold: num
-          Threshold below which matches won't be returned
-
+        text : str
+            Text to match against agent patterns
+        country : str, optional
+            Country code to include in the result
+        method : str, optional
+            Similarity method to use ('cosine' or 'dot')
+        threshold : float, optional
+            Similarity threshold below which matches are ignored
+            
         Returns
-        ------
-        match: dict
-          {"country": the country name (passed in to function),
-          "description": the pattern in the agents file that was the closest match,
-          "code_1": PLOVER code 1 (e.g. GOV, MIL, etc),
-          "code_2": any secondary PLOVER code}
+        -------
+        dict or None
+            Match information or None if no match above threshold
         """
+        # Validate parameters
         if method not in ['cosine', 'dot']:
             raise ValueError("distance method must be one of ['cosine', 'dot']")
+            
+        # Adjust threshold based on method
         if method == "dot" and threshold < 1:
-            threshold = 45
-            logger.info(f"Threshold is low high for dot. Setting to {threshold}")
+            threshold = THRESHOLD_DOT_SIMILARITY
+            logger.info(f"Threshold is too low for dot product. Setting to {threshold}")
         if method == "cosine" and threshold > 2:
             threshold = 0.1
             logger.info(f"Threshold is too high for cosine. Setting to {threshold}")
+            
+        # Handle empty inputs
         if country is None:
             country = ""
-        non_ent_text = self.clean_query(non_ent_text)
-        #non_ent_text = non_ent_text.lower()
-
-        if not non_ent_text:
+        text = self.clean_query(text)
+        if not text:
             return None
-        query_trf = self.trf.encode(non_ent_text, show_progress_bar=False)
+            
+        # Compute similarity
+        query_trf = self.trf.encode(text, show_progress_bar=False)
         if method == "dot":
             sims = np.dot(self.trf_matrix, query_trf.T)
-        if method == "cosine":
+        else:  # cosine
             sims = 1 - cdist(self.trf_matrix, np.expand_dims(query_trf.T, 0), metric="cosine")
-        mmatch = self.agents[np.argmax(sims)].copy() # hopefully that fixes the weird wiki bug!!
-        if np.max(sims) < threshold:
-            logger.debug(f"Agents file comparsion. Closest result for {non_ent_text} is {mmatch['pattern']} with conf {np.max(sims)}")
+            
+        # Get best match
+        best_idx = np.argmax(sims)
+        max_sim = np.max(sims)
+        
+        # Return None if below threshold
+        if max_sim < threshold:
+            best_pattern = self.agents[best_idx]['pattern']
+            logger.debug(f"Agent comparison. Closest result for '{text}' is '{best_pattern}' with confidence {max_sim}")
             return None
-        mmatch['country'] = country
-        mmatch['description'] = mmatch['pattern']
-        mmatch['query'] = non_ent_text
-        mmatch['conf'] = np.max(sims)
-        logger.debug(f"Match from trf_agent_match: {mmatch}")
-        return mmatch
+            
+        # Create match object
+        match = self.agents[best_idx].copy()
+        match['country'] = country
+        match['description'] = match['pattern']
+        match['query'] = text
+        match['conf'] = max_sim
+        
+        logger.debug(f"Match from trf_agent_match: {match}")
+        return match
 
     def strip_ents(self, doc):
-        """Strip out named entities from text"""
+        """
+        Strip out named entities from text, leaving only non-entity tokens.
+        
+        Parameters
+        ----------
+        doc : spaCy Doc
+            Document to process
+            
+        Returns
+        -------
+        str
+            Text with named entities removed
+        """
         skip_list = ['a', 'and', 'the', "'s", "'", "s"]
-        non_ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ == "" and i.text.lower() not in skip_list]).strip()
-        return non_ent_text.strip()
+        non_ent_tokens = [
+            token.text_with_ws for token in doc 
+            if token.ent_type_ == "" and token.text.lower() not in skip_list
+        ]
+        return ''.join(non_ent_tokens).strip()
     
     def get_noun_phrases(self, doc):
+        """
+        Extract non-entity noun phrases from a document.
+        
+        Parameters
+        ----------
+        doc : spaCy Doc
+            Document to process
+            
+        Returns
+        -------
+        str
+            Space-joined noun phrases
+        """
         skip_list = ['a', 'and', 'the']
-        noun_phrases = [i for i in doc.noun_chunks if i[-1].ent_type_ == ""]
-        short_text = ' '.join([j.text_with_ws.lower() for i in noun_phrases for j in i if j.text not in skip_list and j.ent_type_ not in ['CARDINAL', 'DATE', 'ORDINAL']]).strip()
-        return short_text
+        skip_ent_types = ['CARDINAL', 'DATE', 'ORDINAL']
+        
+        # Get noun chunks that don't end with an entity
+        noun_phrases = [chunk for chunk in doc.noun_chunks if chunk[-1].ent_type_ == ""]
+        
+        # Collect tokens from those chunks, skipping certain words and entity types
+        phrase_tokens = []
+        for chunk in noun_phrases:
+            for token in chunk:
+                if token.text not in skip_list and token.ent_type_ not in skip_ent_types:
+                    phrase_tokens.append(token.text_with_ws.lower())
+                    
+        return ''.join(phrase_tokens).strip()
 
     def get_noun_phrases_list(self, doc):
-        skip_list = ['a', 'and', 'the']
-        noun_phrases = [i for i in doc.noun_chunks if i[-1].ent_type_ == ""]
-        return noun_phrases
+        """
+        Get a list of non-entity noun phrases from a document.
+        
+        Parameters
+        ----------
+        doc : spaCy Doc
+            Document to process
+            
+        Returns
+        -------
+        list
+            List of noun phrases
+        """
+        return [chunk for chunk in doc.noun_chunks if chunk[-1].ent_type_ == ""]
 
-    def short_text_to_agent(self, text, strip_ents=False, threshold=0.5):
+    def short_text_to_agent(self, text, strip_ents=False, threshold=THRESHOLD_COSINE_SIMILARITY):
+        """
+        Convert short text to an agent code, optionally stripping entities first.
+        
+        Parameters
+        ----------
+        text : str
+            Text to convert
+        strip_ents : bool, optional
+            Whether to strip named entities before matching
+        threshold : float, optional
+            Similarity threshold for matching
+            
+        Returns
+        -------
+        dict or None
+            Agent code information or None if no match
+        """
+        # Extract country and clean text
         country, trimmed_text = self.search_nat(text)
         trimmed_text = self.clean_query(trimmed_text)
+        
+        # Optionally strip entities
         if strip_ents:
             try:
                 doc = self.nlp(text)
                 trimmed_text = self.strip_ents(doc)
             except IndexError:
-                # if NLPing fails, continue with trimmed_text as-is
+                # If NLP fails, continue with trimmed_text as-is
                 pass
+                
             if trimmed_text == "s":
                 return None
-        code = self.trf_agent_match(trimmed_text, country=country, threshold=threshold)
-        return code
-
-#    def long_text_to_agent(self, text, method="cosine", threshold=0.7):
-#        """
-#        Keep only noun phrases and do BERT similarity lookup.
-#        
-#        Question: Better to look up each noun phrase separately, rather than
-#        joining them all together and then looking it up?
-#        """
-#        country, trimmed_text = self.search_nat(text)
-#        doc = self.nlp(trimmed_text)
-#        short_text = self.get_noun_phrases(doc)
-#        code = self.trf_agent_match(short_text, country=country, method=method, threshold=threshold)
-#        return code       
+                
+        # Match against agent patterns
+        return self.trf_agent_match(trimmed_text, country=country, threshold=threshold)
 
     def search_nat(self, text, method="longest", categories=False):
         """
-        Grep for a country name in plain text and return a canonical form
+        Search for country names/nationalities in text and return canonical form.
         
-        TODO: Handle multiple country mentions
+        Parameters
+        ----------
+        text : str
+            Text to search for country mentions
+        method : str, optional
+            Method to use when multiple countries are found ('longest' or 'first')
+        categories : bool, optional
+            Whether to use category patterns (of X, in X)
+            
+        Returns
+        -------
+        tuple
+            (country_code, trimmed_text) or (None, original_text) if no country found
         """
+        if not text:
+            return None, text
+            
+        # Normalize text for consistent matching
         text = unidecode.unidecode(text)
         found = []
-        #for k, v in self.nat_dict.items():
-        if not categories:
-            for k, v in self.nat_list:
-                match = re.search(k, text)
-                if match:
-                    trimmed_text = re.sub(k, "", text).strip()
-                    trimmed_text = self.clean_query(trimmed_text)
-                    found.append((v, trimmed_text.strip(), match))
-        if categories:
-            for k, v in self.nat_list_cat:
-                match = re.search(k, text)
-                if match:
-                    trimmed_text = re.sub(k, "", text).strip()
-                    trimmed_text = self.clean_query(trimmed_text)
-                    found.append((v, trimmed_text.strip(), match))
+        
+        # Use appropriate pattern list based on categories flag
+        patterns = self.nat_list_cat if categories else self.nat_list
+        
+        # Find all matching countries
+        for pattern, country_code in patterns:
+            match = re.search(pattern, text)
+            if match:
+                # Remove the matched country/nationality from text
+                trimmed_text = re.sub(pattern, "", text).strip()
+                trimmed_text = self.clean_query(trimmed_text)
+                found.append((country_code, trimmed_text.strip(), match))
+        
+        # Return if no countries found
         if not found:
             return None, text
-        elif method == "longest":
-            # return the longest match to handle e.g. "Saudi", "Britain"
+            
+        # Return based on requested method
+        if method == "longest":
+            # Return the longest match to handle e.g. "Saudi", "Britain"
             found.sort(key=lambda x: len(x[1]))
             return found[0][0:2]
         elif method == "first":
+            # Return the first occurrence in the text
             found.sort(key=lambda x: x[2].span()[0])
             return found[0][0:2]
         else:
-            raise ValueError(f"search_nat sorting option must be one of ['longest', 'first']. You gave {method}")
+            valid_methods = "['longest', 'first']"
+            raise ValueError(f"search_nat sorting option must be one of {valid_methods}. You gave {method}")
 
-
+    def _parse_office_term_dates(self, infobox, office_key, num=""):
+        """
+        Parse term start and end dates for an office from an infobox.
+        
+        Parameters
+        ----------
+        infobox : dict
+            Wikipedia infobox data
+        office_key : str
+            Key for the office in the infobox
+        num : str, optional
+            Number suffix for additional offices
+            
+        Returns
+        -------
+        tuple
+            (term_start, term_end) as datetime objects or None
+        """
+        # Try to get term end date
+        term_end = None
+        try:
+            term_end = dateparser.parse(infobox[f"term_end{num}"])
+        except KeyError:
+            try:
+                # Sometimes no underscore is used
+                term_end = dateparser.parse(infobox[f"termend{num}"])
+            except KeyError:
+                pass
+        
+        # Try to get term start date
+        term_start = None
+        try:
+            term_start = dateparser.parse(infobox[f"term_start{num}"])
+        except KeyError:
+            try:
+                # Sometimes no underscore is used
+                term_start = dateparser.parse(infobox[f"termstart{num}"])
+            except KeyError:
+                pass
+                
+        return term_start, term_end
 
     def parse_offices(self, infobox):
         """
-        TODO: in some rare cases, offices are listed under 'title' instead of 'office'. E.g.:
-        'box_type': 'officeholder',
- 'infobox': {'name': 'Rosario Marin',
-  'image': 'rosario marin.jpg',
-  'caption': 'Official Portrait',
-  'order': '41st',
-  'title': 'Treasurer of the United States',
-  'term_start': 'August 16, 2001',
-  'term_end': 'June 30, 2003',
-  'predecessor': 'Mary Ellen Withrow',
-  'successor': 'Anna Escobedo Cabral',
-  'president': 'George W. Bush',
-  'order2': '',
-  'title2': 'Mayor of Huntington Park, California',
-  'term_start2': '1999',
-  'term_end2': '2000',
-  'president2': '',
-  'predecessor2': 'Tom Jackson',
-  'successor2': 'Jessica R. Maes',
-  'order3': '',
+        Extract office information from a Wikipedia infobox.
+        
+        Parameters
+        ----------
+        infobox : dict
+            Wikipedia infobox data
+            
+        Returns
+        -------
+        list
+            List of office information dictionaries
         """
         offices = []
-        office_keys = [i for i in infobox.keys() if re.search("office", i)]
+        office_keys = [key for key in infobox.keys() if re.search("office", key)]
         logger.debug(f"Office keys: {office_keys}")
-        for i in office_keys:
+        
+        for key in office_keys:
+            # Determine office number
             try:
-                n = int(re.findall(r"\d+", i)[0])
+                num = re.findall(r"\d+", key)
+                num = num[0] if num else ""
             except:
-                n = ""  # this is the most current one
+                num = ""  # this is the most current one
+                
+            # Parse dates
+            term_start, term_end = self._parse_office_term_dates(infobox, key, num)
+            
+            # Add office to list
             try:
-                term_end = dateparser.parse(infobox[f"term_end{n}"])
-            except KeyError:
-                try:
-                    term_end = dateparser.parse(infobox[f"termend{n}"])  # sometimes no underscore
-                except KeyError:
-                    term_end = None
-            try:
-                term_start = dateparser.parse(infobox[f"term_start{n}"])
-            except KeyError:
-                try:
-                    term_start = dateparser.parse(infobox[f"termstart{n}"]) # sometimes no underscore
-                except KeyError:
-                    term_start = None
-            try:
-                d = {"office": infobox[f"office{n}"],
-                    "office_num": n,
+                office = {
+                    "office": infobox[f"office{num}"],
+                    "office_num": num,
                     "term_start": term_start,
-                    "term_end": term_end}
-                offices.append(d)
+                    "term_end": term_end
+                }
+                offices.append(office)
             except KeyError:
                 continue
+                
         return offices
-
-
 
     def get_current_office(self, offices, query_date):
         """
+        Determine which offices were active at the query date.
+        
         Parameters
         ----------
-        offices: list of dir
-          Parsed out office list from Wiki
-        query_date: str or datetime
-          Date to use to get "current" office
+        offices : list
+            List of office dictionaries from parse_offices
+        query_date : str or datetime
+            Date to check against
+            
+        Returns
+        -------
+        tuple
+            (active_offices, detected_countries)
         """
-        if type(query_date) is str:
+        # Parse query date if it's a string
+        if isinstance(query_date, str):
             query_date = dateparser.parse(query_date)
+            
         active_offices = []
         detected_countries = []
-        for i in offices:
-            if not i['term_start']:
+        
+        for office in offices:
+            # Skip offices with no start date
+            if not office['term_start']:
                 continue
-            # REMOVE!!!!!
-            country, trimmed_text = self.search_nat(i['office'])
+                
+            # Extract country from office title
+            country, _ = self.search_nat(office['office'])
             if country:
                 detected_countries.append(country)
 
             try:
-                if i['term_start'] < query_date and not i['term_end']:
-                    active_offices.append(i)
-                elif i['term_start'] < query_date and i['term_end'] > query_date:
-                    active_offices.append(i)
+                # Check if office was active at query date
+                is_active = False
+                if office['term_start'] < query_date:
+                    if not office['term_end'] or office['term_end'] > query_date:
+                        is_active = True
+                        
+                if is_active:
+                    active_offices.append(office)
             except Exception:
                 logger.info("Term start or end error in current office")
-        # handle the ELI/CVL/former official thing outside the function
+                
         return active_offices, detected_countries
 
-    def clean_query(self, qt):
-        qt = str(qt).strip()
-        if qt in ['The', 'the', 'a', 'an', '']:
-            return ""
-        qt = re.sub(' +', ' ', qt) # get rid of multiple spaces 
-        qt = re.sub('\n+', ' ', qt) # newline to space
-        # remove starting the, An, etc.
-        qt = re.sub("^the ", "", qt.strip()) 
-        qt = re.sub("^[Aa]n ", "", qt).strip()
-        qt = re.sub("^[Aa] ", "", qt).strip()
-        qt = re.sub(" of$", "", qt).strip()
-        qt = re.sub("^'s", "", qt).strip()
-        # remove ordinals (First a two-digit ordinal, then a 1 digit)
-        qt = re.sub(r"(?<=\d\d)(st|nd|rd|th)\b", '', qt).strip()
-        qt = re.sub(r"(?<=\d)(st|nd|rd|th)\b", '', qt).strip()
-        qt = re.sub("^\d+? ", "", qt).strip()
-        qt = re.sub("'s$", "", qt).strip()
-        if len(qt) < 2:
-            return ""
-        return qt
-
-
-    def search_wiki(self, 
-                    query_term, 
-                    limit_term="", 
-                    fuzziness="AUTO", 
-                    max_results=200,
-                    fields=['title^50', 'redirects^50', 'alternative_names'],
-                    score_type = "best_fields"):
+    def search_wiki(self, query_term, limit_term="", fuzziness="AUTO", max_results=200,
+                   fields=['title^50', 'redirects^50', 'alternative_names'],
+                   score_type="best_fields"):
         """
-        Search Wikipedia for a given query term. Returns a list of dicts.
-
+        Search Wikipedia for a given query term.
+        
         Parameters
         ----------
-        query_term: str
-            Query term to search for
-        limit_term: str
-            Also search for this term to limit results. For example, country names.
-
+        query_term : str
+            Term to search for
+        limit_term : str, optional
+            Term to limit results by
+        fuzziness : str, optional
+            Elasticsearch fuzziness parameter
+        max_results : int, optional
+            Maximum number of results to return
+        fields : list, optional
+            Fields to search in
+        score_type : str, optional
+            Elasticsearch score type
+            
+        Returns
+        -------
+        list
+            List of Wikipedia article dictionaries
         """
+        # Clean query term
         query_term = self.clean_query(query_term)
-        #if text:
-        #    query_term = query_term + " " + text
         logger.debug(f"Using query term: '{query_term}'")
+        
+        # Construct query
         if not limit_term:
-            q = {"multi_match": {"query": query_term,
-                             "fields": fields,
-                             "type": score_type,
-                             "fuzziness" : fuzziness,
-                             "operator": "and"
-                        }}
+            #query = {
+            #    "multi_match": {
+            #        "query": query_term,
+            #        "fields": fields,
+            #        "type": score_type,
+            #        "fuzziness": fuzziness,
+            #        "operator": "and"
+            #    }
+            #}
+            query = {
+                "bool": {
+                    "should": [
+                        # Exact match on title (case-sensitive)
+                        {"term": {"title": {"value": query_term, "boost": 50}}},
+
+                        # Analyzed match on title (case-insensitive, tokenized)
+                        {"match": {"title": {"query": query_term, "boost": 30}}},
+
+                        # Exact match on redirects (for acronyms)
+                        {"term": {"redirects": {"value": query_term, "boost": 150}}},
+
+                        # Analyzed match on redirects
+                        {"match": {"redirects": {"query": query_term, "boost": 50}}},
+
+                        # Analyzed match on alternative names
+                        {"match": {"alternative_names": {"query": query_term, "boost": 25}}}
+                    ]
+                }
+            }
         else:
-            limit_fields = ["title^100", "redirects^100", "alternative_names",
-                            "intro_para", "categories", "infobox"]
-            q = {"bool": {"must": [{"multi_match": {"query": query_term,
-                             "fields": fields,
-                             "type": score_type,
-                             "fuzziness" : fuzziness,
-                             "operator": "and"
-                        }},
-                          {"multi_match": {"query": limit_term,
-                             "fields": limit_fields,
-                             "type": "most_fields"}}]}}
-
-        res = self.conn.query(q)[0:max_results].execute()
-        results = [i.to_dict()['_source'] for i in res['hits']['hits']] 
-        logger.debug(f"Number of hits for fuzzy ES/Wiki query: {len(results)}")
+            # Include limit term in query
+            limit_fields = [
+                "title^100", "redirects^100", "alternative_names",
+                "intro_para", "categories", "infobox"
+            ]
+            query = {
+                "bool": {
+                    "must": [
+                        {
+                            "multi_match": {
+                                "query": query_term,
+                                "fields": fields,
+                                "type": score_type,
+                                "fuzziness": fuzziness,
+                                "operator": "and"
+                            }
+                        },
+                        {
+                            "multi_match": {
+                                "query": limit_term,
+                                "fields": limit_fields,
+                                "type": "most_fields"
+                            }
+                        }
+                    ]
+                }
+            }
+        
+        # Execute search
+        res = self.conn.query(query)[0:max_results].execute()
+        results = [hit.to_dict()['_source'] for hit in res['hits']['hits']]
+        logger.debug(f"Number of hits for Wiki query: {len(results)}")
+        # log the titles of the results
+        logger.debug(f"Titles of the results: {[result['title'] for result in results]}")
+        
         return results
-
 
     def text_ranker_features(self, matches, fields):
         """
-        Given a list of fields and a list of Wikipedia matches, pull the text
-        out from the fields and combine into one big string for comparing.
+        Extract and combine text from specified fields in Wiki matches.
+        
+        Parameters
+        ----------
+        matches : list
+            List of Wikipedia match dictionaries
+        fields : list
+            List of fields to extract
+            
+        Returns
+        -------
+        list
+            List of combined text strings
         """
         wiki_text = []
-        for m in matches:
-            txt = ""
-            for f in fields:
+        
+        for match in matches:
+            combined_text = ""
+            
+            for field in fields:
                 try:
-                    t = m[f]
-                    if type(t) is str:
-                        sents = t.split("\n")
-                        if sents:
-                            txt = " " + txt + " " + sents[0]
-                    elif type(t) is list:
-                        tj = ', '.join(t)
-                        txt = txt + tj
+                    field_value = match[field]
+                    
+                    # Handle different field types
+                    if isinstance(field_value, str):
+                        sentences = field_value.split("\n")
+                        if sentences:
+                            combined_text += " " + sentences[0]
+                    elif isinstance(field_value, list):
+                        combined_text += ", ".join(field_value)
                 except KeyError:
-                    logger.debug(f"Missing key {f} for {m['title']}")
+                    logger.debug(f"Missing key {field} for {match['title']}")
                     continue
-            wiki_text.append(txt.strip())
+                    
+            wiki_text.append(combined_text.strip())
+            
         return wiki_text
-
-    def compute_lcs(self, query, matches, fields):
-        max_strings = []
-        mean_strings = []
-        min_edit = [] # not implemented. Add edit distance?
-        for m in matches:
-            match_max = []
-            match_mean = []
-            match_edits = []
-            for f in fields:
-                lcs_list = [pylcs.lcs_sequence_length(query, i) for i in m[f] if i]
-                if lcs_list:
-                    match_max.append(np.max(lcs_list))
-                    match_mean.append(np.mean(lcs_list))
-                else:
-                    match_max.append(0)
-                    match_mean.append(0)
-            max_strings.append(np.max(match_max) / len(query))
-            mean_strings.append(np.mean(match_mean) / len(query))
-        return max_strings, mean_strings
 
     def _trim_results(self, results):
         """
-        Helper function to remove bad articles
+        Remove bad Wikipedia articles from search results.
+        
+        Filters out disambiguation pages, stub articles, and other non-useful pages.
+        
+        Parameters
+        ----------
+        results : list
+            List of Wikipedia article dictionaries
+            
+        Returns
+        -------
+        list
+            Filtered list of articles
         """
-        good_res = [i for i in results if not re.search("(stub|User|Wikipedia\:)", i['title']) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("disambiguation", i['title']) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("Category\:", i['intro_para'][0:50]) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("is the name of", i['intro_para'][0:50]) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("may refer to", i['intro_para'][0:50]) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("can refer to", i['intro_para'][0:50]) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("most commonly refers to", i['intro_para'][0:50]) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("usually refers to", i['intro_para'][0:80]) if i['intro_para']]
-        good_res = [i for i in good_res if not re.search("is a surname", i['intro_para'][0:50]) if i['intro_para']]
-        good_res = [i for i in good_res if len(i['intro_para']) > 50 if i['intro_para']]
-        good_res = [i for i in good_res if i['intro_para'].strip()]
+        # Early return if no results
+        if not results:
+            return []
+            
+        # Filter out articles without intro paragraph
+        good_res = [r for r in results if 'intro_para' in r and r['intro_para']]
+        
+        # Filter out disambiguation and stub pages
+        patterns_to_exclude = [
+            (r"(stub|User|Wikipedia\:)", 'title'),
+            (r"disambiguation", 'title'),
+            (r"Category\:", lambda r: r['intro_para'][0:50]),
+            (r"is the name of", lambda r: r['intro_para'][0:50]),
+            (r"may refer to", lambda r: r['intro_para'][0:50]),
+            (r"can refer to", lambda r: r['intro_para'][0:50]),
+            (r"most commonly refers to", lambda r: r['intro_para'][0:50]),
+            (r"usually refers to", lambda r: r['intro_para'][0:80]),
+            (r"is a surname", lambda r: r['intro_para'][0:50])
+        ]
+        
+        # Apply each exclusion pattern
+        for pattern, field_getter in patterns_to_exclude:
+            if callable(field_getter):
+                good_res = [r for r in good_res if not re.search(pattern, field_getter(r))]
+            else:
+                good_res = [r for r in good_res if field_getter not in r or not re.search(pattern, r[field_getter])]
+        
+        # Filter out articles with short intro paragraphs
+        good_res = [r for r in good_res if len(r['intro_para']) > 50 and r['intro_para'].strip()]
+        
         return good_res
 
+    def _find_exact_title_matches(self, query_term, results, country=None):
+        """
+        Find exact matches between query term and Wikipedia article titles.
+        
+        Parameters
+        ----------
+        query_term : str
+            Query term to match
+        results : list
+            List of Wikipedia article dictionaries
+        country : str, optional
+            Country to include in matching
+            
+        Returns
+        -------
+        list
+            List of matching articles
+        """
+        query_country = f"{query_term} ({country})" if country else query_term
+        exact_matches = []
 
-    def pick_best_wiki(self, 
-                    query_term, 
-                    results, 
-                    context="", 
-                    country="",
-                    wiki_sort_method="neural",
-                    rank_fields=['title', 'categories', 'alternative_names', 'redirects']):
+        
+        for result in results:
+            # TODO: construct two sets, one for query and one for title
+            # and check intersection. E.g.:
+            #query_expanded = [query_term, query_country, query_term.upper(), query_country.upper(), 
+            #                  query_term.title(), query_country.title(), remove_accents(query_term), 
+            #                  remove_accents(query_country)]
+            #title_expanded = [result['title'], result['title'].upper(), result['title'].title(),
+            #                    remove_accents(result['title'])]
+            # Check various forms of the title
+            title = result['title']
+            if (query_term == title or 
+                query_country == title or
+                query_term.upper() == title or 
+                query_country.upper() == title or
+                query_term == remove_accents(title) or 
+                query_country == remove_accents(title) or
+                query_term.title() == title or 
+                query_country.title() == title):
+                exact_matches.append(result)
+                
+        return exact_matches
+
+    def _find_redirect_matches(self, query_term, results, country=None):
+        """
+        Find matches between query term and Wikipedia article redirects.
+        
+        Parameters
+        ----------
+        query_term : str
+            Query term to match
+        results : list
+            List of Wikipedia article dictionaries
+        country : str, optional
+            Country to include in matching
+            
+        Returns
+        -------
+        list
+            List of matching articles
+        """
+        query_country = f"{query_term} ({country})" if country else query_term
+        redirect_matches = []
+        
+        for result in results:
+            if 'redirects' not in result:
+                continue
+                
+            redirects = result['redirects']
+            if (query_term in redirects or 
+                query_country in redirects or
+                query_term.title() in redirects or 
+                query_country.title() in redirects or
+                query_term.upper() in redirects or 
+                query_country.upper() in redirects):
+                redirect_matches.append(result)
+                
+        return redirect_matches
+
+    def _find_alt_name_matches(self, query_term, results):
+        """
+        Find matches between query term and Wikipedia article alternative names.
+        
+        Parameters
+        ----------
+        query_term : str
+            Query term to match
+        results : list
+            List of Wikipedia article dictionaries
+            
+        Returns
+        -------
+        list
+            List of matching articles
+        """
+        alt_matches = []
+        
+        for result in results:
+            # Check alternative names
+            if 'alternative_names' in result and (
+                query_term in result['alternative_names'] or
+                query_term.title() in result['alternative_names']):
+                alt_matches.append(result)
+                
+            # Check infobox name
+            elif ('infobox' in result and 
+                  'name' in result['infobox'] and
+                  query_term == result['infobox']['name']):
+                alt_matches.append(result)
+                
+        return alt_matches
+
+    def _rank_by_neural_similarity(self, candidates, query_term, context=None, fields=None):
+        """
+        Rank candidates by neural similarity to query term and/or context.
+        
+        Parameters
+        ----------
+        candidates : list
+            List of candidate articles
+        query_term : str
+            Query term for comparison
+        context : str, optional
+            Context text for comparison
+        fields : list, optional
+            Fields to use for comparison
+            
+        Returns
+        -------
+        list
+            Ranked list of candidates
+        """
+        if not candidates:
+            return []
+            
+        if not fields:
+            fields = ['title', 'categories', 'alternative_names', 'redirects']
+            
+        # Use neural similarity with context if provided
+        if context:
+            intro_paras = [c['intro_para'][0:200] for c in candidates[0:50]]
+            logger.debug("Top 30 intro paras: " + str(intro_paras))
+            encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
+            encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
+            
+            # Get similarity scores
+            sims = cos_sim(encoded_text, encoded_intros)[0]
+            logger.debug("Similarity scores: " + str(sims))
+            
+            # Sort candidates by similarity
+            similarities = [(s, c) for s, c in zip(sims, candidates)]
+            similarities.sort(reverse=True)
+            
+            best_score = similarities[0][0] if similarities else 0
+            if best_score > THRESHOLD_CONTEXT_MATCH:
+                best_candidate = similarities[0][1]
+                best_candidate['wiki_reason'] = f"Neural similarity to context. Score = {best_score}"
+                return [best_candidate]
+        
+        # If no context or low similarity, use title similarity
+        try:
+            wiki_info = self.text_ranker_features(candidates, fields)
+            category_trf = self.trf.encode(wiki_info, show_progress_bar=False, device=self.device)
+            query_trf = self.trf.encode(query_term, show_progress_bar=False, device=self.device)
+            
+            sims = 1 - cdist(category_trf, np.expand_dims(query_trf.T, 0), metric="cosine")
+            ranked_candidates = [x for _, x in sorted(zip(sims.flatten(), candidates), reverse=True)]
+            
+            if ranked_candidates and max(sims) > THRESHOLD_NEURAL_TITLE_MATCH:
+                ranked_candidates[0]['wiki_reason'] = f"Neural similarity to query. Score = {sims[0][0]}"
+                return ranked_candidates[0]
+        except Exception as e:
+            logger.debug(f"Error in neural similarity ranking: {e}")
+            logger.debug(f"Query term: {query_term}")
+            return candidates
+
+    def _check_titles_similarity(self, query_term, candidates):
+        """
+        Check similarity between query term and candidate titles using actor_sim model.
+        
+        Parameters
+        ----------
+        query_term : str
+            Query term to match
+        candidates : list
+            List of candidate articles
+            
+        Returns
+        -------
+        tuple
+            (best_match, similarity_score) or (None, 0)
+        """
+        if not candidates:
+            return None, 0
+            
+        titles = [c['title'] for c in candidates[0:50]]  # Limit to first 50
+        
+        # Encode titles and query
+        enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
+        enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
+        
+        # Get similarity scores
+        sims = cos_sim(enc_query, enc_titles)
+        best_score = torch.max(sims)
+        
+        if best_score > THRESHOLD_NEURAL_TITLE_MATCH:
+            best_idx = torch.argmax(sims)
+            best_match = candidates[best_idx]
+            best_match['wiki_reason'] = f"High neural similarity between query and Wiki title: {best_score}"
+            return best_match, best_score
+            
+        return None, best_score
+
+    def pick_best_wiki(self, query_term, results, context="", country="",
+                      wiki_sort_method="neural", rank_fields=None):
+        """
+        Select the best Wikipedia article from search results.
+        
+        This method applies various matching strategies in sequence to find the best match.
+        
+        Parameters
+        ----------
+        query_term : str
+            Query term to match
+        results : list
+            List of Wikipedia article search results
+        context : str, optional
+            Context text to help with disambiguation
+        country : str, optional
+            Country code to help with disambiguation
+        wiki_sort_method : str, optional
+            Method to use for sorting results
+        rank_fields : list, optional
+            Fields to use for ranking
+            
+        Returns
+        -------
+        dict or None
+            Best matching Wikipedia article or None if no good match
+        """
+        # Set default rank fields if not provided
+        if rank_fields is None:
+            rank_fields = ['title', 'categories', 'alternative_names', 'redirects']
+            
+        # Clean query term
         query_term = self.clean_query(query_term)
         logger.debug(f"Using query term '{query_term}'")
-        if country:
-            query_country = f"{query_term} ({country})"
-            logger.debug(f"Secondary country query term {query_country}")
-        else:
-            query_country = query_term
+        
+        # Construct country-qualified query if country provided
+        query_country = f"{query_term} ({country})" if country else query_term
+        
+        # Handle empty results
         if not results:
-            logger.debug("No wikipedia results. Returning None")
-            return []
-        #if len(results) == 1:
-        #    best = results[0]
-        #    best['wiki_reason'] = f"Only one hit."
-        #    return best
+            logger.debug("No Wikipedia results. Returning None")
+            return None
+            
+        # Remove disambiguation pages, stubs, etc.
         good_res = self._trim_results(results)
         if not good_res:
             return None
-        logger.debug(f"Pared down to {len(good_res)} good results")
-
-        ### Get exact title matches ###
-        exact_matches = []
-        for i in good_res:
-            if query_term == i['title'] or query_country == i['title']:
-                exact_matches.append(i)
-            elif query_term.upper() == i['title'] or query_country.upper() == i['title']:
-                exact_matches.append(i)
-            elif query_term == remove_accents(i['title']) or query_country == remove_accents(i['title']):
-                exact_matches.append(i)
-            elif query_term.title() == i['title'] or query_country.title() == i['title']:
-                exact_matches.append(i)
-        logger.debug(f"Number of title matches: {len(exact_matches)}")
-
-        #### Get exact redirect matches ####
-        redirect_match = []
-        for i in good_res:
-            if query_term in i['redirects'] or query_country in i['redirects']:
-                redirect_match.append(i)
-            elif query_term.title() in i['redirects'] or query_country.title() in i['redirects']:
-                redirect_match.append(i)
-            elif query_term.upper() in i['redirects'] or query_country.upper() in i['redirects']:
-                redirect_match.append(i)
-        logger.debug(f"Number of redirect matches: {len(redirect_match)}")
-
-        #### Get exact alternative name matches ####
-        alt_match = []
-        for i in good_res:
-            if query_term in i['alternative_names']:
-                alt_match.append(i)
-            elif query_term.title() in i['alternative_names']:
-                alt_match.append(i)
-            elif 'infobox' in i.keys():
-                if 'name' in i['infobox'].keys():
-                    if query_term == i['infobox']['name']:
-                        alt_match.append(i)
-        logger.debug(f"Number of alt name matches: {len(alt_match)}")
-
-        ##### Start the logic #######
-        # First pick by exact title match
-        # Change: don't do this if there's a redirect match (ISIS issue)
-        if len(exact_matches) == 1 and len(redirect_match) == 0:
+            
+        logger.debug(f"Filtered down to {len(good_res)} valid results")
+        
+        # Find exact title matches
+        exact_matches = self._find_exact_title_matches(query_term, good_res, country)
+        logger.debug(f"Found {len(exact_matches)} exact title matches")
+        
+        # Find redirect matches
+        redirect_matches = self._find_redirect_matches(query_term, good_res, country)
+        logger.debug(f"Found {len(redirect_matches)} redirect matches")
+        
+        # Find alternative name matches
+        alt_matches = self._find_alt_name_matches(query_term, good_res)
+        logger.debug(f"Found {len(alt_matches)} alternative name matches")
+        
+        # Handle single exact title match with no redirects
+        if len(exact_matches) == 1 and not redirect_matches:
             best = exact_matches[0]
             best['wiki_reason'] = "Only one exact title match and no redirects"
             return best
-        #if len(exact_matches) == 2 and len(redirect_match) == 0:
-        #    if len(exact_matches[0]['intro_para']) > len(exact_matches[1]['intro_para']):
-        #        best = exact_matches[0]
-        #    else:
-        #        best = exact_matches[1]
-        #    best['wiki_reason'] = "Only two exact title matches, returning page with long intro"
-        #    return best
-
-
-        if exact_matches: 
+        
+            
+        # Handle multiple exact matches
+        if exact_matches:
             if wiki_sort_method == "alt_names":
-                exact_matches.sort(key=lambda x: -len(x['alternative_names']))
+                # Sort by number of alternative names
+                exact_matches.sort(key=lambda x: -len(x.get('alternative_names', [])))
                 if exact_matches:
-                    logger.debug(f"Wiki: returning exact title match (out of {len(exact_matches)} with longest alternative_names field")
                     best = exact_matches[0]
-                    best['wiki_reason'] = f"Multiple title exact matches: Returning longest alt names"
+                    best['wiki_reason'] = "Multiple title exact matches: using longest alt names"
                     return best
-            elif wiki_sort_method in ["neural", "lcs"]: # TODO: add lcs to this part too
+            elif wiki_sort_method in ["neural", "lcs"]:
+                # Try context-based similarity first
                 if context:
-                    exact_redirect = exact_matches + redirect_match
-                    intro_paras = [i['intro_para'][0:300] for i in exact_redirect]
-                    short_desc = [i['short_desc'] for i in exact_redirect]
-                    encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
-                    encoded_dec = self.trf.encode(short_desc, show_progress_bar=False, device=self.device)
-                    encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
-                    sims_intro = cos_sim(encoded_text, encoded_intros)[0]
-                    sims_desc = cos_sim(encoded_text, encoded_dec)[0]
-                    sims_desc = np.array([i if j != "" else -1 for i, j in zip(sims_desc, short_desc)])
-                    # compute the elementwise mean
-                    sims = (sims_intro + sims_desc) / 2
-                    logger.debug(f"Titles: {[i['title'] for i in exact_redirect]}")
-                    logger.debug(f"Sims: {sims}")
-                    if max(sims) > 0.25:
-                        best = exact_redirect[np.argmax(sims)]
-                        best['wiki_reason'] = f"Multiple exact matches *and* context text provided: picking by neural similarity. Similarity = {max(sims)}"
-                        return best
-                else:
-                    try:
-                        wiki_info = self.text_ranker_features(exact_matches, rank_fields)
-                        category_trf = self.trf.encode(wiki_info, show_progress_bar=False, device=self.device)
-                        query_trf = self.trf.encode(query_term, show_progress_bar=False)
-                        sims = 1 - cdist(category_trf, np.expand_dims(query_trf.T, 0), metric="cosine")
-                        exact_matches_sorted = [x for _, x in sorted(zip(sims, exact_matches), reverse=True)]
-                        best = exact_matches_sorted[0]
-                        best['wiki_reason'] = f"Multiple title exact matches: picking by neural similarity. Similarity = {sims[0]}"
-                        return best
-                    except Exception as e:
-                        logger.debug(f"{e}")
-                        logger.debug(f"Exception on query term {query_term}")
-
-
-        if len(redirect_match) == 1:
-            best = redirect_match[0]
+                    combined_matches = exact_matches + redirect_matches
+                    ranked = self._rank_by_neural_similarity(combined_matches, query_term, context)
+                    if ranked and 'wiki_reason' in ranked[0]:
+                        return ranked[0]
+                
+                # Fall back to query-based similarity
+                ranked = self._rank_by_neural_similarity(exact_matches, query_term, fields=rank_fields)
+                if ranked and len(ranked) > 0:
+                    return ranked[0]
+        
+        # Handle single redirect match
+        if len(redirect_matches) == 1:
+            best = redirect_matches[0]
             best['wiki_reason'] = "Single redirect exact match"
             return best
-
-        if len(redirect_match) == 2:
-            for i in redirect_match:
-                if len(i['intro_para']) > 40:
-                    best = i
-                    best['wiki_reason'] = "Only two exact redirect matches, returning page with long intro"
-                    return best
-        
-        if redirect_match:
-            logger.debug(f"More than one redirect match. Using {wiki_sort_method} to try to pick one...")
+            
+        # Handle two redirect matches - pick one with longer intro
+        if len(redirect_matches) == 2:
+            if len(redirect_matches[0]['intro_para']) > len(redirect_matches[1]['intro_para']):
+                best = redirect_matches[0]
+            else:
+                best = redirect_matches[1]
+            best['wiki_reason'] = "Two exact redirect matches, returning page with longer intro"
+            return best
+            
+        # Handle multiple redirect matches
+        if redirect_matches:
+            logger.debug(f"Multiple redirect matches. Using {wiki_sort_method} to select best.")
+            
             if wiki_sort_method == "alt_names":
-                redirect_match.sort(key=lambda x: -len(x['alternative_names']))
-                best = redirect_match[0]
-                best['wiki_reason'] = "Redirect exact match; picking by longest alt names."
-                logger.debug("Redirect exact match; picking by longest alt names.")
+                redirect_matches.sort(key=lambda x: -len(x.get('alternative_names', [])))
+                best = redirect_matches[0]
+                best['wiki_reason'] = "Multiple redirect matches; picking by longest alt names"
                 return best
             elif wiki_sort_method in ["neural", "lcs"]:
+                # Try context-based similarity first
                 if context:
-                    intro_paras = [i['intro_para'][0:200] for i in redirect_match]
-                    encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
-                    encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
-                    sims = cos_sim(encoded_text, encoded_intros)[0]
-                    if max(sims) > 0.25:
-                        best = redirect_match[np.argmax(sims)]
-                        best['wiki_reason'] = f"Multiple redirect exact matches *and* context text provided: picking by neural similarity. Similarity = {max(sims)}"
-                        return best
-                try:
-                    query_context = query_term + context
-                    wiki_info = self.text_ranker_features(redirect_match, rank_fields)
-                    category_trf = self.trf.encode(wiki_info, show_progress_bar=False, device=self.device)
-                    query_trf = self.trf.encode(query_context, show_progress_bar=False, device=self.device)
-                    sims = 1 - cdist(category_trf, np.expand_dims(query_trf.T, 0), metric="cosine")
-                    redirect_match = [x for _, x in sorted(zip(sims, redirect_match), reverse=True)]
-                    best = redirect_match[0]
-                    logger.debug("Redirect exact match; picking by neural similarity.")
-                    best['wiki_reason'] = "Multiple redirect exact match; picking by neural similarity."
-                    return best
-                except Exception as e:
-                    logger.debug(f"{e}")
-                    logger.debug(f"Exception on query term {query_context}")
-
-
-        if len(alt_match) == 1:
-            best = alt_match[0]
-            best['wiki_reason'] = "Single alt name match"
-            return best
-
-        ## If no title or redirect matches, including fuzzy matches, do the neural
-        ## similarity thing
-        if context:
-            logger.debug("Falling back to text--intro neural similarity")
-            intro_paras = [i['intro_para'][0:200] for i in good_res[0:50]]
-            logger.debug(f"Provided text: {context}")
-            logger.debug(f"intro paras: {intro_paras}")
-            encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
-            encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
-            sims = cos_sim(encoded_text, encoded_intros)[0]
-            if max(sims) > 0.25:
-                best = good_res[np.argmax(sims)]
-                best['wiki_reason'] = f"Multiple redirect exact matches *and* context text provided: picking by neural similarity. Similarity = {max(sims)}"
-                return best
+                    ranked = self._rank_by_neural_similarity(redirect_matches, query_term, context)
+                    if ranked and 'wiki_reason' in ranked[0]:
+                        return ranked[0]
+                
+                # Fall back to query-based similarity
+                query_context = query_term + (context or "")
+                ranked = self._rank_by_neural_similarity(redirect_matches, query_context, fields=rank_fields)
+                if ranked and len(ranked) > 0:
+                    return ranked[0]
+        
+        # Handle single alternative name match
+        #if len(alt_matches) == 1:
+        #    best = alt_matches[0]
+        #    best['wiki_reason'] = "Single alt name match"
+        #    return best
             
-        logger.debug("Falling back to title neural similarity")
-        titles = [i['title'] for i in good_res[0:50]] # just look at first 10? HACK
-        if titles:
-            enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
-            enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
-            actor_sims = cos_sim(enc_query, enc_titles)
-            if torch.max(actor_sims) > 0.9:
-                match = torch.argmax(actor_sims)
-                best = good_res[match]
-                best['wiki_reason'] = "High neural similarity between query and Wiki title"
-                logger.debug(f"High neural similarity between query and Wiki title: {torch.max(actor_sims)}")
-                return best
-            else:
-                logger.debug(f"Not a close enough match on neural title sim. Closest was {torch.max(actor_sims)} on {good_res[torch.argmax(actor_sims)]['title']}")
-        else:
-            logger.debug("No titles. Returning None")
-        
-        logger.debug("Continuing to alt name matches")
-        if len(alt_match) == 1: 
-            logger.debug("Only a single alt name match--check for decent title neural similarity")
-            best = alt_match[0]
-            enc_titles = self.actor_sim.encode([best['title']], show_progress_bar=False)
-            enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
-            actor_sims = cos_sim(enc_query, enc_titles)
-            if torch.max(actor_sims) > 0.8:
-                best['wiki_reason'] = "Only one alternative names match + high title sim"
-                return best
-        elif alt_match:
-            logger.debug("Falling back to title neural similarity on alt name matches")
-            titles = [i['title'] for i in alt_match[0:10]] # just look at first 10? HACK
-            if titles:
-                enc_titles = self.actor_sim.encode(titles, show_progress_bar=False)
-                enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
-                actor_sims = cos_sim(enc_query, enc_titles)
-                if torch.max(actor_sims) > 0.9:
-                    match = torch.argmax(actor_sims)
-                    best = alt_match[match]
-                    best['wiki_reason'] = "High neural similarity between query and Wiki title on alt name match"
-                    logger.debug(f"High neural similarity between query and Wiki title on alt name match: {torch.max(actor_sims)}")
-                    return best
-                else:
-                    logger.debug(f"Not a close enough match on neural title sim. Closest was {torch.max(actor_sims)} on {alt_match[torch.argmax(actor_sims)]['title']}")
-        
-        # last shot: neural similarity on intro paras for all results
-        logger.debug("Checking for neural similarity on all intro paras")
+        # Fall back to neural similarity between context and intro paragraphs
         if context:
-            logger.debug("Falling back to text--intro neural similarity")
-            intro_paras = [i['intro_para'][0:200] for i in good_res[0:50]]
-            logger.debug(f"Provided text: {context}")
-            logger.debug(f"intro paras: {intro_paras}")
-            encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
-            encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
-            sims = cos_sim(encoded_text, encoded_intros)[0]
-            if max(sims) > 0.25:
-                best = good_res[np.argmax(sims)]
-                best['wiki_reason'] = f"No title/redirect/alt matches: picking by intro para neural similarity. Similarity = {max(sims)}"
-                return best 
-        else:
-            logger.debug("No context text provided.")
+            logger.debug("Falling back to text-intro neural similarity")
+            ranked = self._rank_by_neural_similarity(good_res[0:50], query_term, context)
+            if ranked and 'wiki_reason' in ranked[0]:
+                return ranked[0]
+                
+        # Last resort: title similarity
+        logger.debug("Falling back to title neural similarity")
+        best_match, sim_score = self._check_titles_similarity(query_term, good_res)
+        if best_match:
+            return best_match
+            
+        # Check alt matches with title similarity
+        if alt_matches:
+            logger.debug("Checking alt name matches with title similarity")
+            best_match, sim_score = self._check_titles_similarity(query_term, alt_matches)
+            if best_match:
+                return best_match
+                
+        logger.debug("No good match found")
         return None
 
+    def query_wiki(self, query_term, limit_term="", country="", context="", max_results=200):
+        """
+        Search Wikipedia and return the best matching article.
         
+        This method tries an exact search first, then falls back to fuzzy search.
+        
+        Parameters
+        ----------
+        query_term : str
+            Term to search for
+        limit_term : str, optional
+            Term to limit results by
+        country : str, optional
+            Country code to help with disambiguation
+        context : str, optional
+            Context text to help with disambiguation
+        max_results : int, optional
+            Maximum results to return from search
+            
+        Returns
+        -------
+        dict or None
+            Best matching Wikipedia article or None if no good match
+        """
+        # Do NER expansion by default
+        if context:
+            doc = self.nlp(context)
+            if doc:
+                expanded_query = [i.text for i in doc.ents if query_term in i.text]
+                if expanded_query:
+                    # take the longest match
+                    expanded_query.sort(key=len, reverse=True)
+                    # take the first one
+                    expanded_query = expanded_query[0]
+                    if len(expanded_query) > len(query_term):
+                        query_term = expanded_query
+                        logger.debug(f"Using NER to expand context: {expanded_query}")
 
-    def query_wiki(self,
-                   query_term, 
-                   limit_term="", 
-                   country="", 
-                   context="",
-                   max_results=200):
-        results = self.search_wiki(query_term, limit_term=limit_term, fuzziness=0, max_results=200)
-        best = self.pick_best_wiki(query_term, results, country=country, context=context)
+        # Try exact search first
+        results = self.search_wiki(
+            query_term, 
+            limit_term=limit_term, 
+            fuzziness=0, 
+            max_results=max_results,
+        )
+        best = self.pick_best_wiki(
+            query_term, 
+            results, 
+            country=country, 
+            context=context
+        )
         if best:
             return best
-        results = self.search_wiki(query_term, limit_term, fuzziness=1, max_results=max_results)
-        best = self.pick_best_wiki(query_term, results, country=country, context=context)
-        if best:
-            return best
+            
+        # Fall back to fuzzy search
+        results = self.search_wiki(
+            query_term, 
+            limit_term=limit_term, 
+            fuzziness=1, 
+            max_results=max_results
+        )
+        best = self.pick_best_wiki(
+            query_term, 
+            results, 
+            country=country, 
+            context=context
+        )
+       
+        return best
 
+    def _process_wiki_short_description(self, wiki, countries):
+        """
+        Process the short description from a Wikipedia article to extract actor code.
+        
+        Parameters
+        ----------
+        wiki : dict
+            Wikipedia article
+        countries : list
+            List to append detected countries to
+            
+        Returns
+        -------
+        list
+            List containing SD code if found, otherwise empty list
+        """
+        if 'short_desc' not in wiki:
+            return []
+            
+        # Extract country and text
+        country, trimmed_text = self.search_nat(wiki['short_desc'])
+        if country:
+            countries.append(country)
+            
+        # Match text to agent pattern
+        sd_code = self.trf_agent_match(trimmed_text, country=country)
+        if sd_code:
+            sd_code['source'] = "Wiki short description"
+            sd_code['actor_wiki_job'] = wiki['short_desc']
+            sd_code['wiki'] = wiki['title']
+            sd_code['country'] = country
+            return [sd_code]
+            
+        return []
+
+    def _process_wiki_infobox(self, wiki, query_date, countries, office_countries):
+        """
+        Process the infobox from a Wikipedia article to extract actor code.
+        
+        Parameters
+        ----------
+        wiki : dict
+            Wikipedia article
+        query_date : str or datetime
+            Date to use for determining current offices
+        countries : list
+            List to append detected countries to
+        office_countries : list
+            List to append countries detected from offices to
+            
+        Returns
+        -------
+        tuple
+            (box_codes, box_type_code, type_code)
+        """
+        if 'infobox' not in wiki:
+            return [], None, None
+            
+        infobox = wiki['infobox']
+        box_codes = []
+        box_type_code = None
+        type_code = None
+        
+        # Extract country from infobox
+        if 'country' in infobox:
+            country = self.search_nat(infobox['country'])[0]
+            if country:
+                countries.append(country)
+                
+        # Get box type code
+        if 'box_type' in wiki:
+            box_type_code = self.trf_agent_match(wiki['box_type'])
+            if box_type_code:
+                box_type_code['country'] = countries[0] if countries else None
+                box_type_code['wiki'] = wiki['title']
+                box_type_code['source'] = "Infobox Title"
+                box_type_code['actor_wiki_job'] = wiki['box_type']
+                
+        # Get type code from infobox
+        if 'type' in infobox:
+            type_code = self.trf_agent_match(infobox['type'])
+            if type_code:
+                type_code['country'] = countries[0] if countries else None
+                type_code['wiki'] = wiki['title']
+                type_code['source'] = "Infobox Type"
+                type_code['actor_wiki_job'] = infobox['type']
+                
+        # Parse offices and get current offices
+        offices = self.parse_offices(infobox)
+        logger.debug(f"All offices: {offices}")
+        current_offices, detected_countries = self.get_current_office(offices, query_date)
+        logger.debug(f"Current offices: {current_offices}")
+        office_countries.extend(detected_countries)
+        
+        # Handle ELI (former official) case
+        if offices and not current_offices:
+            eli_codes = self._handle_former_officials(offices, wiki, countries)
+            if eli_codes:
+                box_codes.extend(eli_codes)
+        elif current_offices:
+            # Handle current offices
+            for office in current_offices:
+                office_text = self.clean_query(office['office'])
+                code = self.short_text_to_agent(office_text)
+                if code:
+                    code['actor_wiki_job'] = office_text
+                    code['source'] = "Infobox"
+                    code['office_num'] = office['office_num'] or 0
+                    code['wiki'] = wiki['title']
+                    logger.debug(f"Office code: {code}")
+                    box_codes.append(code)
+                    break  # Only get the first one
+                    
+        return box_codes, box_type_code, type_code
+
+    def _handle_former_officials(self, offices, wiki, countries):
+        """
+        Handle former officials (ELI code) from office history.
+        
+        Parameters
+        ----------
+        offices : list
+            List of office dictionaries
+        wiki : dict
+            Wikipedia article
+        countries : list
+            List of detected countries
+            
+        Returns
+        -------
+        list
+            List of ELI codes if applicable
+        """
+        # Get codes from past offices
+        old_codes_raw = [self.trf_agent_match(self.clean_query(o['office'])) for o in offices]
+        old_codes = []
+        for code in old_codes_raw:
+            if not code or 'code_1' not in code:
+                continue
+            old_codes.append(code['code_1'])
+            
+        # Get countries from past offices
+        old_countries = [self.search_nat(o['office'])[0] for o in offices]
+        box_country = list(set([c for c in old_countries if c]))
+        
+        # Check if person held government position
+        if "GOV" in old_codes:
+            code_1 = "ELI"
+            
+            # Handle different country detection scenarios
+            if not box_country:
+                # No country from offices
+                country = countries[0] if countries else ""
+                return [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 
+                         'country': country, 
+                         'description': "previously held a GOV role, so coded as ELI.", 
+                         "source": "Infobox", "wiki": wiki['title']}]
+            elif len(box_country) == 1:
+                # Single country from offices
+                primary_country = countries[0] if countries else ""
+                if not primary_country or box_country[0] == primary_country:
+                    return [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 
+                             'country': box_country[0], 
+                             'description': 'previously held a GOV role, so coded as ELI', 
+                             "source": "Infobox", "wiki": wiki['title']}]
+            
+            # Multiple countries or mismatch
+            primary_country = countries[0] if countries else ""
+            return [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 
+                     'country': primary_country, 
+                     'description': f"previously held a GOV role, so coded as ELI. Countries: {box_country}", 
+                     "source": "Infobox", "wiki": wiki['title']}]
+                     
+        return []
+
+    def _process_wiki_categories(self, wiki, cat_countries):
+        """
+        Process Wikipedia categories to extract countries.
+        
+        Parameters
+        ----------
+        wiki : dict
+            Wikipedia article
+        cat_countries : list
+            List to append detected countries to
+        """
+        if 'categories' not in wiki:
+            return
+            
+        for category in wiki['categories']:
+            country, _ = self.search_nat(category, categories=True)
+            if country:
+                cat_countries.append(country)
 
     def wiki_to_code(self, wiki, query_date="today", country=""):
         """
-        Resolve a Wikipedia page to a PLOVER actor code, either using
-        the sidebar info or the first sentence of the intro para.
-
+        Convert a Wikipedia article to a PLOVER actor code.
+        
         Parameters
-        ---------
-        page: dict
-          Wiki article from ES
-        query_date: str
-          Optional, limit to a specific time
+        ----------
+        wiki : dict
+            Wikipedia article
+        query_date : str or datetime, optional
+            Date to use for determining current offices
+        country : str, optional
+            Country code if already known
+            
+        Returns
+        -------
+        list
+            List of actor codes derived from the article
         """
-        skip_types = [] #["War Faction"]
-
+        # Handle missing wiki article
         if not wiki:
             return []
-
-        #para_code = []
+            
+        # Initialize collections
         box_codes = []
         countries = []
         sd_code = []
-        b_code = None
-        type_code = None
-        country = None
-        office_countries = []
         cat_countries = []
-
+        office_countries = []
+        
+        # Extract country from first sentence
         intro_text = re.sub(r"\(.*?\)", "", wiki['intro_para']).strip()
         try:
-            first_sent = intro_text.split("\n")[0] 
+            first_sent = intro_text.split("\n")[0]
+            first_sent_country, _ = self.search_nat(first_sent, method="first")
+            if first_sent_country:
+                countries.append(first_sent_country)
         except IndexError:
             first_sent_country = None
-        first_sent_country, trimmed_text = self.search_nat(first_sent, method="first")
-        country = first_sent_country
-
-        if 'short_desc' in wiki.keys():
-            country, trimmed_text = self.search_nat(wiki['short_desc'])
-            countries.append(country)
-            sd_code = self.trf_agent_match(trimmed_text, country=country)
-            if sd_code:
-                sd_code['source'] = "Wiki short description"
-                sd_code['actor_wiki_job'] = wiki['short_desc']
-                sd_code['wiki'] = wiki['title']
-                sd_code['country'] = country
-            sd_code = [sd_code]
+            
+        # Process different parts of the wiki article
+        sd_code = self._process_wiki_short_description(wiki, countries)
+        box_codes_new, b_code, type_code = self._process_wiki_infobox(
+            wiki, query_date, countries, office_countries
+        )
+        box_codes.extend(box_codes_new)
+        self._process_wiki_categories(wiki, cat_countries)
         
-        if 'infobox' in wiki.keys():
-            infobox = wiki['infobox']
-            if 'country' in infobox.keys():
-                country = self.search_nat(infobox['country'])[0]
-                countries.append(country)
-            if 'box_type' in wiki.keys():
-                b_code = self.trf_agent_match(wiki['box_type'])
-                if b_code:
-                    b_code['country'] = country
-                    b_code['wiki'] = wiki['title']
-                    b_code['source'] = "Infobox Title"
-                    b_code['actor_wiki_job'] = wiki['box_type']
-            if 'type' in infobox.keys():
-                type_code = self.trf_agent_match(infobox['type'])
-                if type_code:
-                    type_code['country'] = country
-                    type_code['wiki'] = wiki['title']
-                    type_code['source'] = "Infobox Type"
-                    type_code['actor_wiki_job'] = infobox['type']
-            offices = self.parse_offices(infobox)
-            logger.debug(f"All offices: {offices}")
-            current_offices, office_countries = self.get_current_office(offices, query_date)
-            logger.debug(f"Current offices: {current_offices}")
-
-            # the ELI block
-            if offices and not current_offices:
-                logger.debug("Running ELI block")
-                old_codes_raw = [self.trf_agent_match(self.clean_query(i['office'])) for i in offices]
-                old_codes = []
-                for i in old_codes_raw:
-                    if not i:
-                        continue
-                    if 'code_1' not in i.keys():
-                        logger.info(f"Weird pattern? {i}")
-                        continue
-                    old_codes.append(i['code_1'])
-                old_countries = [self.search_nat(i['office'])[0] for i in offices]
-                box_country = list(set([i for i in old_countries if i]))
-                if "GOV" in old_codes:
-                    code_1 = "ELI"
-                    if len(box_country) == 0:
-                        box_codes = [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 'country': country, 'description': "previously held a GOV role, so coded as ELI.", "source": "Infobox", "wiki": wiki['title']}] 
-                    elif len(box_country) == 1 and (box_country[0] == country or country == ""):
-                        box_codes = [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 'country': box_country[0], 'description': 'previously held a GOV role, so coded as ELI', "source": "Infobox", "wiki": wiki['title']}]
-                    elif len(box_country) > 1 or (box_country[0] == country and country != ""):
-                        box_codes = [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 'country': country, 'description': f"previously held a GOV role, so coded as ELI. Extracted countries don't match: {box_country}", "source": "Infobox", "wiki": wiki['title']}]
-                    else:
-                        box_codes = [{'pattern': 'NA', 'code_1': code_1, 'code_2': '', 'country': country, 'description': "previously held a GOV role, so coded as ELI.", "source": "Infobox", "wiki": wiki['title']}]
-            else:  # they have a current office
-                box_codes = []
-                for co in current_offices:
-                    office = self.clean_query(co['office'])
-                    b = self.short_text_to_agent(office)
-                    if b:
-                        b['actor_wiki_job'] = office
-                        b['source'] = "Infobox"
-                        if not co['office_num']:
-                            # current offices are sometimes blank
-                            b['office_num'] = 0
-                        else:
-                            b['office_num'] = co['office_num']
-                        b["wiki"] = wiki['title']
-                        b['source'] = "Infobox"
-                        logger.debug(f"{b}")
-                        box_codes.append(b)
-                        break ## Only get the first one!
-
-        # TODO: get country from infobox? A few places to look are:
-        #  - nationality
-        #  - headquarters
-        #  - jurisdiction
-        #  - pushpin_map (somewhat noisy)
-        #  - categories (noisy)
-
-        
-        #################  DISABLED FOR NOW ######################
-        # This part is slow and *decreases* the accuracy on the eval set.
-        # In theory, there are people without info boxes that we'd only get
-        # from the first para, but there seem to be more where the first
-        # para just messes things up.
-
-        ## There was also a weird issue where the paragraph codes would
-        # overwrite the info box codes. I have no idea how that's happening.
-        # One option (implemented above) is to only run it if there are no box codes. 
-#        if not box_codes:
-#            try:
-#                first_sent = intro_text.split("\n")[0] ## Speed up here!!
-#            except IndexError:
-#                first_sent = intro_text
-#            first_sent_country, trimmed_text = self.search_nat(first_sent)
-#
-#            if trimmed_text: 
-#                noun_chunks = self.get_noun_phrases_list(self.nlp(trimmed_text))
-#                #if not first_sent_country:
-#                #    first_sent_country, _  = self.search_nat(wiki['intro_para'])
-#
-#                # Seems to be messing up/overwriting the info box entries...
-#                # NOTE: change so it only runs if there are no box codes
-#                para_code = []
-#                for i in noun_chunks:
-#                    p_code = self.trf_agent_match(i.text, country=first_sent_country) 
-#                    if p_code:
-#                        p_code["source"] = "Intro paragraph--wiki"
-#                        p_code["wiki"] = wiki['title']
-#                        para_code.append(p_code)
-#            else:
-#                para_code = []
-        ###################################
-        if 'categories' in wiki.keys():
-            cats = wiki['categories']
-            for cat in cats:
-                c, _ = self.search_nat(cat, categories=True)
-                if c:
-                    cat_countries.append(c)
-
-        all_codes = box_codes + sd_code + [b_code] + [type_code]  # + para_code
-        all_codes = [i for i in all_codes if i]
+        # Combine all codes
+        all_codes = box_codes + sd_code + ([b_code] if b_code else []) + ([type_code] if type_code else [])
+        all_codes = [c for c in all_codes if c]
         logger.debug(f"All codes: {all_codes}")
-
-        logger.debug(f"First sent country: {first_sent_country}")
-        all_countries = [i['country'] for i in all_codes if i['country']]
+        
+        # Collect all countries from different sources
+        all_countries = [c['country'] for c in all_codes if c.get('country')]
         all_countries.extend(countries)
         all_countries.extend(office_countries)
-        logger.debug(f"Category countries: {cat_countries}")
         all_countries.extend(cat_countries)
-        if not all_countries:
+        
+        # Add first sentence country if no others found
+        if not all_countries and first_sent_country:
             all_countries = [first_sent_country]
-
-        top_country = Counter([i for i in all_countries if i])
-        if top_country:
-            top_country = top_country.most_common(1)[0][0]
-        all_countries = list(set([i for i in all_countries if i]))
-        logger.debug(f"All countries: {all_countries}")
-        if len(all_countries) == 1:
-            for i in all_codes:
-                #if i['country'] == "":
-                i['country'] = all_countries[0]
+            
+        # Find most common country
+        country_counts = Counter([c for c in all_countries if c])
+        top_country = country_counts.most_common(1)[0][0] if country_counts else None
+        unique_countries = list(set([c for c in all_countries if c]))
+        
+        logger.debug(f"All countries: {unique_countries}")
+        logger.debug(f"Top country: {top_country}")
+        
+        # Assign countries to codes
+        if len(unique_countries) == 1 and unique_countries[0]:
+            # Single country found
+            for code in all_codes:
+                code['country'] = unique_countries[0]
         elif top_country:
-            for i in all_codes:
-                if i['country'] == "":
-                    i['country'] = top_country
-
-        if not all_codes and len(all_countries) == 1:
-            all_codes = [{'pattern': '', 
-                        'code_1': '', 
-                        'code_2': '', 
-                        'country': all_countries[0], 
-                        'description': "No code identified, but country found", 
-                        "source": "Wiki", 
-                        "wiki": wiki['title']}]
-        elif not all_codes and top_country:
-            all_codes = [{'pattern': '', 
-                        'code_1': '', 
-                        'code_2': '', 
-                        'country': top_country, 
-                        'description': "No code identified, but country found", 
-                        "source": "Wiki", 
-                        "wiki": wiki['title']}]
-
+            # Multiple countries, use the most common
+            for code in all_codes:
+                if not code['country']:
+                    code['country'] = top_country
+                    
+        # Handle case where no code was found but country was
+        if not all_codes:
+            if len(unique_countries) == 1 and unique_countries[0]:
+                all_codes = [{
+                    'pattern': '', 
+                    'code_1': '', 
+                    'code_2': '', 
+                    'country': unique_countries[0], 
+                    'description': "No code identified, but country found", 
+                    "source": "Wiki", 
+                    "wiki": wiki['title']
+                }]
+            elif top_country:
+                all_codes = [{
+                    'pattern': '', 
+                    'code_1': '', 
+                    'code_2': '', 
+                    'country': top_country, 
+                    'description': "No code identified, but country found", 
+                    "source": "Wiki", 
+                    "wiki": wiki['title']
+                }]
+                
         return all_codes
 
+    def _get_actor_priority(self, code_1):
+        """
+        Get priority value for an actor code.
+        
+        Parameters
+        ----------
+        code_1 : str
+            Actor code
+            
+        Returns
+        -------
+        int
+            Priority value
+        """
+        return self.ACTOR_TYPE_PRIORITIES.get(code_1, 0)
 
     def pick_best_code(self, all_codes, country):
+        """
+        Select the best actor code from a list of candidates.
+        
+        Parameters
+        ----------
+        all_codes : list
+            List of actor code dictionaries
+        country : str, optional
+            Country code if already known
+            
+        Returns
+        -------
+        dict or None
+            Best actor code or None if no valid code
+        """
         logger.debug(f"Running pick_best_code with input country {country}")
+        
+        # Handle empty code list
+        if not all_codes:
+            if country:
+                return {
+                    "country": country,
+                    "code_1": "",
+                    "code_2": "",
+                    "source": "country only",
+                    "wiki": "",
+                    "query": ''
+                }
+            return None
+            
+        # Handle single code
         if len(all_codes) == 1:
             best = all_codes[0]
             best['best_reason'] = "only one code"
             if not best['country'] and country:
                 best['country'] = country
             return best
-
-        all_countries = [i['country'] for i in all_codes if i['country']]
+            
+        # Collect country information
+        all_countries = [c['country'] for c in all_codes if c.get('country')]
         if country:
             all_countries.append(country)
         logger.debug(f"pick best code all_countries: {all_countries}")
-        unique_code_1s = list(set([i['code_1'] for i in all_codes if i['code_1']]))
-
-        wiki = [i['wiki'] for i in all_codes if 'wiki' in i.keys()]
-        wiki = [i for i in wiki if i]
-        if wiki:
-            wiki = wiki[0]
-        else:
-            wiki = ""
-
-        ####  Get country  #####
-        if len(set(all_countries)) == 1:
+        
+        # Get unique codes
+        unique_code_1s = list(set([c['code_1'] for c in all_codes if c.get('code_1')]))
+        
+        # Get wiki title if available
+        wiki_titles = [c.get('wiki', '') for c in all_codes if 'wiki' in c]
+        wiki_title = next((t for t in wiki_titles if t), "")
+        
+        # Determine best country
+        if len(set(all_countries)) == 1 and all_countries:
             best_country = all_countries[0]
-            if not all_codes:
-                best = {"country": country,
-                        "code_1": "",
-                        "code_2": "",
-                        "source": "country only",
-                        "wiki": wiki,
-                        "query": ''}
-                return best
         elif not all_countries:
             best_country = ""
         elif country:
             best_country = country
         else:
-            best_country = Counter(all_countries).most_common(1)[0][0]
-        logger.debug(f"Identified as the best country: {best_country}")
-
-        ####  Get role  #####
-        code_sources = [i for i in all_codes if 'source' in i.keys()]
-        box_type = [i for i in code_sources if i['source'] == "Infobox Type"]
-        if box_type:
-            if box_type[0]['query'] in ['settlement']:
-                # if it's a city, then there's no agent/sector code, it's just the country
-                best = box_type[0]
+            country_counts = Counter([c for c in all_countries if c])
+            best_country = country_counts.most_common(1)[0][0] if country_counts else ""
+            
+        logger.debug(f"Identified best country: {best_country}")
+        
+        # Try different strategies to pick the best code
+        
+        # 1. Check for settlement (city) type
+        code_sources = [c for c in all_codes if 'source' in c]
+        box_type_codes = [c for c in code_sources if c['source'] == "Infobox Type"]
+        if box_type_codes:
+            if box_type_codes[0]['query'] in ['settlement']:
+                # If it's a city, no actor/sector code applies
+                best = box_type_codes[0]
                 best['code_1'] = ""
                 if not best['country']:
                     best['country'] = best_country
-                if 'wiki' not in best.keys():
-                    best['wiki'] = wiki
+                if 'wiki' not in best:
+                    best['wiki'] = wiki_title
                 best['best_reason'] = "It's a city/settlement, so no code1 applies"
-                return best 
-
-        info_box = [i for i in code_sources if i['source'] == "Infobox"]
-        if len(info_box) == 1:
-            # sort by office_num, then take first one
-            best = info_box[0]
+                return best
+                
+        # 2. Check for infobox entries
+        info_box_codes = [c for c in code_sources if c['source'] == "Infobox"]
+        if len(info_box_codes) == 1:
+            # Single infobox entry
+            best = info_box_codes[0]
             if best['code_1'] == "IGO":
                 best['country'] = "IGO"
             else:
                 best['country'] = best_country
-            best['best_reason'] = "Only one entry in the info box, going with that one"
-            if 'wiki' not in best.keys():
-                best['wiki'] = wiki
+            best['best_reason'] = "Only one entry in the info box"
+            if 'wiki' not in best:
+                best['wiki'] = wiki_title
             return best
-        elif len(info_box) > 1:
-            info_box.sort(key=lambda x: x['office_num'])
-            best = info_box[0]
+        elif len(info_box_codes) > 1:
+            # Multiple infobox entries, sort by office number
+            info_box_codes.sort(key=lambda x: x.get('office_num', 0))
+            best = info_box_codes[0]
             if best['code_1'] == "IGO":
                 best['country'] = "IGO"
             else:
                 best['country'] = best_country
             best['best_reason'] = "Picking highest priority Wiki info box title"
-            if 'wiki' not in best.keys():
-                best['wiki'] = wiki
+            if 'wiki' not in best:
+                best['wiki'] = wiki_title
             return best
-
+                
+        # 3. Check for single unique code_1
         if len(unique_code_1s) == 1:
-            logger.debug("Only one unique code_1, so returning first one.")
-            code1s = [i for i in all_codes if i['code_1']]
-            wiki_codes = [i for i in code1s if i['wiki'] != '']
-            logger.debug(f"Wiki codes: {wiki_codes}")
+            logger.debug("Only one unique code_1, returning first one with that code")
+            code1_entries = [c for c in all_codes if c.get('code_1')]
+            wiki_codes = [c for c in code1_entries if c.get('wiki')]
+            
             if wiki_codes:
+                # Prefer entries with wiki info
                 best = wiki_codes[0]
-                best['best_reason'] = "only one unique code1, returning wiki code."
-                best['country'] = best_country
-                if not best['country']:
-                    best['country'] = best_country
-                if 'wiki' not in best.keys():
-                    best['wiki'] = wiki
+                best['best_reason'] = "only one unique code1, returning wiki code"
             else:
+                # Otherwise sort by confidence if available
                 try:
-                    code1s.sort(key=lambda x: -x['conf'])
-                    best = code1s[0]
+                    code1_entries.sort(key=lambda x: -x.get('conf', 0))
+                    best = code1_entries[0]
                     best['best_reason'] = "only one unique code1: returning highest conf"
-                    if not best['country']:
-                        best['country'] = best_country
-                    if 'wiki' not in best.keys():
-                        best['wiki'] = wiki
-                    return best
                 except KeyError:
-                    logger.debug("Key Error on 'conf', proceeding to next code block")
-
-        short_desc = [i for i in code_sources if i['source'] == "Wiki short description"]
-        if short_desc:
-            best = short_desc[0]
+                    best = code1_entries[0]
+                    best['best_reason'] = "only one unique code1: returning first entry"
+                    
+            best['country'] = best_country
+            if 'wiki' not in best:
+                best['wiki'] = wiki_title
+            return best
+                
+        # 4. Check for short description
+        short_desc_codes = [c for c in code_sources if c['source'] == "Wiki short description"]
+        if short_desc_codes:
+            best = short_desc_codes[0]
             if best['code_1'] == "IGO":
                 best['country'] = "IGO"
             else:
                 best['country'] = best_country
             best['best_reason'] = "Picking Wiki short description"
             return best
-
-        non_wiki = []
-        for i in all_codes:
-            if i['source'] == "BERT matching on non-entity text":
-                if i['country'] and i['code_1']:
-                    non_wiki.append(i)
-
-        if len(non_wiki) == 1:
-            best = non_wiki[0]
+            
+        # 5. Check for pre-wiki lookup codes
+        pre_wiki_codes = [
+            c for c in all_codes 
+            if c.get('source') == "BERT matching on non-entity text" and c.get('country') and c.get('code_1')
+        ]
+        
+        if len(pre_wiki_codes) == 1:
+            best = pre_wiki_codes[0]
             best['best_reason'] = "Using pre-wiki lookup"
             best['country'] = best_country
-            if 'wiki' not in best.keys():
-                best['wiki'] = wiki
+            if 'wiki' not in best:
+                best['wiki'] = wiki_title
             return best
-        if len(set([i['country'] for i in non_wiki]))==1 and len(set([i['code_1'] for i in non_wiki]))==1:
-            best = non_wiki[0]
-            best['country'] = best_country
-            best['best_reason'] = "All pre-wiki lookups are the same"
-            if 'wiki' not in best.keys():
-                best['wiki'] = wiki
-            return best
-
-
-        priority_dict = {"IGO": 200,
-                        "ISM": 195,
-                        "IMG": 192,
-                        "PRE": 190,
-                        "REB": 130,
-                        "SPY": 110,
-                        "JUD": 105,
-                        "OPP": 102,
-                        "GOV": 100,
-                        "LEG": 90,
-                        "MIL": 80,
-                        "COP": 75,
-                        "PRM": 72,
-                        "ELI": 70,
-                        "PTY": 65,
-                        "BUS": 60,
-                        "UAF": 50,
-                        "CRM": 48,
-                        "LAB": 47,
-                        "MED": 45,
-                        "NGO": 43,
-                        "SOC": 42,
-                        "EDU": 41,
-                        "JRN": 40,
-                        "ENV": 39,
-                        "HRI": 38,
-                        "UNK": 37,
-                        "REF": 35,
-                        "AGR": 30,
-                        "RAD": 20,
-                        "CVL": 10,
-                        "JEW": 5,
-                        "MUS": 5,
-                        "BUD": 5,
-                        "CHR": 5,
-                        "HIN": 5,
-                        "REL": 1,
-                        "": 0,
-                        "JNK": 51,
-                        "NON": 60
-                        }    
+            
+        if pre_wiki_codes:
+            # Check if all pre-wiki codes have same country and code_1
+            unique_countries = set(c['country'] for c in pre_wiki_codes)
+            unique_codes = set(c['code_1'] for c in pre_wiki_codes)
+            
+            if len(unique_countries) == 1 and len(unique_codes) == 1:
+                best = pre_wiki_codes[0]
+                best['country'] = best_country
+                best['best_reason'] = "All pre-wiki lookups are the same"
+                if 'wiki' not in best:
+                    best['wiki'] = wiki_title
+                return best
+                
+        # 6. Fall back to code priority
         logger.debug("Using code priority sorting")
-        all_codes.sort(key=lambda x: -priority_dict[x['code_1']])
-        logger.debug(all_codes)
+        all_codes.sort(key=lambda x: -self._get_actor_priority(x.get('code_1', '')))
+        
         if all_codes:
-            # get all the correct codes
-            correct_codes = [i for i in all_codes if i['code_1'] == all_codes[0]['code_1']]
-            wiki_codes = [i for i in correct_codes if i['wiki'] != '']
-            logger.debug(f"Wiki codes: {wiki_codes}")
+            # Get all codes with highest priority
+            highest_priority = self._get_actor_priority(all_codes[0].get('code_1', ''))
+            highest_priority_codes = [
+                c for c in all_codes 
+                if self._get_actor_priority(c.get('code_1', '')) == highest_priority
+            ]
+            
+            # Prefer wiki codes
+            wiki_codes = [c for c in highest_priority_codes if c.get('wiki')]
+            
             if wiki_codes:
                 best = wiki_codes[0]
-                best['best_reason'] = "Ranked by code1 priority, returning wiki code."
+                best['best_reason'] = "Ranked by code1 priority, returning wiki code"
             else:
-                best = correct_codes[0]
-                best['best_reason'] = "Ranked by code1 priority, returning first."
+                best = highest_priority_codes[0]
+                best['best_reason'] = "Ranked by code1 priority, returning first"
+                
             best['country'] = best_country
-            if 'wiki' not in best.keys():
-                best['wiki'] = wiki_codes[0]
-            return best 
-        
-        # not used anymore??
-        trf_full_sent = [i for i in all_codes if i['source'] == 'BERT matching full text']
-        if trf_full_sent:
-            if trf_full_sent[0]['conf'] > 0.75: ## pretty arbitrary...
-                best = trf_full_sent
-                best['best_reason'] = "multiple codes, picking first high-confidence trf_full_sent"
-                if 'wiki' not in best.keys():
-                    best['wiki'] = wiki
-                return best
-
+            if 'wiki' not in best:
+                best['wiki'] = wiki_title
+                
+            return best
+            
+        return None
 
     def clean_best(self, best):
+        """
+        Clean and normalize the best actor code.
+        
+        Parameters
+        ----------
+        best : dict
+            Actor code dictionary
+            
+        Returns
+        -------
+        dict or None
+            Cleaned actor code or None if input was None
+        """
         if not best:
             return None
-        if best['code_1'] == 'JNK':
+            
+        # Handle special codes
+        if best.get('code_1') == 'JNK':
             best['country'] = ""
-        if best['code_1'] == 'NON':
+            
+        if best.get('code_1') == 'NON':
             best['country'] = ""
-        if best['code_1'] in ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]:
+            
+        # Handle actor types that should be treated as countries
+        if best.get('code_1') in self.SPECIAL_ACTOR_TYPES:
             best['country'] = best['code_1']
             best['code_1'] = ""
-        if best['country'] is None or type(best['country'])is not str:
+            
+        # Fix invalid country
+        if best.get('country') is None or not isinstance(best.get('country'), str):
             best['country'] = ""
-        if len(best['country']) == 6:
+            
+        # Handle composite country-code (e.g. "USAGOV")
+        if best.get('country') and len(best['country']) == 6:
             best['code_1'] = best['country'][3:6]
             best['country'] = best['country'][0:3]
+            
         return best
 
-    def agent_to_code(self, 
-                     text, 
-                     context="", 
-                     query_date="today", 
-                     known_country="", 
-                     search_limit_term=""):
-        wiki_codes = [] 
-        code_full_text = None
-        code_non_ent = None
-        #wiki_ent_codes = []
-
+    def agent_to_code(self, text, context="", query_date="today", known_country="", search_limit_term=""):
+        """
+        Resolve an actor mention to a code representing their role.
+        
+        Parameters
+        ----------
+        text : str
+            Text mention of the actor to resolve
+        context : str, optional
+            Additional context to help with disambiguation
+        query_date : str, optional
+            Date to use when determining current offices
+        known_country : str, optional
+            Country code if already known
+        search_limit_term : str, optional
+            Term to limit Wikipedia search results
+            
+        Returns
+        -------
+        dict or None
+            Actor code information or None if resolution fails
+        """
+        # Check cache first
         cache_key = text + "_" + str(query_date)
-        if cache_key in self.cache.keys():
+        if cache_key in self.cache:
             logger.debug("Returning from cache")
             return self.cache[cache_key]
-
+            
+        # Extract country from text
         country, trimmed_text = self.search_nat(text)
-        #trimmed_text = self.clean_query(trimmed_text)
-        logger.debug(f"Identified country text: {country}")
-
+        logger.debug(f"Identified country from text: {country}")
+        
+        # Handle country-only case
+        if country and not trimmed_text:
+            logger.debug("Country only, returning as-is")
+            code_full_text = {
+                "country": country,
+                "code_1": "",
+                "code_2": "",
+                "source": "country only",
+                "wiki": "",
+                'actor_wiki_job': "",
+                "query": text
+            }
+            self.cache[cache_key] = code_full_text
+            return self.clean_best(code_full_text)
+            
+        # Parse entities in text
         try:
             doc = self.nlp(trimmed_text)
             non_ent_text = self.strip_ents(doc)
             ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
             token_level_ents = [i.ent_type_ for i in doc]
             ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ != ""])
-            logger.debug(f"Found the following named entities: {ents}")
+            logger.debug(f"Found named entities: {ents}")
         except IndexError:
-            # usually caused by a mismatch between token and token embedding
+            # Usually caused by a mismatch between token and embedding
             logger.info(f"Token alignment error on {trimmed_text}")
             non_ent_text = trimmed_text
             token_level_ents = ['']
             ent_text = ""
             ents = []
-
-        if country and not trimmed_text:
-            logger.debug("Country only, returning as-is")
-            code_full_text = {"country": country,
-                              "code_1": "",
-                              "code_2": "",
-                              "source": "country only",
-                              "wiki": "",
-                              'actor_wiki_job': "",
-                              "query": text}
-            self.cache[cache_key] = code_full_text
-            return self.clean_best(code_full_text)
-        
-        # If a whole phrase is just a named entity, skip the lookup step completely???
-        # I.e., only run the block below if there's at least one non-entity token.
-        if trimmed_text: # and "" in token_level_ents:
-            logger.debug(f"Running trf_agent_match on trimmed text: {trimmed_text}")
-            code_full_text = self.trf_agent_match(trimmed_text, country=country, threshold=0.6)
+            
+        # Try direct matching first
+        if trimmed_text:
+            logger.debug(f"Trying direct matching on: {trimmed_text}")
+            code_full_text = self.trf_agent_match(trimmed_text, country=country)
+            
             if code_full_text:
-                logger.debug(f"Identified code using trf_agent_match on {trimmed_text}")
+                logger.debug(f"Direct match found: {code_full_text}")
                 code_full_text['source'] = "BERT matching full text"
                 code_full_text['wiki'] = ""
-                code_full_text['actor_wiki_job'] = "" 
-                logger.debug(f"code_full_text: {code_full_text}")
-                if code_full_text['conf'] > 0.6 and not ents:
-                    logger.debug("High confidence on text-only and no named entities found. Returning w/o Wikipedia")
+                code_full_text['actor_wiki_job'] = ""
+                
+                # Return without Wikipedia lookup in certain high-confidence cases
+                if (code_full_text['conf'] > 0.6 and not ents or
+                    code_full_text['conf'] > THRESHOLD_HIGH_CONFIDENCE and trimmed_text == trimmed_text.lower() or
+                    code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE):
+                    logger.debug("High confidence match. Skipping Wikipedia lookup.")
                     code_full_text = self.clean_best(code_full_text)
-                    self.cache[cache_key] = code_full_text
-                    return code_full_text
-                elif code_full_text['conf'] > 0.90 and trimmed_text == trimmed_text.lower():
-                    # Skip wikipedia if there's very high confidence and
-                    # HACK: dumb NER finds no entities
-                    logger.debug("High confidence on text-only and no ents. Returning w/o Wikipedia")
-                    code_full_text = self.clean_best(code_full_text)
-                    self.cache[cache_key] = code_full_text
-                    return code_full_text
-                elif code_full_text['conf'] > 0.95 == trimmed_text.lower():
-                    code_full_text = self.clean_best(code_full_text)
-                    logger.debug("Very high confidence on text-only. Returning w/o Wikipedia")
                     self.cache[cache_key] = code_full_text
                     return code_full_text
             else:
-                logger.debug(f"No agent found for {trimmed_text}")
-
-        # TODO: keep this at all?
-        #if non_ent_text:
-        #    if non_ent_text != trimmed_text:
-        #        logger.debug(f"Running trf_agent_match on ent-stripped text: {non_ent_text}")
-        #        code_non_ent = self.trf_agent_match(non_ent_text, country, threshold=0.7)
-        #        if code_non_ent:
-        #            logger.debug(f"Identified code in non_ent_text using trf_agent_match")
-        #            code_non_ent['source'] = "BERT matching on non-entity text"
-        #            #pattern = "(" + code_non_ent['query'] + "|" + code_non_ent['query'].title()
-        #            #trimmed_text = 
-
-
-        logger.debug(f"Querying Wikipedia with trimmed text: {trimmed_text}")
+                logger.debug(f"No direct match found for {trimmed_text}")
+                
+        # Try Wikipedia lookup for better resolution
+        logger.debug(f"Trying Wikipedia lookup with: {trimmed_text}")
         wiki_codes = []
-        wiki = self.query_wiki(query_term=trimmed_text, country=known_country, limit_term=search_limit_term)
-        if wiki:
-            logger.debug(f"Identified a Wiki page: {wiki['title']}")
-            wiki_codes = self.wiki_to_code(wiki, query_date)
-        else:
-            if ent_text:
-                logger.debug(f"No wiki results. Trying again with just proper nouns: {ent_text}")
-                wiki = self.query_wiki(query_term=ent_text, country=known_country, limit_term=search_limit_term) 
-                wiki_codes = self.wiki_to_code(wiki, query_date)
-            
-
-        # Doing this increased time by 50% and only decreased errors from 94 to 93.
-       # ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
-       # if ents:
-       #     ent_list = [j for i in ents for j in i]
-       #     ent_text = ''.join([j.text_with_ws for j in ent_list]).strip()
-       #     if ent_text:
-       #         logger.debug(f"Ents found. Processing ent_text: {ent_text}")
-       #         wiki_ents = self.query_wiki(ent_text)
-       #     if wiki_ents:
-       #         logger.debug(f"Wiki page: {wiki_ents['title']}")
-       #         wiki_ent_codes = self.wiki_to_code(wiki_ents, query_date)
-       #     else:
-       #         wiki_ent_codes = []
+        wiki = self.query_wiki(
+            query_term=trimmed_text, 
+            country=known_country, 
+            context=context,
+            limit_term=search_limit_term
+        )
         
-        all_codes = wiki_codes + [code_full_text] + [code_non_ent]
-        all_codes = [i for i in all_codes if i]
+        if wiki:
+            logger.debug(f"Wikipedia page found: {wiki['title']}")
+            wiki_codes = self.wiki_to_code(wiki, query_date)
+        elif ent_text:
+            # Try again with just entity text if original lookup failed
+            logger.debug(f"No wiki results. Trying with entity text: {ent_text}")
+            wiki = self.query_wiki(
+                query_term=ent_text, 
+                country=known_country, 
+                context=context,
+                limit_term=search_limit_term
+            )
+            if wiki:
+                wiki_codes = self.wiki_to_code(wiki, query_date)
+                
+        # Combine all possible codes
+        code_full_text_list = [code_full_text] if 'code_full_text' in locals() and code_full_text else []
+        all_codes = wiki_codes + code_full_text_list
+        all_codes = [c for c in all_codes if c]
         
         logger.debug("--- ALL CODES ----")
         logger.debug(all_codes)
-        unique_code1s = list(set([i['code_1'] for i in all_codes if i]))
-        unique_code1s = [i for i in unique_code1s if i not in ["IGO"]]
-        unique_code2s = list(set([i['code_2'] for i in all_codes if i]))
-        #print([(i['source'], i['code_1'], i['country']) for i in all_codes if i])
-        # try picking the one best...
-        #print("\n\nRETURNING BEST:")
+        
+        # Extract unique codes for reference
+        unique_code1s = list(set([c['code_1'] for c in all_codes if c.get('code_1')]))
+        unique_code1s = [c for c in unique_code1s if c not in ["IGO"]]
+        unique_code2s = list(set([c['code_2'] for c in all_codes if c.get('code_2')]))
+        
+        # Pick the best code
         best = self.pick_best_code(all_codes, country)
         best = self.clean_best(best)
+        
+        # Add unique codes lists for reference
         if best:
             best['all_code1s'] = unique_code1s
             best['all_code2s'] = unique_code2s
+            
+        # Cache and return result
         self.cache[cache_key] = best
         return best
 
     def process(self, event_list):
         """
-
+        Process a list of events to resolve actor attributes.
+        
+        For each event, adds actor resolution information to the ACTOR and RECIP attributes.
+        
+        Parameters
+        ----------
+        event_list : list
+            List of event dictionaries
+            
         Returns
         -------
-        event_list
-          For ACTOR and RECIP, adds the following to the 'attributes' for each:
-            - 'wiki'
-            - 'country'
-            - 'code_1'
-            - 'code_2'
-            - 'actor_role_query'
-            - 'actor_resolved_pattern'
-            - 'actor_pattern_conf'
-            - 'wiki_actor_job'
-            - 'actor_resolution_reason'
-        
-        Example
-        ------
-        event = {'id': '20190801-2227-8b13212ac6f6_SANCTION', 
-                'date': '2019-08-01', 
-                'event_type': 'SANCTION', 
-                'event_mode': [], 
-                'event_text': 'The Liberal Party, the largest opposition in Paraguay, announced in the evening of Wednesday the decision to submit an application of impeachment against the president of the country, Mario Abdo Benítez, and vice-president Hugo Velázquez, by polemical agreement with Brazil on the purchase of energy produced in Itaipu. According to the president of the Liberal Party, Efraín Alegre, the opposition also come tomorrow with penal action against all those involved in the negotiations of the agreement with Brazil, signed on confidentiality in May and criticized for being detrimental to the interests of the country. The Liberal Party has the support of the front Guasú, Senator and former President Fernando Lugo, he himself target of an impeachment, decided in less than 24 hours, in June 2012. According to legend, the reasons for the opening of the proceedings against Abdo Benítez are bad performance of functions, betrayal of the homeland and trafficking of influence. Alegre also announced the convocation of demonstrations throughout the country on Friday. ', 
-                'story_id': 'EFESP00020190801ef8100001:50066618', 
-                'publisher': 'translateme2-pt', 
-                'headline': '\nOposição confirma que pedirá impeachment de presidente do Paraguai; PARAGUAI GOVERNO (Pauta)\n', 
-                'pub_date': '2019-08-01', 'contexts': ['corruption'], 
-                'version': 'NGEC_coder-Vers001-b1-Run-001', 
-                'attributes': {'ACTOR': [{'text': 'Mario Abdo Benítez', 'score': 0.1976235955953598}], 
-                                'RECIP': [{'text': 'Fernando Lugo', 'score': 0.10433810204267502}], 
-                                'LOC': [{'text': 'Paraguay', 'score': 0.24138706922531128}]}}
-        ag.process([event])
+        list
+            The same event list with actor resolution information added
         """
         for event in track(event_list, description="Resolving actors..."):
-            ## get the date
-            query_date = event['pub_date']
-            if not query_date:
-                query_date = "today"
-            for k, block in event['attributes'].items():
-                if k in ["LOC", "DATE"]:
+            # Get the date from the event
+            query_date = event.get('pub_date', "today")
+            
+            # Process each attribute block
+            for attr_type, attr_block in event['attributes'].items():
+                # Skip location and date attributes
+                if attr_type in ["LOC", "DATE"]:
                     continue
-                for v in block:  # ACTOR, RECIP, and LOC are lists, but current just length 1
-                    wiki = None
-                    actor_text = v['text']
-                    if type(actor_text) is not str:
-                        print(actor_text)
+                    
+                # Process each attribute value
+                for attr in attr_block:
+                    # Get actor text
+                    actor_text = attr['text']
+                    if not isinstance(actor_text, str):
+                        logger.warning(f"Non-string actor text: {actor_text}")
                         actor_text = actor_text[0]
-                    ## TO DO: get the country here
-                    limit_word = ""
-                    res = self.agent_to_code(actor_text, query_date=query_date, search_limit_term=limit_word)
+                        
+                    # Resolve actor to code
+                    res = self.agent_to_code(actor_text, query_date=query_date)
+                    
+                    # Update attribute with resolution information
                     if res:
-                        if 'wiki' in res.keys():
-                            v['wiki'] = res['wiki']
-                        else:
-                            v['wiki'] = ""
-                        if 'actor_wiki_job' in res.keys():
-                            v['actor_wiki_job'] = res['actor_wiki_job']
-                        else:
-                            v['actor_wiki_job'] = ""
-                        if 'all_code1s' in res.keys():
-                            v['all_code1s'] = res['all_code1s']
-                        else:
-                            v['all_code1s'] = []
-                        if 'all_code2s' in res.keys():
-                            v['all_code2s'] = res['all_code2s']
-                        else:
-                            v['all_code2s'] = []
-                        v['country'] = res['country']
-                        v['code_1'] = res['code_1']
-                        v['code_2'] = res['code_2']
-                        if 'query' in res.keys():
-                            v['actor_role_query'] = res['query']
-                        else:
-                            v['actor_role_query'] = ""
-                            #print(v)
-                        if 'pattern' in res.keys():
-                            v['actor_resolved_pattern'] = res['description']
-                        else:
-                            v['actor_resolved_pattern'] = ""
-                        if 'conf' in res.keys():
-                            v['actor_pattern_conf'] = float(res['conf'])
-                        else:
-                            v['conf'] = ""
-                        if 'best_reason' in res.keys():
-                            v['actor_resolution_reason'] = res['best_reason']
-                        else:
-                            v['actor_resolution_reason'] = ""
+                        # Add wiki information
+                        attr['wiki'] = res.get('wiki', "")
+                        attr['actor_wiki_job'] = res.get('actor_wiki_job', "")
+                        
+                        # Add code lists
+                        attr['all_code1s'] = res.get('all_code1s', [])
+                        attr['all_code2s'] = res.get('all_code2s', [])
+                        
+                        # Add country and codes
+                        attr['country'] = res.get('country', "")
+                        attr['code_1'] = res.get('code_1', "")
+                        attr['code_2'] = res.get('code_2', "")
+                        
+                        # Add query and pattern information
+                        attr['actor_role_query'] = res.get('query', "")
+                        attr['actor_resolved_pattern'] = res.get('description', "")
+                        
+                        # Add confidence and reason
+                        attr['actor_pattern_conf'] = float(res.get('conf', 0))
+                        attr['actor_resolution_reason'] = res.get('best_reason', "")
                     else:
-                        v['wiki'] = ""
-                        v['actor_wiki_job'] = ""
-                        v['country'] = ""
-                        v['code_1'] = ""
-                        v['code_2'] = ""
-                        v['actor_role_query'] = ""
-                        v['actor_resolved_pattern'] = ""
-                        v['actor_pattern_conf'] = ""
-                        v['actor_resolution_reason'] = ""
+                        # Set default values if resolution failed
+                        attr['wiki'] = ""
+                        attr['actor_wiki_job'] = ""
+                        attr['country'] = ""
+                        attr['code_1'] = ""
+                        attr['code_2'] = ""
+                        attr['actor_role_query'] = ""
+                        attr['actor_resolved_pattern'] = ""
+                        attr['actor_pattern_conf'] = ""
+                        attr['actor_resolution_reason'] = ""
 
+        # Save intermediate results if requested
         if self.save_intermediate:
             fn = time.strftime("%Y_%m_%d-%H") + "_actor_resolution_output.jsonl"
             with jsonlines.open(fn, "w") as f:
                 f.write_all(event_list)
+                
         return event_list
 
 
