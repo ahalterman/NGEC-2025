@@ -374,7 +374,10 @@ class TextPreProcessor:
                 if suffix in span_text.lower() and suffix not in results['role'].lower():
                     if results['role'].strip() and suffix not in results['role'].lower():
                         results['role'] += f' {suffix}'
-        logger.debug(f"Converted '{span_text}' to {results['core_entity']} ({results['role']})")
+        if results['role']:
+            logger.debug(f"Converted '{span_text}' to '{results['core_entity']} ({results['role']})'")
+        else:
+            logger.debug(f"Converted '{span_text}' to '{results['core_entity']}' (no role found)")
         return results
 
     def strip_ents(self, doc):
@@ -1052,17 +1055,17 @@ class WikiClient:
                 "bool": {
                     "should": [
                         # Exact match on title (case-sensitive)
-                        {"term": {"title": {"value": query_term, "boost": 50}}},
-
+                        {"term": {"title": {"value": query_term, "boost": 150}}},
                         # Analyzed match on title (case-insensitive, tokenized)
-                        {"match": {"title": {"query": query_term, "boost": 30}}},
+                        {"match": {"title": {"query": query_term, "boost": 50}}},
 
                         # Exact match on redirects (for acronyms)
                         {"term": {"redirects": {"value": query_term, "boost": 150}}},
-
                         # Analyzed match on redirects
                         {"match": {"redirects": {"query": query_term, "boost": 50}}},
 
+                        # Exact match on alternative names
+                        {"term": {"alternative_names": {"value": query_term, "boost": 100}}},
                         # Analyzed match on alternative names
                         {"match": {"alternative_names": {"query": query_term, "boost": 25}}}
                     ]
@@ -1403,26 +1406,40 @@ class WikiMatcher:
         return alt_matches
 
 
-    def _rank_by_neural_similarity(self, candidates, query_term, context=None, fields=None):
+    def _rank_by_neural_similarity(self, candidates, context=None, actor_desc=None):
         """
         Rank candidates by neural similarity to query term and/or context,
         optimized to minimize GPU to CPU transfers.
+
+        Args:
+            candidates: List of candidate articles
+            query_term: Query term to match
+            context: Context text to help with disambiguation
+            actor_desc: Actor description to help with disambiguation
+        
+        Returns:
+            dict: Best matching candidate or None if no match found
         """
         if not candidates:
+            logger.warning("No results provided to neural ranker.")
+            return None
+        if not context and not actor_desc:
+            # raise a warning and return None
+            logger.warning("No context/actor_desc provided, but neural ranker was called.")
             return None
 
-        if not fields:
-            fields = ['title', 'categories', 'alternative_names', 'redirects']
-
-        # Track if we found a match via context
-        match_via_context = False
-        best_candidate = None
-        best_score = 0
+        #if not fields:
+        #    fields = ['title', 'alternative_names', 'redirects', 'short_desc']
 
         # Process context similarity if provided
-        if context:
+        if context or actor_desc:
             # Get intro paragraphs with limit
+            # TODO: consider using short_desc field instead
             intro_paras = [c['intro_para'][0:200] for c in candidates[0:50]]
+            short_desc = [c['short_desc'] for c in candidates[0:50]]
+
+            sims_context = None
+            sims_actor_desc = None
 
             # Encode directly on GPU and keep it there
             with torch.no_grad():
@@ -1431,88 +1448,62 @@ class WikiMatcher:
                                               show_progress_bar=False, 
                                               device=self.device,
                                               convert_to_tensor=True)  # Keep as tensor
+                
+                # Encode short info (stays on GPU)
+                encoded_short_desc = self.trf.encode(short_desc,
+                                                show_progress_bar=False, 
+                                                device=self.device,
+                                                convert_to_tensor=True)
+                if context:
+                    # Encode context (stays on GPU)
+                    encoded_context = self.trf.encode(context, 
+                                                show_progress_bar=False, 
+                                                device=self.device,
+                                                convert_to_tensor=True)
 
-                # Encode context (stays on GPU)
-                encoded_text = self.trf.encode(context, 
-                                            show_progress_bar=False, 
-                                            device=self.device,
-                                            convert_to_tensor=True)
+                    # Compute similarity scores on GPU
+                    sims_para = cos_sim(encoded_context, encoded_intros)[0]
+                    sims_short = cos_sim(encoded_context, encoded_short_desc)[0]
 
-                # Compute similarity scores on GPU
-                sims = cos_sim(encoded_text, encoded_intros)[0]
+                    # take the elementwise max
+                    sims_context = torch.maximum(sims_para, sims_short)
 
-                # Find best match (minimal CPU transfer)
-                best_idx = int(torch.argmax(sims).item())
-                best_score = float(sims[best_idx].item())
+                if actor_desc:
+                    # Encode actor description (stays on GPU)
+                    encoded_actor_desc = self.trf.encode(actor_desc, 
+                                                    show_progress_bar=False, 
+                                                    device=self.device,
+                                                    convert_to_tensor=True)
+                    # Compute similarity scores on GPU
+                    sims_para_actor = cos_sim(encoded_actor_desc, encoded_intros)[0]
+                    sims_short_actor = cos_sim(encoded_actor_desc, encoded_short_desc)[0]
+                    sims_actor_desc = torch.maximum(sims_para_actor, sims_short_actor)
 
-                # If high similarity, note the best match
-                if best_score > THRESHOLD_CONTEXT_MATCH:
-                    best_candidate = candidates[best_idx]
-                    best_candidate['wiki_reason'] = f"Best match by context similarity"
-                    match_via_context = True
-                    # Don't return yet - do the title similarity check too, but keep tensors on GPU
-
-        # If no match via context or we want to check title similarity too
-        if not match_via_context:
-            try:
-                # Prepare wiki info
-                wiki_info = self.wiki_searcher.text_ranker_features(candidates, fields)
-
-                # Encode on GPU and keep it there
-                with torch.no_grad():
-                    # Encode wiki info (stays on GPU)
-                    category_trf = self.trf.encode(wiki_info, 
-                                               show_progress_bar=False, 
-                                               device=self.device,
-                                               convert_to_tensor=True)
-
-                    # Encode query (stays on GPU)
-                    query_trf = self.trf.encode(query_term, 
-                                             show_progress_bar=False, 
-                                             device=self.device,
-                                             convert_to_tensor=True)
-
-                    # Compute similarity on GPU
-                    sims = cos_sim(query_trf, category_trf)[0]
-
-                    # Find best match indices (still on GPU)
-                    values, indices = torch.sort(sims, descending=True)
-
-                    # Get just the top score (minimal CPU transfer)
-                    max_sim = float(values[0].item())
-
-                    # Rank candidates using the sorted indices
-                    # This avoids transferring the entire similarity vector to CPU
-                    indices_cpu = indices.cpu().tolist()  # Minimal transfer
-                    ranked_candidates = [candidates[i] for i in indices_cpu]
-
-                    if ranked_candidates and max_sim > THRESHOLD_NEURAL_TITLE_MATCH:
-                        # If we already have a context match, compare them
-                        if match_via_context and best_score > max_sim:
-                            return best_candidate
-                        else:
-                            return ranked_candidates[0]
-
-                    # If we have a context match but title match is below threshold
-                    if match_via_context:
-                        return best_candidate
-
-                    return ranked_candidates[0]
-
-            except Exception as e:
-                logger.debug(f"Error in neural similarity ranking: {e}")
-                logger.debug(f"Query term: {query_term}")
-
-                # If we have a context match but title similarity failed
-                if match_via_context:
-                    return best_candidate
-
+            # Combine similarity scores
+            if sims_context is not None and sims_actor_desc is not None:
+                # Combine with weighted preference for actor_desc (3x weight)
+                sims = 0.25 * sims_context + 0.75 * sims_actor_desc
+            elif sims_context is not None:
+                sims = sims_context
+            elif sims_actor_desc is not None:
+                sims = sims_actor_desc
+            else:
+                logger.warning("No context or actor_desc provided, but neural ranker was called.")
                 return None
 
-        # Return the context match if that's all we have
-        if match_via_context:
-            return best_candidate
 
+            # Find best match (minimal CPU transfer)
+            best_idx = int(torch.argmax(sims).item())
+            best_score = float(sims[best_idx].item())
+
+            # If high similarity, note the best match
+            if best_score > THRESHOLD_CONTEXT_MATCH:
+                best_candidate = candidates[best_idx]
+                best_candidate['wiki_reason'] = f"Best match by context similarity"
+                return best_candidate
+            else:
+                logger.debug(f"Context similarity score too low: {best_score}")
+                return None
         return None
 
     def _check_titles_similarity(self, query_term, candidates):
@@ -1547,8 +1538,14 @@ class WikiMatcher:
             
         return None, best_score
 
-    def pick_best_wiki(self, query_term, results, context="", country="",
-                      wiki_sort_method=None, rank_fields=None):
+    def pick_best_wiki(self, 
+                       query_term, 
+                       results, 
+                       context="", 
+                       country="",
+                       actor_desc="",
+                      wiki_sort_method=None, 
+                      rank_fields=None):
         """
         Select the best Wikipedia article from search results.
         
@@ -1557,6 +1554,7 @@ class WikiMatcher:
             results: List of Wikipedia article search results
             context: Context text to help with disambiguation
             country: Country code to help with disambiguation
+            actor_desc: Actor description to help with disambiguation
             wiki_sort_method: Method to use for sorting results
             rank_fields: Fields to use for ranking
             
@@ -1576,7 +1574,7 @@ class WikiMatcher:
         logger.debug(f"Using query term '{query_term}'")
         
         # Construct country-qualified query if country provided
-        query_country = f"{query_term} ({country})" if country else query_term
+        #query_country = f"{query_term} ({country})" if country else query_term
         
         # Handle empty results
         if not results:
@@ -1625,15 +1623,15 @@ class WikiMatcher:
                 if context:
                     combined_matches = exact_matches + redirect_matches
                     if combined_matches:
-                        best = self._rank_by_neural_similarity(combined_matches, query_term, context)
+                        best = self._rank_by_neural_similarity(combined_matches, context, actor_desc)
                         if best:
-                            best['wiki_reason'] = "Best match using context similarity"
+                            best['wiki_reason'] = "Best match by context similarity"
                             if best in exact_matches:
-                                logger.debug(f"Best match using context similarity: {best['title']}")
+                                logger.debug(f"Best match by context similarity: {best['title']}")
                                 return best
                 
                 # Fall back to query-based similarity
-                best = self._rank_by_neural_similarity(exact_matches, query_term, fields=rank_fields)
+                best = self._rank_by_neural_similarity(exact_matches, query_term)
                 if best:
                     logger.debug(f"Picking from multiple exact matches using title similarity: {best['title']}")
                     best['wiki_reason'] = "Best of exact matches using title similarity"
@@ -1669,7 +1667,7 @@ class WikiMatcher:
             elif wiki_sort_method in ["neural", "lcs"]:
                 # Try context-based similarity first
                 if context:
-                    best = self._rank_by_neural_similarity(redirect_matches, query_term, context)
+                    best = self._rank_by_neural_similarity(redirect_matches, context)
                     if best:
                         logger.debug(f"Best match in redirects using context similarity: {best['title']}")
                         best['wiki_reason'] = "Best match in redirects using context similarity"
@@ -1678,7 +1676,7 @@ class WikiMatcher:
                 # Fall back to query-based similarity
                 logger.debug("Falling back to query-based similarity for redirects")
                 query_context = query_term + (context or "")
-                best = self._rank_by_neural_similarity(redirect_matches, query_context, fields=rank_fields)
+                best = self._rank_by_neural_similarity(redirect_matches, query_context)
                 if best:
                     logger.debug(f"Best match using redirect similarity: {best['title']}")
                     best['wiki_reason'] = "Best match using redirect similarity"
@@ -1687,7 +1685,7 @@ class WikiMatcher:
         # Fall back to neural similarity between context and intro paragraphs
         if context:
             logger.debug("Falling back to text-intro neural similarity")
-            best = self._rank_by_neural_similarity(good_res[0:50], query_term, context)
+            best = self._rank_by_neural_similarity(good_res[0:50], context)
             if best:
                     logger.debug(f"Best match by context similarity: {best['title']}")
                     best['wiki_reason'] = "Best match by context similarity"
@@ -1713,7 +1711,13 @@ class WikiMatcher:
         logger.debug("No good match found")
         return None
 
-    def query_wiki(self, query_term, limit_term="", country="", context="", max_results=200):
+    def query_wiki(self, 
+                   query_term, 
+                   limit_term="", 
+                   country="", 
+                   context="", 
+                   actor_desc="",
+                   max_results=200):
         """
         Search Wikipedia and return the best matching article.
         
@@ -1722,6 +1726,7 @@ class WikiMatcher:
             limit_term: Term to limit results by
             country: Country code to help with disambiguation
             context: Context text to help with disambiguation
+            actor_desc: Actor description (automatically parsed)
             max_results: Maximum results to return from search
             
         Returns:
@@ -1778,7 +1783,8 @@ class WikiMatcher:
             query_term, 
             results, 
             country=country, 
-            context=context
+            context=context,
+            actor_desc=actor_desc,
         )
        
         return best
