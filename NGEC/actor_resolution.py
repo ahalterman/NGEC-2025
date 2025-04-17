@@ -34,7 +34,7 @@ THRESHOLD_COSINE_SIMILARITY = 0.8
 THRESHOLD_DOT_SIMILARITY = 45
 THRESHOLD_NEURAL_TITLE_MATCH = 0.9
 THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
-THRESHOLD_CONTEXT_MATCH = 0.7
+THRESHOLD_CONTEXT_MATCH = 0.6 # 0.7
 THRESHOLD_HIGH_CONFIDENCE = 0.90
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
 
@@ -97,7 +97,7 @@ class TextPreProcessor:
             
         return qt
     
-    def extract_entity_components(span_text, nlp, job_titles=None, job_title_embeddings=None, get_embedding_func=None):
+    def extract_entity_components(self, span_text, nlp, job_titles=None, job_title_embeddings=None, get_embedding_func=None):
         """
         Extracts core entity, role, and geographic information from a text span.
 
@@ -320,7 +320,7 @@ class TextPreProcessor:
                         candidate_emb = get_embedding_func(candidate)
 
                         for title, title_emb in job_title_embeddings.items():
-                            sim = cosine_similarity([candidate_emb], [title_emb])[0][0]
+                            sim = cos_sim([candidate_emb], [title_emb])[0][0]
                             if sim > best_score:
                                 best_score = sim
                                 best_match = candidate
@@ -374,7 +374,7 @@ class TextPreProcessor:
                 if suffix in span_text.lower() and suffix not in results['role'].lower():
                     if results['role'].strip() and suffix not in results['role'].lower():
                         results['role'] += f' {suffix}'
-
+        logger.debug(f"Converted '{span_text}' to {results['core_entity']} ({results['role']})")
         return results
 
     def strip_ents(self, doc):
@@ -396,7 +396,8 @@ class TextPreProcessor:
     
     def make_acronym_dicts(self, text=None, doc=None, nlp=None):
         """
-        Quick model to identify acronyms (and their referents) in a doc.
+        Quick tool to identify acronyms (and their referents) in a doc.
+
         Args:
             text: string of text to process
             doc: spaCy doc object
@@ -409,15 +410,25 @@ class TextPreProcessor:
             if nlp is None:
                 raise ValueError("nlp object must be provided if doc is provided.")
             doc = nlp(text)
-    
+
         acronym_entities = {}
         for ent in doc.ents:
+            # skip cardinals
+            if ent.label_ in ["CARDINAL", "DATE", "TIME", "ORDINAL", "QUANTITY"]:
+                continue
             # only take non-acronyms
             if len(ent) > 1 and not ent.text.isupper():
                 # strip out leading prepositions and articles
                 ent_text = ''.join([i.text_with_ws for i in ent if i.pos_ != "DET" and i.pos_ != "ADP"]).strip()
                 # only take title case names
+                # The title case doesn't always work with some edge cases. E.g. "Ta'ang National Liberation Army".
+                # Instead, we can check if the first letter of each word is uppercase.
+                first_letters = [True if word[0].isupper() else False for word in ent_text.split()]
                 if ent_text.istitle():
+                    acronym = ''.join([word[0].upper() for word in ent_text.split()])
+                    acronym_entities[acronym] = ent_text
+                elif all(first_letters):
+                    # If the first letter of each word is uppercase, consider it as a potential acronym
                     acronym = ''.join([word[0].upper() for word in ent_text.split()])
                     acronym_entities[acronym] = ent_text
         return acronym_entities
@@ -1391,62 +1402,118 @@ class WikiMatcher:
                 
         return alt_matches
 
+
     def _rank_by_neural_similarity(self, candidates, query_term, context=None, fields=None):
         """
-        Rank candidates by neural similarity to query term and/or context.
-        
-        Args:
-            candidates: List of candidate articles
-            query_term: Query term for comparison
-            context: Context text for comparison
-            fields: Fields to use for comparison
-            
-        Returns:
-            list: Ranked list of candidates
+        Rank candidates by neural similarity to query term and/or context,
+        optimized to minimize GPU to CPU transfers.
         """
         if not candidates:
-            return []
-            
+            return None
+
         if not fields:
             fields = ['title', 'categories', 'alternative_names', 'redirects']
-            
-        # Use neural similarity with context if provided
+
+        # Track if we found a match via context
+        match_via_context = False
+        best_candidate = None
+        best_score = 0
+
+        # Process context similarity if provided
         if context:
+            # Get intro paragraphs with limit
             intro_paras = [c['intro_para'][0:200] for c in candidates[0:50]]
-            logger.debug("Top 30 intro paras: " + str(intro_paras))
-            encoded_intros = self.trf.encode(intro_paras, show_progress_bar=False, device=self.device)
-            encoded_text = self.trf.encode(context, show_progress_bar=False, device=self.device)
-            
-            # Get similarity scores
-            sims = cos_sim(encoded_text, encoded_intros)[0]
-            logger.debug("Similarity scores: " + str(sims))
-            
-            # Sort candidates by similarity
-            similarities = [(s, c) for s, c in zip(sims, candidates)]
-            similarities.sort(reverse=True)
-            
-            best_score = similarities[0][0] if similarities else 0
-            if best_score > THRESHOLD_CONTEXT_MATCH:
-                best_candidate = similarities[0][1]
-                best_candidate['wiki_reason'] = f"Neural similarity to context. Score = {best_score}"
-                return [best_candidate]
-        
-        # If no context or low similarity, use title similarity
-        try:
-            wiki_info = self.wiki_searcher.text_ranker_features(candidates, fields)
-            category_trf = self.trf.encode(wiki_info, show_progress_bar=False, device=self.device)
-            query_trf = self.trf.encode(query_term, show_progress_bar=False, device=self.device)
-            
-            sims = 1 - cdist(category_trf, np.expand_dims(query_trf.T, 0), metric="cosine")
-            ranked_candidates = [x for _, x in sorted(zip(sims.flatten(), candidates), reverse=True)]
-            
-            if ranked_candidates and max(sims) > THRESHOLD_NEURAL_TITLE_MATCH:
-                ranked_candidates[0]['wiki_reason'] = f"Neural similarity to query. Score = {sims[0][0]}"
-                return ranked_candidates[0]
-        except Exception as e:
-            logger.debug(f"Error in neural similarity ranking: {e}")
-            logger.debug(f"Query term: {query_term}")
-            return candidates
+
+            # Encode directly on GPU and keep it there
+            with torch.no_grad():
+                # Encode all intros at once (stays on GPU)
+                encoded_intros = self.trf.encode(intro_paras, 
+                                              show_progress_bar=False, 
+                                              device=self.device,
+                                              convert_to_tensor=True)  # Keep as tensor
+
+                # Encode context (stays on GPU)
+                encoded_text = self.trf.encode(context, 
+                                            show_progress_bar=False, 
+                                            device=self.device,
+                                            convert_to_tensor=True)
+
+                # Compute similarity scores on GPU
+                sims = cos_sim(encoded_text, encoded_intros)[0]
+
+                # Find best match (minimal CPU transfer)
+                best_idx = int(torch.argmax(sims).item())
+                best_score = float(sims[best_idx].item())
+
+                # If high similarity, note the best match
+                if best_score > THRESHOLD_CONTEXT_MATCH:
+                    best_candidate = candidates[best_idx]
+                    best_candidate['wiki_reason'] = f"Best match by context similarity"
+                    match_via_context = True
+                    # Don't return yet - do the title similarity check too, but keep tensors on GPU
+
+        # If no match via context or we want to check title similarity too
+        if not match_via_context:
+            try:
+                # Prepare wiki info
+                wiki_info = self.wiki_searcher.text_ranker_features(candidates, fields)
+
+                # Encode on GPU and keep it there
+                with torch.no_grad():
+                    # Encode wiki info (stays on GPU)
+                    category_trf = self.trf.encode(wiki_info, 
+                                               show_progress_bar=False, 
+                                               device=self.device,
+                                               convert_to_tensor=True)
+
+                    # Encode query (stays on GPU)
+                    query_trf = self.trf.encode(query_term, 
+                                             show_progress_bar=False, 
+                                             device=self.device,
+                                             convert_to_tensor=True)
+
+                    # Compute similarity on GPU
+                    sims = cos_sim(query_trf, category_trf)[0]
+
+                    # Find best match indices (still on GPU)
+                    values, indices = torch.sort(sims, descending=True)
+
+                    # Get just the top score (minimal CPU transfer)
+                    max_sim = float(values[0].item())
+
+                    # Rank candidates using the sorted indices
+                    # This avoids transferring the entire similarity vector to CPU
+                    indices_cpu = indices.cpu().tolist()  # Minimal transfer
+                    ranked_candidates = [candidates[i] for i in indices_cpu]
+
+                    if ranked_candidates and max_sim > THRESHOLD_NEURAL_TITLE_MATCH:
+                        # If we already have a context match, compare them
+                        if match_via_context and best_score > max_sim:
+                            return best_candidate
+                        else:
+                            return ranked_candidates[0]
+
+                    # If we have a context match but title match is below threshold
+                    if match_via_context:
+                        return best_candidate
+
+                    return ranked_candidates[0]
+
+            except Exception as e:
+                logger.debug(f"Error in neural similarity ranking: {e}")
+                logger.debug(f"Query term: {query_term}")
+
+                # If we have a context match but title similarity failed
+                if match_via_context:
+                    return best_candidate
+
+                return None
+
+        # Return the context match if that's all we have
+        if match_via_context:
+            return best_candidate
+
+        return None
 
     def _check_titles_similarity(self, query_term, candidates):
         """
@@ -1538,6 +1605,7 @@ class WikiMatcher:
         # Handle single exact title match with no redirects
         if len(exact_matches) == 1 and not redirect_matches:
             best = exact_matches[0]
+            logger.debug(f"Only one exact title match and no redirects: {best['title']}")
             best['wiki_reason'] = "Only one exact title match and no redirects"
             return best
         
@@ -1549,6 +1617,7 @@ class WikiMatcher:
                 exact_matches.sort(key=lambda x: -len(x.get('alternative_names', [])))
                 if exact_matches:
                     best = exact_matches[0]
+                    logger.debug(f"Multiple title exact matches: using longest alt names")
                     best['wiki_reason'] = "Multiple title exact matches: using longest alt names"
                     return best
             elif wiki_sort_method in ["neural", "lcs"]:
@@ -1556,24 +1625,31 @@ class WikiMatcher:
                 if context:
                     combined_matches = exact_matches + redirect_matches
                     if combined_matches:
-                        ranked = self._rank_by_neural_similarity(combined_matches, query_term, context)
-                        if ranked and 'wiki_reason' in ranked[0]:
-                            return ranked[0]
+                        best = self._rank_by_neural_similarity(combined_matches, query_term, context)
+                        if best:
+                            best['wiki_reason'] = "Best match using context similarity"
+                            if best in exact_matches:
+                                logger.debug(f"Best match using context similarity: {best['title']}")
+                                return best
                 
                 # Fall back to query-based similarity
-                ranked = self._rank_by_neural_similarity(exact_matches, query_term, fields=rank_fields)
-                if ranked and len(ranked) > 0:
-                    return ranked[0]
+                best = self._rank_by_neural_similarity(exact_matches, query_term, fields=rank_fields)
+                if best:
+                    logger.debug(f"Picking from multiple exact matches using title similarity: {best['title']}")
+                    best['wiki_reason'] = "Best of exact matches using title similarity"
+                    return best
         
         # Handle single redirect match
         if len(redirect_matches) == 1:
             best = redirect_matches[0]
+            logger.debug(f"Single redirect match: {best['title']}")
             best['wiki_reason'] = "Single redirect exact match"
             return best
             
         # Handle two redirect matches - pick one with longer intro
         if len(redirect_matches) == 2:
             if len(redirect_matches[0]['intro_para']) > len(redirect_matches[1]['intro_para']):
+                logger.debug("Two redirect matches with same title. Picking one with longer intro.")
                 best = redirect_matches[0]
             else:
                 best = redirect_matches[1]
@@ -1587,32 +1663,42 @@ class WikiMatcher:
             if wiki_sort_method == "alt_names":
                 redirect_matches.sort(key=lambda x: -len(x.get('alternative_names', [])))
                 best = redirect_matches[0]
+                logger.debug(f"Using best match in redirects using alt names: {best['title']}")
                 best['wiki_reason'] = "Multiple redirect matches; picking by longest alt names"
                 return best
             elif wiki_sort_method in ["neural", "lcs"]:
                 # Try context-based similarity first
                 if context:
-                    ranked = self._rank_by_neural_similarity(redirect_matches, query_term, context)
-                    if ranked and 'wiki_reason' in ranked[0]:
-                        return ranked[0]
+                    best = self._rank_by_neural_similarity(redirect_matches, query_term, context)
+                    if best:
+                        logger.debug(f"Best match in redirects using context similarity: {best['title']}")
+                        best['wiki_reason'] = "Best match in redirects using context similarity"
+                        return best
                 
                 # Fall back to query-based similarity
+                logger.debug("Falling back to query-based similarity for redirects")
                 query_context = query_term + (context or "")
-                ranked = self._rank_by_neural_similarity(redirect_matches, query_context, fields=rank_fields)
-                if ranked and len(ranked) > 0:
-                    return ranked[0]
+                best = self._rank_by_neural_similarity(redirect_matches, query_context, fields=rank_fields)
+                if best:
+                    logger.debug(f"Best match using redirect similarity: {best['title']}")
+                    best['wiki_reason'] = "Best match using redirect similarity"
+                    return best
         
         # Fall back to neural similarity between context and intro paragraphs
         if context:
             logger.debug("Falling back to text-intro neural similarity")
-            ranked = self._rank_by_neural_similarity(good_res[0:50], query_term, context)
-            if ranked and 'wiki_reason' in ranked[0]:
-                return ranked[0]
+            best = self._rank_by_neural_similarity(good_res[0:50], query_term, context)
+            if best:
+                    logger.debug(f"Best match by context similarity: {best['title']}")
+                    best['wiki_reason'] = "Best match by context similarity"
+                    return best
                 
         # Last resort: title similarity
         logger.debug("Falling back to title neural similarity")
         best_match, sim_score = self._check_titles_similarity(query_term, good_res)
         if best_match:
+            logger.debug(f"Best match by title similarity: {best_match['title']} with score {sim_score}")
+            best_match['wiki_reason'] = f"Best match by title similarity"
             return best_match
             
         # Check alt matches with title similarity
@@ -1620,6 +1706,8 @@ class WikiMatcher:
             logger.debug("Checking alt name matches with title similarity")
             best_match, sim_score = self._check_titles_similarity(query_term, alt_matches)
             if best_match:
+                logger.debug(f"Best match by alt name similarity: {best_match['title']} with score {sim_score}")
+                best_match['wiki_reason'] = f"Best match by alt name similarity"
                 return best_match
                 
         logger.debug("No good match found")
@@ -1641,6 +1729,7 @@ class WikiMatcher:
         """
         # Do NER expansion by default
         if context:
+            logger.debug("Context present, so attempting NER expansion")
             context_doc = self.nlp(context)
             if context_doc:
                 expanded_query = [i.text for i in context_doc.ents if query_term in i.text]
@@ -1661,6 +1750,7 @@ class WikiMatcher:
                     query_term = acronym_dict[query_term]
                     logger.debug(f"Using acronym expansion: {query_term}")
         # Try exact search first
+        logger.debug("Starting with exact search")
         results = self.wiki_searcher.search_wiki(
             query_term, 
             limit_term=limit_term, 
@@ -1677,6 +1767,7 @@ class WikiMatcher:
             return best
             
         # Fall back to fuzzy search
+        logger.debug("Falling back to fuzzy search")
         results = self.wiki_searcher.search_wiki(
             query_term, 
             limit_term=limit_term, 
