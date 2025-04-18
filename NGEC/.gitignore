@@ -1,0 +1,4 @@
+*.skops
+assets/*.skops
+assets/event_models/*.skops
+assets/actor_sim_model2
