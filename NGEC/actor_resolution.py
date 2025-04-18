@@ -1065,7 +1065,7 @@ class WikiClient:
                         {"match": {"redirects": {"query": query_term, "boost": 50}}},
 
                         # Exact match on alternative names
-                        {"term": {"alternative_names": {"value": query_term, "boost": 100}}},
+                        {"term": {"alternative_names": {"value": query_term, "boost": 125}}},
                         # Analyzed match on alternative names
                         {"match": {"alternative_names": {"query": query_term, "boost": 25}}}
                     ]
@@ -1498,11 +1498,12 @@ class WikiMatcher:
 
             # If high similarity, note the best match
             if best_score > THRESHOLD_CONTEXT_MATCH:
+                logger.debug(f"Found high context similarity score: {best_score}")
                 best_candidate = candidates[best_idx]
                 best_candidate['wiki_reason'] = f"Best match by context similarity"
                 return best_candidate
             else:
-                logger.debug(f"Context similarity score too low: {best_score}")
+                logger.debug(f"Context similarity score too low: {candidates[best_idx]['title']}={best_score}")
                 return None
         return None
 
@@ -1598,7 +1599,11 @@ class WikiMatcher:
         
         # Find alternative name matches
         alt_matches = self._find_alt_name_matches(query_term, good_res)
-        logger.debug(f"Found {len(alt_matches)} alternative name matches")
+        alt_titles = [a['title'] for a in alt_matches]
+        if alt_titles:
+            logger.debug(f"Found {len(alt_matches)} alternative name matches: {alt_titles}")
+        else:
+            logger.debug(f"Found {len(alt_matches)} alternative name matches")
         
         # Handle single exact title match with no redirects
         if len(exact_matches) == 1 and not redirect_matches:
