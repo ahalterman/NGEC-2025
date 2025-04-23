@@ -37,6 +37,7 @@ THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
 THRESHOLD_CONTEXT_MATCH = 0.6 # 0.7
 THRESHOLD_HIGH_CONFIDENCE = 0.90
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
+THRESHOLD_COMBINED_SCORE = 9 
 
 #######################################################
 # Text Processing Utilities
@@ -498,7 +499,7 @@ class CountryDetector:
         Args:
             base_path: Path to directory containing the countries.csv file
         """
-        self.nat_list, self.nat_list_cat = self._load_county_dict(base_path)
+        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_county_dict(base_path)
     
     def _load_county_dict(self, base_path):
         """
@@ -515,34 +516,45 @@ class CountryDetector:
         
         # Direct country name/nationality patterns
         nat_list = []
+        nat_list_name = []
         for _, row in countries.iterrows():
             # Handle nationalities
             nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
             for nat in nationalities:
                 pattern = (re.compile(nat + r"(?=[^a-z]|$)"), row['CCA3'])
+                pattern_name = (re.compile(nat + r"(?=[^a-z]|$)"), row['Name'])
                 nat_list.append(pattern)
+                nat_list_name.append(pattern_name)
             
             # Handle country names
             pattern = (re.compile(row['Name']), row['CCA3'])
+            pattern_name = (re.compile(row['Name']), row['Name'])
             nat_list.append(pattern)
+            nat_list_name.append(pattern_name)
+
         
         # Category patterns (for "of X" or "in X" constructions)
         nat_list_cat = []
+        nat_list_name_cat = []
         for prefix in ['of ', 'in ']: 
             for _, row in countries.iterrows():
                 # Handle nationalities in categories
                 nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
                 for nat in nationalities:
                     pattern = (re.compile(prefix + nat), row['CCA3'])
+                    pattern_name = (re.compile(prefix + nat), row['Name'])
                     nat_list_cat.append(pattern)
+                    nat_list_name_cat.append(pattern_name)
                 
                 # Handle country names in categories
                 pattern = (re.compile(prefix + row['Name']), row['CCA3'])
+                pattern_name = (re.compile(prefix + row['Name']), row['Name'])
                 nat_list_cat.append(pattern)
+                nat_list_name_cat.append(pattern_name)
         
-        return nat_list, nat_list_cat
+        return nat_list, nat_list_cat, nat_list_name, nat_list_name_cat
 
-    def search_nat(self, text, method="longest", categories=False):
+    def search_nat(self, text, method="longest", categories=False, use_name=False):
         """
         Search for country names/nationalities in text and return canonical form.
         
@@ -550,6 +562,7 @@ class CountryDetector:
             text: Text to search for country mentions
             method: Method to use when multiple countries are found ('longest' or 'first')
             categories: Whether to use category patterns (of X, in X)
+            use_name: Whether to return the *name* of the country instead of the ISO code
             
         Returns:
             tuple: (country_code, trimmed_text) or (None, original_text) if no country found
@@ -562,16 +575,19 @@ class CountryDetector:
         found = []
         
         # Use appropriate pattern list based on categories flag
-        patterns = self.nat_list_cat if categories else self.nat_list
+        if use_name:
+            patterns = self.nat_list_name_cat if categories else self.nat_list_name
+        else:
+            patterns = self.nat_list_cat if categories else self.nat_list
         
         # Find all matching countries
-        for pattern, country_code in patterns:
+        for pattern, country in patterns:
             match = re.search(pattern, text)
             if match:
                 # Remove the matched country/nationality from text
                 trimmed_text = re.sub(pattern, "", text).strip()
                 trimmed_text = re.sub(r" +", " ", trimmed_text).strip()
-                found.append((country_code, trimmed_text.strip(), match))
+                found.append((country, trimmed_text.strip(), match))
         
         # Return if no countries found
         if not found:
@@ -1104,7 +1120,7 @@ class WikiClient:
         res = self.conn.query(query)[0:max_results].execute()
         results = [hit.to_dict()['_source'] for hit in res['hits']['hits']]
         logger.debug(f"Number of hits for Wiki query: {len(results)}")
-        logger.debug(f"Titles of the results: {[result['title'] for result in results]}")
+        logger.debug(f"Titles of the first five results: {[result['title'] for result in results[0:5]]}")
         
         return results
 
@@ -1232,6 +1248,8 @@ class WikiSearcher:
         patterns_to_exclude = [
             (r"(stub|User|Wikipedia\:)", 'title'),
             (r"disambiguation", 'title'),
+            (r"^Template:", 'title'),
+            (r"^Category:", 'title'),
             (r"Category\:", lambda r: r['intro_para'][0:50]),
             (r"is the name of", lambda r: r['intro_para'][0:50]),
             (r"may refer to", lambda r: r['intro_para'][0:50]),
@@ -1540,7 +1558,7 @@ class WikiMatcher:
         return None, best_score
     
 
-    def _create_scoring_dataframe(self, articles, query_term, context, country, actor_desc):
+    def _create_scoring_dataframe(self, articles, query_term, context, actor_desc, country):
         """
         Create a pandas DataFrame with scores for each article, using batched computations.
 
@@ -1565,6 +1583,10 @@ class WikiMatcher:
             exact_title_match = 1 if self._is_exact_title_match(query_term, article, country) else 0
             redirect_match = 1 if self._is_redirect_match(query_term, article, country) else 0
             alt_name_match = 1 if self._is_alt_name_match(query_term, article) else 0
+            country_match = 0
+            if country:
+                if (re.search(country, article['intro_para']) or re.search(article['short_desc'], country)):
+                    country_match = 1
 
             # Number of alternative names
             alt_names_count = len(article.get('alternative_names', []))
@@ -1580,9 +1602,12 @@ class WikiMatcher:
                 'alt_name_match': alt_name_match,
                 'alt_names_count': alt_names_count,
                 'intro_length': intro_length,
+                'country_match': country_match,
                 'title_sim': 0,  # Will be filled in later
-                'context_sim': 0,  # Will be filled in later
-                'actor_desc_sim': 0,  # Will be filled in later
+                'context_sim_intro': 0,  # Will be filled in later
+                'context_sim_short': 0,  # Will be filled in later
+                'actor_desc_sim_intro': 0,  # Will be filled in later
+                'actor_desc_sim_short': 0,  # Will be filled in later
                 'combined_score': 0  # Will be calculated after all scores are in
             })
 
@@ -1602,52 +1627,50 @@ class WikiMatcher:
             df['title_sim'] = title_sims[0].tolist()
 
         # Batch compute context similarity
-        if context:
+        if context or actor_desc:
             intros = [article['intro_para'][0:200] for article in articles]
+            short_descs = [article['short_desc'] for article in articles]
             # Encode context once
-            context_embedding = self.trf.encode(context, show_progress_bar=False)
-            # Encode all intros in one batch
             intro_embeddings = self.trf.encode(intros, show_progress_bar=False)
+            short_desc_embeddings = self.trf.encode(short_descs, show_progress_bar=False)
+        
+        if context:
+            context_embedding = self.trf.encode(context, show_progress_bar=False)
             # Compute similarities
             context_sims = cos_sim(context_embedding.reshape(1, -1), intro_embeddings)
+            short_desc_sims = cos_sim(context_embedding.reshape(1, -1), short_desc_embeddings)
             # Add to dataframe
-            df['context_sim'] = context_sims[0].tolist()
+            df['context_sim_intro'] = context_sims[0].tolist()
+            df['context_sim_short'] = short_desc_sims[0].tolist()
 
-        # Batch compute actor description similarity
         if actor_desc:
-            # Combine intro and categories for a rich description
-            article_infos = []
-            for article in articles:
-                info = article['intro_para'][0:200]
-                if 'categories' in article:
-                    cat_text = " ".join(article.get('categories', []))
-                    info += " " + cat_text
-                article_infos.append(info)
-
             # Encode actor description once
             desc_embedding = self.trf.encode(actor_desc, show_progress_bar=False)
-            # Encode all article infos in one batch
-            info_embeddings = self.trf.encode(article_infos, show_progress_bar=False)
             # Compute similarities
-            desc_sims = cos_sim(desc_embedding.reshape(1, -1), info_embeddings)
+            desc_sims_intro = cos_sim(desc_embedding.reshape(1, -1), intro_embeddings)
+            desc_sims_short = cos_sim(desc_embedding.reshape(1, -1), short_desc_embeddings)
             # Add to dataframe
-            df['actor_desc_sim'] = desc_sims[0].tolist()
+            df['actor_desc_sim_intro'] = desc_sims_intro[0].tolist()
+            df['actor_desc_sim_short'] = desc_sims_short[0].tolist()
 
         # Calculate combined score with appropriate weighting
         df['combined_score'] = (
             df['exact_title_match'] * 10 +
             df['redirect_match'] * 5 +
             df['alt_name_match'] * 3 +
-            df['title_sim'] * 2 +
-            df['context_sim'] * 2 +
-            df['actor_desc_sim'] * 1.5 +
+            df['title_sim'] * 1 +
+            df['context_sim_intro'] * 2 +
+            df['context_sim_short'] * 2 +
+            df['actor_desc_sim_intro'] * 2 +
+            df['actor_desc_sim_short'] * 2 +
+            df['country_match'] * 2 +
             np.log1p(df['alt_names_count']) * 0.5 +
             np.log1p(df['intro_length']) * 0.1
         )
 
         return df
 
-    def _apply_selection_rules(self, df, articles, wiki_sort_method, context):
+    def _apply_selection_rules(self, df, articles, context):
         """
         Apply a series of prioritized rules to select the best article.
 
@@ -1673,8 +1696,8 @@ class WikiMatcher:
         # Rule 2: Multiple exact matches - use context if available
         if len(exact_matches) > 1 and context:
             logger.debug("Multiple exact title matches found, checking context...")
-            best_context_match = exact_matches.sort_values('context_sim', ascending=False).iloc[0]
-            if best_context_match['context_sim'] > 0.5:  # Threshold for good context match
+            best_context_match = exact_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_context_match['context_sim_intro'] > 0.5:  # Threshold for good context match
                 selected = articles[best_context_match['index']]
                 logger.debug("Returning best context match among exact title matches")
                 selected['wiki_reason'] = "Best context match among exact title matches"
@@ -1702,8 +1725,8 @@ class WikiMatcher:
         # Rule 5: Multiple redirect matches - use context
         if len(redirect_matches) > 1 and context:
             logger.debug("Multiple redirect matches found, checking context...")
-            best_context_match = redirect_matches.sort_values('context_sim', ascending=False).iloc[0]
-            if best_context_match['context_sim'] > 0.5:
+            best_context_match = redirect_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_context_match['context_sim_intro'] > 0.5:
                 selected = articles[best_context_match['index']]
                 logger.debug(f"Returning best context match among redirect matches. Title: {selected['title']}: {best_context_match['context_sim']}")
                 selected['wiki_reason'] = "Best context match among redirect matches"
@@ -1723,8 +1746,8 @@ class WikiMatcher:
         alt_matches = df[df['alt_name_match'] == 1]
         if len(alt_matches) > 0 and context:
             logger.debug("Checking for alternative name matches with context...")
-            best_alt_match = alt_matches.sort_values('context_sim', ascending=False).iloc[0]
-            if best_alt_match['context_sim'] > 0.6:
+            best_alt_match = alt_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_alt_match['context_sim_intro'] > 0.6:
                 selected = articles[best_alt_match['index']]
                 logger.debug(f"Returning best context match among alternative name matches. Title: {selected['title']}: {selected['context_sim']}")
                 selected['wiki_reason'] = "Best context match among alternative name matches"
@@ -1733,17 +1756,17 @@ class WikiMatcher:
         # Rule 8: Fall back to combined score for any article with good context match
         logger.debug("Checking for any article with good context match...")
         if context:
-            best_context = df.sort_values('context_sim', ascending=False).iloc[0]
-            if best_context['context_sim'] > 0.6:  # Higher threshold for general context match
+            best_context = df.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_context['context_sim_intro'] > 0.6:  # Higher threshold for general context match
                 selected = articles[best_context['index']]
-                logger.debug(f"Returning best context match overall. Title: {selected['title']}: {best_context['context_sim']}")
+                logger.debug(f"Returning best context match overall. Title: {selected['title']}: {best_context['context_sim_intro']}")
                 selected['wiki_reason'] = "Best overall context match"
                 return selected
 
         # Rule 9: Fall back to combined score as last resort
         logger.debug("No good matches found, checking combined score...")
         best_overall = df.sort_values('combined_score', ascending=False).iloc[0]
-        if best_overall['combined_score'] > 4:  # Threshold for accepting combined score
+        if best_overall['combined_score'] > THRESHOLD_COMBINED_SCORE:  # Threshold for accepting combined score
             selected = articles[best_overall['index']]
             logger.debug(f"Returning best overall combined score: {selected['title']}: {best_overall['combined_score']}")
             selected['wiki_reason'] = "Best overall combined score"
@@ -1753,7 +1776,7 @@ class WikiMatcher:
         logger.debug("No good match found, returning None")
         return None
 
-    # Helper methods to be implemented
+    
     def _is_exact_title_match(self, query_term, article, country):
         """Check if query_term exactly matches article title."""
         query_country = f"{query_term} ({country})" if country else query_term
@@ -1891,10 +1914,12 @@ class WikiMatcher:
             return best
 
         # Create scoring dataframe
-        df = self._create_scoring_dataframe(good_res, query_term, context, country, actor_desc)
+        df = self._create_scoring_dataframe(good_res, query_term, context=context, 
+                                            actor_desc=actor_desc, 
+                                            country=country)
 
         # Apply prioritized selection rules
-        selected = self._apply_selection_rules(df, good_res, wiki_sort_method, context)
+        selected = self._apply_selection_rules(df, articles=good_res, context=context)
 
         if selected is not None:
             logger.debug(f"Selected article: {selected['title']} (reason: {selected['wiki_reason']})")
@@ -1903,7 +1928,7 @@ class WikiMatcher:
             logger.debug("No good match found")
             # print the best overall score
             best_overall = df.sort_values('combined_score', ascending=False).iloc[0].to_dict()
-            logger.debug(f"Best overall score: {best_overall}")
+            logger.debug(f"Skipping best overall score: ({best_overall['title']}): {best_overall['combined_score']}")
             return None
 
     def query_wiki(self, 
