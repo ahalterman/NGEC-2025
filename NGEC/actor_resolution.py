@@ -20,6 +20,7 @@ from scipy.spatial.distance import cdist
 import pylcs
 from sentence_transformers.util import cos_sim
 import torch
+from xgboost import XGBClassifier
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -415,7 +416,7 @@ class TextPreProcessor:
                 raise ValueError("nlp object must be provided if doc is provided.")
             doc = nlp(text)
 
-        acronym_entities = {}
+        acronym_entities = {"U.N.": "United Nations", "UN": "United Nations"}
         for ent in doc.ents:
             # skip cardinals
             if ent.label_ in ["CARDINAL", "DATE", "TIME", "ORDINAL", "QUANTITY"]:
@@ -676,6 +677,31 @@ class ModelManager:
             combo_path = os.path.join(self.base_path, model_dir)
             self.models['actor_sim'] = SentenceTransformer(combo_path)
         return self.models['actor_sim']
+    
+    #def load_wiki_ranker_model(self, model_dir=DEFAULT_MODEL_PATH):
+    #    """
+    #    Load the Wikipedia ranker models
+
+    #    One model has context-related features and the other doesn't.
+    #    (We need this to handle the case where the context is not provided)
+    #    
+    #    Args:
+    #        model_dir: Directory containing the ranker model
+    #        
+    #    Returns:
+    #        XGBoost models: Tuple of loaded ranker model
+    #    """
+    #    if 'wiki_ranker' not in self.models:
+    #        combo_path = os.path.join(self.base_path, 'xgboost_model.json')
+    #        wiki_ranker = XGBClassifier()
+    #        wiki_ranker.load_model(combo_path)
+    #        self.models['wiki_ranker'] = wiki_ranker
+    #    if 'wiki_ranker_no_context' not in self.models:
+    #        combo_path = os.path.join(self.base_path, 'xgboost_model_no_context.json')
+    #        wiki_ranker_no_context = XGBClassifier()
+    #        wiki_ranker_no_context.load_model(combo_path)
+    #        self.models['wiki_ranker_no_context'] = wiki_ranker_no_context
+    #    return self.models['wiki_ranker'], self.models['wiki_ranker_no_context']
 
 
 #######################################################
@@ -1124,6 +1150,10 @@ class WikiClient:
         # Execute search
         res = self.conn.query(query)[0:max_results].execute()
         results = [hit.to_dict()['_source'] for hit in res['hits']['hits']]
+        # Add the scores to the results to use for ranking?
+        #scores = [hit.to_dict()['_score'] for hit in res['hits']['hits']]
+        #for i, result in enumerate(results):
+        #    result['raw_es_score'] = scores[i]
         logger.debug(f"Number of hits for Wiki query: {len(results)}")
         logger.debug(f"Titles of the first five results: {[result['title'] for result in results[0:5]]}")
         
@@ -1329,9 +1359,11 @@ class WikiMatcher:
             model_manager = ModelManager(device=device)
             self.trf = trf_model if trf_model else model_manager.load_trf_model()
             self.actor_sim = actor_sim_model if actor_sim_model else model_manager.load_actor_sim_model()
+            #self.wiki_ranker, self.wiki_ranker_no_context = model_manager.load_wiki_ranker_model()
         else:
             self.trf = trf_model
             self.actor_sim = actor_sim_model
+
         
         if nlp is None:
             model_manager = ModelManager(device=device)
@@ -1828,6 +1860,19 @@ class WikiMatcher:
         enc_info = self.trf.encode(article_info, show_progress_bar=False)
         sims = cos_sim(enc_desc, enc_info)
         return float(sims[0][0])
+    
+    def _call_ranker(self, score_df, context):
+        if context:
+            X = score_df[self.wiki_ranker.feature_names_in_]
+            y_proba = self.wiki_ranker.predict_proba(X)[:, 1]
+        else:
+            X = score_df[self.wiki_ranker_no_context.feature_names_in_]
+            y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
+        score_df['ranker_score'] = y_proba
+        score_df['is_max_for_task'] = (score_df['y_pred_proba'] == score_df['y_pred_proba'].max()).astype(int)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['y_pred_proba'] > 0.5)
+        return score_df
+
 
     def pick_best_wiki(self, 
                        query_term, 
@@ -1904,11 +1949,20 @@ class WikiMatcher:
             logger.debug(f"Skipping best overall score: ({best_overall['title']}): {best_overall['combined_score']}")
             return None
         
-    def _expand_query(self, query_term, context):
+    def _expand_query(self, query_term, context=None, doc=None):
         """
         Expand the query term using named entity recognition (NER) and acronyms.
         """
-        context_doc = self.nlp(context)
+        if not context and not doc:
+            logger.info("Either context or doc must be provided for NER expansion--returning original query term")
+            return query_term 
+
+        if context and not doc:
+            context_doc = self.nlp(context)
+        else:
+            context_doc = doc
+        
+
         if context_doc:
             expanded_query = [i.text for i in context_doc.ents if query_term in i.text]
             if expanded_query:
