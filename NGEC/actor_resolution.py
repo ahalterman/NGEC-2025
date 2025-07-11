@@ -20,6 +20,7 @@ from scipy.spatial.distance import cdist
 import pylcs
 from sentence_transformers.util import cos_sim
 import torch
+from xgboost import XGBClassifier
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -37,6 +38,7 @@ THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
 THRESHOLD_CONTEXT_MATCH = 0.6 # 0.7
 THRESHOLD_HIGH_CONFIDENCE = 0.90
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
+THRESHOLD_COMBINED_SCORE = 9 
 
 #######################################################
 # Text Processing Utilities
@@ -414,7 +416,7 @@ class TextPreProcessor:
                 raise ValueError("nlp object must be provided if doc is provided.")
             doc = nlp(text)
 
-        acronym_entities = {}
+        acronym_entities = {"U.N.": "United Nations", "UN": "United Nations"}
         for ent in doc.ents:
             # skip cardinals
             if ent.label_ in ["CARDINAL", "DATE", "TIME", "ORDINAL", "QUANTITY"]:
@@ -498,7 +500,7 @@ class CountryDetector:
         Args:
             base_path: Path to directory containing the countries.csv file
         """
-        self.nat_list, self.nat_list_cat = self._load_county_dict(base_path)
+        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_county_dict(base_path)
     
     def _load_county_dict(self, base_path):
         """
@@ -515,34 +517,45 @@ class CountryDetector:
         
         # Direct country name/nationality patterns
         nat_list = []
+        nat_list_name = []
         for _, row in countries.iterrows():
             # Handle nationalities
             nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
             for nat in nationalities:
                 pattern = (re.compile(nat + r"(?=[^a-z]|$)"), row['CCA3'])
+                pattern_name = (re.compile(nat + r"(?=[^a-z]|$)"), row['Name'])
                 nat_list.append(pattern)
+                nat_list_name.append(pattern_name)
             
             # Handle country names
             pattern = (re.compile(row['Name']), row['CCA3'])
+            pattern_name = (re.compile(row['Name']), row['Name'])
             nat_list.append(pattern)
+            nat_list_name.append(pattern_name)
+
         
         # Category patterns (for "of X" or "in X" constructions)
         nat_list_cat = []
+        nat_list_name_cat = []
         for prefix in ['of ', 'in ']: 
             for _, row in countries.iterrows():
                 # Handle nationalities in categories
                 nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
                 for nat in nationalities:
                     pattern = (re.compile(prefix + nat), row['CCA3'])
+                    pattern_name = (re.compile(prefix + nat), row['Name'])
                     nat_list_cat.append(pattern)
+                    nat_list_name_cat.append(pattern_name)
                 
                 # Handle country names in categories
                 pattern = (re.compile(prefix + row['Name']), row['CCA3'])
+                pattern_name = (re.compile(prefix + row['Name']), row['Name'])
                 nat_list_cat.append(pattern)
+                nat_list_name_cat.append(pattern_name)
         
-        return nat_list, nat_list_cat
+        return nat_list, nat_list_cat, nat_list_name, nat_list_name_cat
 
-    def search_nat(self, text, method="longest", categories=False):
+    def search_nat(self, text, method="longest", categories=False, use_name=False):
         """
         Search for country names/nationalities in text and return canonical form.
         
@@ -550,6 +563,7 @@ class CountryDetector:
             text: Text to search for country mentions
             method: Method to use when multiple countries are found ('longest' or 'first')
             categories: Whether to use category patterns (of X, in X)
+            use_name: Whether to return the *name* of the country instead of the ISO code
             
         Returns:
             tuple: (country_code, trimmed_text) or (None, original_text) if no country found
@@ -562,16 +576,19 @@ class CountryDetector:
         found = []
         
         # Use appropriate pattern list based on categories flag
-        patterns = self.nat_list_cat if categories else self.nat_list
+        if use_name:
+            patterns = self.nat_list_name_cat if categories else self.nat_list_name
+        else:
+            patterns = self.nat_list_cat if categories else self.nat_list
         
         # Find all matching countries
-        for pattern, country_code in patterns:
+        for pattern, country in patterns:
             match = re.search(pattern, text)
             if match:
                 # Remove the matched country/nationality from text
                 trimmed_text = re.sub(pattern, "", text).strip()
                 trimmed_text = re.sub(r" +", " ", trimmed_text).strip()
-                found.append((country_code, trimmed_text.strip(), match))
+                found.append((country, trimmed_text.strip(), match))
         
         # Return if no countries found
         if not found:
@@ -660,6 +677,31 @@ class ModelManager:
             combo_path = os.path.join(self.base_path, model_dir)
             self.models['actor_sim'] = SentenceTransformer(combo_path)
         return self.models['actor_sim']
+    
+    #def load_wiki_ranker_model(self, model_dir=DEFAULT_MODEL_PATH):
+    #    """
+    #    Load the Wikipedia ranker models
+
+    #    One model has context-related features and the other doesn't.
+    #    (We need this to handle the case where the context is not provided)
+    #    
+    #    Args:
+    #        model_dir: Directory containing the ranker model
+    #        
+    #    Returns:
+    #        XGBoost models: Tuple of loaded ranker model
+    #    """
+    #    if 'wiki_ranker' not in self.models:
+    #        combo_path = os.path.join(self.base_path, 'xgboost_model.json')
+    #        wiki_ranker = XGBClassifier()
+    #        wiki_ranker.load_model(combo_path)
+    #        self.models['wiki_ranker'] = wiki_ranker
+    #    if 'wiki_ranker_no_context' not in self.models:
+    #        combo_path = os.path.join(self.base_path, 'xgboost_model_no_context.json')
+    #        wiki_ranker_no_context = XGBClassifier()
+    #        wiki_ranker_no_context.load_model(combo_path)
+    #        self.models['wiki_ranker_no_context'] = wiki_ranker_no_context
+    #    return self.models['wiki_ranker'], self.models['wiki_ranker_no_context']
 
 
 #######################################################
@@ -1032,7 +1074,7 @@ class WikiClient:
         except Exception as e:
             raise ValueError(f"Error checking Wikipedia index: {e}")
 
-    def search_wiki(self, query_term, limit_term="", fuzziness="AUTO", max_results=200,
+    def run_wiki_search(self, query_term, limit_term="", fuzziness="AUTO", max_results=200,
                    fields=['title^50', 'redirects^50', 'alternative_names'],
                    score_type="best_fields"):
         """
@@ -1067,7 +1109,12 @@ class WikiClient:
                         # Exact match on alternative names
                         {"term": {"alternative_names": {"value": query_term, "boost": 125}}},
                         # Analyzed match on alternative names
-                        {"match": {"alternative_names": {"query": query_term, "boost": 25}}}
+                        {"match": {"alternative_names": {"query": query_term, "boost": 50}}},
+
+                        # Analyzed match on short description and intro para
+                        {"match": {"intro_para": {"query": query_term, "boost": 5}}},
+                        # Analyzed match on categories
+                        {"match": {"short_desc": {"query": query_term, "boost": 10}}}
                     ]
                 }
             }
@@ -1103,8 +1150,12 @@ class WikiClient:
         # Execute search
         res = self.conn.query(query)[0:max_results].execute()
         results = [hit.to_dict()['_source'] for hit in res['hits']['hits']]
+        # Add the scores to the results to use for ranking?
+        #scores = [hit.to_dict()['_score'] for hit in res['hits']['hits']]
+        #for i, result in enumerate(results):
+        #    result['raw_es_score'] = scores[i]
         logger.debug(f"Number of hits for Wiki query: {len(results)}")
-        logger.debug(f"Titles of the results: {[result['title'] for result in results]}")
+        logger.debug(f"Titles of the first five results: {[result['title'] for result in results[0:5]]}")
         
         return results
 
@@ -1123,7 +1174,7 @@ class WikiSearcher:
     Example:
         client = WikiClient()
         searcher = WikiSearcher(client)
-        results = searcher.search_wiki("Barack Obama")
+        results = searcher.run_wiki_search("Barack Obama")
         filtered = searcher._trim_results(results)
     """
     
@@ -1145,8 +1196,7 @@ class WikiSearcher:
         else:
             self.text_processor = text_processor
     
-    def search_wiki(self, query_term, limit_term="", fuzziness="AUTO", max_results=200,
-                   fields=['title^50', 'redirects^50', 'alternative_names'],
+    def search_wiki(self, query_term, limit_term="", fuzziness="AUTO", max_results=200, 
                    score_type="best_fields"):
         """
         Search Wikipedia for a given query term.
@@ -1167,12 +1217,11 @@ class WikiSearcher:
         logger.debug(f"Using query term: '{query_term}'")
         
         # Perform search via client
-        return self.wiki_client.search_wiki(
+        return self.wiki_client.run_wiki_search(
             query_term=query_term,
             limit_term=limit_term,
             fuzziness=fuzziness,
             max_results=max_results,
-            fields=fields,
             score_type=score_type
         )
 
@@ -1230,11 +1279,17 @@ class WikiSearcher:
         
         # Filter out disambiguation and stub pages
         patterns_to_exclude = [
-            (r"(stub|User|Wikipedia\:)", 'title'),
+            (r"(stub|User|Wikipedia)\:", 'title'),
+            (r"^Wikipedia\:", 'title'),
+            (r"^Talk\:", 'title'),
             (r"disambiguation", 'title'),
+            (r"^Template:", 'title'),
+            (r"^Category:", 'title'),
+            (r"^Portal:", 'title'),
             (r"Category\:", lambda r: r['intro_para'][0:50]),
             (r"is the name of", lambda r: r['intro_para'][0:50]),
             (r"may refer to", lambda r: r['intro_para'][0:50]),
+            (r"is used as an abbreviation for", lambda r: r['intro_para'][0:40]),
             (r"can refer to", lambda r: r['intro_para'][0:50]),
             (r"most commonly refers to", lambda r: r['intro_para'][0:50]),
             (r"usually refers to", lambda r: r['intro_para'][0:80]),
@@ -1304,9 +1359,11 @@ class WikiMatcher:
             model_manager = ModelManager(device=device)
             self.trf = trf_model if trf_model else model_manager.load_trf_model()
             self.actor_sim = actor_sim_model if actor_sim_model else model_manager.load_actor_sim_model()
+            #self.wiki_ranker, self.wiki_ranker_no_context = model_manager.load_wiki_ranker_model()
         else:
             self.trf = trf_model
             self.actor_sim = actor_sim_model
+
         
         if nlp is None:
             model_manager = ModelManager(device=device)
@@ -1406,107 +1463,6 @@ class WikiMatcher:
         return alt_matches
 
 
-    def _rank_by_neural_similarity(self, candidates, context=None, actor_desc=None):
-        """
-        Rank candidates by neural similarity to query term and/or context,
-        optimized to minimize GPU to CPU transfers.
-
-        Args:
-            candidates: List of candidate articles
-            query_term: Query term to match
-            context: Context text to help with disambiguation
-            actor_desc: Actor description to help with disambiguation
-        
-        Returns:
-            dict: Best matching candidate or None if no match found
-        """
-        if not candidates:
-            logger.warning("No results provided to neural ranker.")
-            return None
-        if not context and not actor_desc:
-            # raise a warning and return None
-            logger.warning("No context/actor_desc provided, but neural ranker was called.")
-            return None
-
-        #if not fields:
-        #    fields = ['title', 'alternative_names', 'redirects', 'short_desc']
-
-        # Process context similarity if provided
-        if context or actor_desc:
-            # Get intro paragraphs with limit
-            # TODO: consider using short_desc field instead
-            intro_paras = [c['intro_para'][0:200] for c in candidates[0:50]]
-            short_desc = [c['short_desc'] for c in candidates[0:50]]
-
-            sims_context = None
-            sims_actor_desc = None
-
-            # Encode directly on GPU and keep it there
-            with torch.no_grad():
-                # Encode all intros at once (stays on GPU)
-                encoded_intros = self.trf.encode(intro_paras, 
-                                              show_progress_bar=False, 
-                                              device=self.device,
-                                              convert_to_tensor=True)  # Keep as tensor
-                
-                # Encode short info (stays on GPU)
-                encoded_short_desc = self.trf.encode(short_desc,
-                                                show_progress_bar=False, 
-                                                device=self.device,
-                                                convert_to_tensor=True)
-                if context:
-                    # Encode context (stays on GPU)
-                    encoded_context = self.trf.encode(context, 
-                                                show_progress_bar=False, 
-                                                device=self.device,
-                                                convert_to_tensor=True)
-
-                    # Compute similarity scores on GPU
-                    sims_para = cos_sim(encoded_context, encoded_intros)[0]
-                    sims_short = cos_sim(encoded_context, encoded_short_desc)[0]
-
-                    # take the elementwise max
-                    sims_context = torch.maximum(sims_para, sims_short)
-
-                if actor_desc:
-                    # Encode actor description (stays on GPU)
-                    encoded_actor_desc = self.trf.encode(actor_desc, 
-                                                    show_progress_bar=False, 
-                                                    device=self.device,
-                                                    convert_to_tensor=True)
-                    # Compute similarity scores on GPU
-                    sims_para_actor = cos_sim(encoded_actor_desc, encoded_intros)[0]
-                    sims_short_actor = cos_sim(encoded_actor_desc, encoded_short_desc)[0]
-                    sims_actor_desc = torch.maximum(sims_para_actor, sims_short_actor)
-
-            # Combine similarity scores
-            if sims_context is not None and sims_actor_desc is not None:
-                # Combine with weighted preference for actor_desc (3x weight)
-                sims = 0.25 * sims_context + 0.75 * sims_actor_desc
-            elif sims_context is not None:
-                sims = sims_context
-            elif sims_actor_desc is not None:
-                sims = sims_actor_desc
-            else:
-                logger.warning("No context or actor_desc provided, but neural ranker was called.")
-                return None
-
-
-            # Find best match (minimal CPU transfer)
-            best_idx = int(torch.argmax(sims).item())
-            best_score = float(sims[best_idx].item())
-
-            # If high similarity, note the best match
-            if best_score > THRESHOLD_CONTEXT_MATCH:
-                logger.debug(f"Found high context similarity score: {best_score}")
-                best_candidate = candidates[best_idx]
-                best_candidate['wiki_reason'] = f"Best match by context similarity"
-                return best_candidate
-            else:
-                logger.debug(f"Context similarity score too low: {candidates[best_idx]['title']}={best_score}")
-                return None
-        return None
-
     def _check_titles_similarity(self, query_term, candidates):
         """
         Check similarity between query term and candidate titles using actor_sim model.
@@ -1538,6 +1494,385 @@ class WikiMatcher:
             return best_match, best_score
             
         return None, best_score
+    
+    def _edit_distance(self, articles, query_term):
+        """
+        Calculate simple edit distance between query term and titles.
+        """
+        if not articles:
+            return None
+        titles = [article['title'] for article in articles]
+            
+        # Use Levenshtein distance
+        levenshtein = [pylcs.edit_distance(query_term, title) for title in titles]
+        levenshtein_sim = []
+        for n, i in enumerate(levenshtein):
+            max_len = max(len(query_term), len(titles[n]))
+            if max_len == 0:
+                levenshtein_sim.append(0)
+            else:
+                levenshtein_sim.append(1 - i / max_len)
+        longest_common_subseq = [pylcs.lcs_sequence_length(query_term, title) for title in titles]
+        lcs_sim = []
+        for n, i in enumerate(longest_common_subseq):
+            max_len = max(len(query_term), len(titles[n]))
+            if max_len == 0:
+                lcs_sim.append(0)
+            else:
+                lcs_sim.append(i / max_len)
+        best_subseq = [int(n == np.argmax(levenshtein_sim)) for n in range(len(lcs_sim))]
+        best_lev = [int(n == np.argmax(levenshtein)) for n in range(len(levenshtein_sim))]
+        output = {"levenshtein": levenshtein_sim, 
+              "lcs": lcs_sim, 
+              "best_subseq": best_subseq, 
+              "best_lev": best_lev}
+        return output
+
+        
+
+    def _create_scoring_dataframe(self, articles, query_term, context, actor_desc, country):
+        """
+        Create a pandas DataFrame with scores for each article, using batched computations.
+
+        Args:
+            articles: List of Wikipedia article dictionaries
+            query_term: Query term to match
+            context: Context text to help with disambiguation
+            country: Country code to help with disambiguation
+            actor_desc: Actor description to help with disambiguation
+
+        Returns:
+            pandas.DataFrame: DataFrame with article scores
+        """
+        if len(articles) == 0:
+            return pd.DataFrame()
+        # Prepare data for DataFrame
+        data = []
+
+        # Prepare basic matching scores (non-embedding based)
+
+        for i, article in enumerate(articles):
+            title = article['title']
+
+            # Calculate various match scores
+            exact_title_match = 1 if self._is_exact_title_match(query_term, article, country) else 0
+            redirect_match = 1 if self._is_redirect_match(query_term, article, country) else 0
+            alt_name_match = 1 if self._is_alt_name_match(query_term, article) else 0
+            country_match = 0
+            if country:
+                if (re.search(country, article['intro_para']) or re.search(country, article['short_desc'])):
+                    country_match = 1
+
+            # Number of alternative names
+            alt_names_count = len(article.get('alternative_names', []))
+            redirect_names_count = len(article.get('redirects', []))
+            results_count = len(articles)
+
+            # Intro paragraph length
+            intro_length = len(article.get('intro_para', ''))
+
+
+            data.append({
+                'index': i,
+                'title': title,
+                'exact_title_match': exact_title_match,
+                'redirect_match': redirect_match,
+                'alt_name_match': alt_name_match,
+                'alt_names_count': alt_names_count,
+                'redirect_names_count': redirect_names_count,
+                'num_es_results': results_count,
+                'intro_length': intro_length,
+                'country_match': country_match,
+
+                'title_sim': 0,  # Will be filled in later
+                'context_sim_intro': 0,  # Will be filled in later
+                'context_sim_short': 0,  # Will be filled in later
+                'actor_desc_sim_intro': 0,  # Will be filled in later
+                'actor_desc_sim_short': 0,  # Will be filled in later
+                'combined_score': 0  # Will be calculated after all scores are in
+            })
+
+        # Create DataFrame with initial data
+        df = pd.DataFrame(data)
+        
+        edit_distance = self._edit_distance(articles, query_term)
+        if edit_distance is None:
+            df['levenshtein'] = None
+            df['lcs'] = None
+            df['best_subseq'] = None 
+            df['best_lev'] = None
+        else:
+            df['levenshtein'] =  edit_distance['levenshtein']
+            df['lcs'] = edit_distance['lcs']
+            df['best_subseq'] = edit_distance['best_subseq']
+            df['best_lev'] = edit_distance['best_lev']
+
+        # Batch compute title similarity
+        if query_term:
+            titles = [article['title'] for article in articles]
+            # Encode query once
+            query_embedding = self.actor_sim.encode(query_term, show_progress_bar=False)
+            # Encode all titles in one batch
+            title_embeddings = self.actor_sim.encode(titles, show_progress_bar=False)
+            # Compute similarities
+            title_sims = cos_sim(query_embedding.reshape(1, -1), title_embeddings)
+            # Add to dataframe
+            df['title_sim'] = title_sims[0].tolist()
+
+        # Batch compute context similarity
+        if context or actor_desc:
+            intros = [article['intro_para'][0:300] for article in articles]
+            short_descs = [article['short_desc'] for article in articles]
+            # Encode context once
+            intro_embeddings = self.trf.encode(intros, show_progress_bar=False)
+            short_desc_embeddings = self.trf.encode(short_descs, show_progress_bar=False)
+        
+        if context:
+            context_embedding = self.trf.encode(context, show_progress_bar=False)
+            # Compute similarities
+            context_sims = cos_sim(context_embedding.reshape(1, -1), intro_embeddings)
+            short_desc_sims = cos_sim(context_embedding.reshape(1, -1), short_desc_embeddings)
+            # Add to dataframe
+            df['context_sim_intro'] = context_sims[0].tolist()
+            df['context_sim_short'] = short_desc_sims[0].tolist()
+
+        if actor_desc:
+            # Encode actor description once
+            desc_embedding = self.trf.encode(actor_desc, show_progress_bar=False)
+            # Compute similarities
+            desc_sims_intro = cos_sim(desc_embedding.reshape(1, -1), intro_embeddings)
+            desc_sims_short = cos_sim(desc_embedding.reshape(1, -1), short_desc_embeddings)
+            # Add to dataframe
+            df['actor_desc_sim_intro'] = desc_sims_intro[0].tolist()
+            df['actor_desc_sim_short'] = desc_sims_short[0].tolist()
+
+        # Normalize scores
+        for col in ['title_sim', 'context_sim_intro', 'context_sim_short',
+                    'actor_desc_sim_intro', 'actor_desc_sim_short',
+                    'lcs', 'levenshtein', 'country_match', 'exact_title_match',
+                    'alt_name_match', 'redirect_match']:
+            col_norm, normed = self._normalize_scores(df, col)
+            df[col_norm] = normed
+
+        # Calculate combined score with appropriate weighting
+        df['combined_score'] = (
+            df['exact_title_match'] * 10 +
+            df['redirect_match'] * 5 +
+            df['alt_name_match'] * 3 +
+            df['title_sim'] * 1 +
+            df['context_sim_intro'] * 2 +
+            df['context_sim_short'] * 2 +
+            df['actor_desc_sim_intro'] * 2 +
+            df['actor_desc_sim_short'] * 2 +
+            df['country_match'] * 2 +
+            np.log1p(df['alt_names_count']) * 0.5 +
+            np.log1p(df['intro_length']) * 0.1
+        )
+
+        return df
+    
+    def _normalize_scores(self, df, col):
+        col_norm = f"{col}_norm"
+        return (col_norm, df[col] / df[col].max())
+
+    def _apply_selection_rules(self, df, articles, context):
+        """
+        Apply a series of prioritized rules to select the best article.
+
+        Args:
+            df: DataFrame with article scores
+            articles: List of Wikipedia article dictionaries
+            wiki_sort_method: Method to use for sorting results
+            context: Context text to help with disambiguation
+
+        Returns:
+            dict or None: Selected article or None if no good match
+        """
+        # Rule 1: Single exact title match - highest priority
+        exact_matches = df[df['exact_title_match'] == 1]
+        logger.debug(f"Exact title matches found: {len(exact_matches)}")
+        if len(exact_matches) == 1:
+            selected = articles[exact_matches.iloc[0]['index']]
+            logger.debug("Returning single exact title match")
+            selected['wiki_reason'] = "Single exact title match"
+            return selected
+        logger.debug("No single exact title match found")
+
+        # Rule 2: Multiple exact matches - use context if available
+        if len(exact_matches) > 1 and context:
+            logger.debug("Multiple exact title matches found, checking context...")
+            best_context_match = exact_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_context_match['context_sim_intro'] > 0.5:  # Threshold for good context match
+                selected = articles[best_context_match['index']]
+                logger.debug("Returning best context match among exact title matches")
+                selected['wiki_reason'] = "Best context match among exact title matches"
+                return selected
+
+        # Rule 3: Multiple exact matches - use title similarity
+        logger.debug("Multiple exact title matches found, checking title similarity...")
+        if len(exact_matches) > 1:
+            best_title_match = exact_matches.sort_values('title_sim', ascending=False).iloc[0]
+            if best_title_match['title_sim'] > 0.7:  # Threshold for good title match
+                selected = articles[best_title_match['index']]
+                logger.debug("Returning best title match among exact title matches")
+                selected['wiki_reason'] = "Best title similarity among exact matches"
+                return selected
+
+        # Rule 4: Single redirect match
+        logger.debug("Checking for single redirect match...")
+        redirect_matches = df[df['redirect_match'] == 1]
+        if len(redirect_matches) == 1:
+            selected = articles[redirect_matches.iloc[0]['index']]
+            logger.debug("Returning single redirect match")
+            selected['wiki_reason'] = "Single redirect match"
+            return selected
+
+        # Rule 5: Multiple redirect matches - use context
+        if len(redirect_matches) > 1 and context:
+            logger.debug("Multiple redirect matches found, checking context...")
+            best_context_match = redirect_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_context_match['context_sim_intro'] > 0.5:
+                selected = articles[best_context_match['index']]
+                logger.debug(f"Returning best context match among redirect matches. Title: {selected['title']}: {best_context_match['context_sim']}")
+                selected['wiki_reason'] = "Best context match among redirect matches"
+                return selected
+
+        # Rule 6: Multiple redirect matches - use title similarity
+        if len(redirect_matches) > 1:
+            logger.debug("Multiple redirect matches found, checking title similarity...")
+            best_redirect = redirect_matches.sort_values('title_sim', ascending=False).iloc[0]
+            if best_redirect['title_sim'] > 0.7:
+                selected = articles[best_redirect['index']]
+                logger.debug(f"Returning best title match among redirect matches. Title: {selected['title']}: {best_redirect['title_sim']}")
+                selected['wiki_reason'] = "Best title similarity among redirect matches"
+                return selected
+
+        # Rule 7: Alternative name matches with good context
+        alt_matches = df[df['alt_name_match'] == 1]
+        if len(alt_matches) > 0 and context:
+            logger.debug("Checking for alternative name matches with context...")
+            best_alt_match = alt_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_alt_match['context_sim_intro'] > 0.6:
+                selected = articles[best_alt_match['index']]
+                logger.debug(f"Returning best context match among alternative name matches. Title: {selected['title']}: {selected['context_sim']}")
+                selected['wiki_reason'] = "Best context match among alternative name matches"
+                return selected
+
+        # Rule 8: Fall back to combined score for any article with good context match
+        logger.debug("Checking for any article with good context match...")
+        if context:
+            best_context = df.sort_values('context_sim_intro', ascending=False).iloc[0]
+            if best_context['context_sim_intro'] > 0.6:  # Higher threshold for general context match
+                selected = articles[best_context['index']]
+                logger.debug(f"Returning best context match overall. Title: {selected['title']}: {best_context['context_sim_intro']}")
+                selected['wiki_reason'] = "Best overall context match"
+                return selected
+
+        # Rule 9: Fall back to combined score as last resort
+        logger.debug("No good matches found, checking combined score...")
+        best_overall = df.sort_values('combined_score', ascending=False).iloc[0]
+        if best_overall['combined_score'] > THRESHOLD_COMBINED_SCORE:  # Threshold for accepting combined score
+            selected = articles[best_overall['index']]
+            logger.debug(f"Returning best overall combined score: {selected['title']}: {best_overall['combined_score']}")
+            selected['wiki_reason'] = "Best overall combined score"
+            return selected
+
+        # No good match found
+        logger.debug("No good match found, returning None")
+        return None
+
+    
+    def _is_exact_title_match(self, query_term, article, country):
+        """Check if query_term exactly matches article title."""
+        query_country = f"{query_term} ({country})" if country else query_term
+        title = article['title']
+        return (query_term == title or 
+                query_country == title or
+                query_term.upper() == title or 
+                query_country.upper() == title or
+                query_term == remove_accents(title) or 
+                query_country == remove_accents(title) or
+                query_term.title() == title or 
+                query_country.title() == title)
+
+    def _is_redirect_match(self, query_term, article, country):
+        """Check if query_term matches any redirect."""
+        if 'redirects' not in article:
+            return False
+
+        query_country = f"{query_term} ({country})" if country else query_term
+        redirects = article['redirects']
+        return (query_term in redirects or 
+                query_country in redirects or
+                query_term.title() in redirects or 
+                query_country.title() in redirects or
+                query_term.upper() in redirects or 
+                query_country.upper() in redirects)
+
+    def _is_alt_name_match(self, query_term, article):
+        """Check if query_term matches any alternative name."""
+        if 'alternative_names' in article and (
+            query_term in article['alternative_names'] or
+            query_term.title() in article['alternative_names'] or
+            query_term.upper() in article['alternative_names'] or
+            query_term in [remove_accents(name) for name in article['alternative_names']] or
+            query_term.title() in [remove_accents(name) for name in article['alternative_names']] or
+            query_term.upper() in [remove_accents(name) for name in article['alternative_names']] or
+            query_term in [name.title() for name in article['alternative_names']]):
+            return True
+
+        if ('infobox' in article and 
+            'name' in article['infobox'] and
+            query_term == article['infobox']['name']):
+            return True
+
+        return False
+
+    def _calculate_title_similarity(self, query_term, article):
+        """Calculate similarity between query_term and article title."""
+        # This could call into the existing _check_titles_similarity method
+        # but return just the similarity score
+        title = article['title']
+        enc_query = self.actor_sim.encode(query_term, show_progress_bar=False)
+        enc_title = self.actor_sim.encode(title, show_progress_bar=False)
+        sims = cos_sim(enc_query, enc_title)
+        return float(sims[0][0])
+
+    def _calculate_context_similarity(self, context, article):
+        """Calculate similarity between context and article intro."""
+        intro = article['intro_para'][0:200]
+        enc_context = self.trf.encode(context, show_progress_bar=False)
+        enc_intro = self.trf.encode(intro, show_progress_bar=False)
+        sims = cos_sim(enc_context, enc_intro)
+        return float(sims[0][0])
+
+    def _calculate_actor_desc_similarity(self, actor_desc, article):
+        """Calculate similarity between actor description and article intro/categories."""
+        if not actor_desc:
+            return 0
+
+        # Combine intro and categories for a rich description
+        article_info = article['intro_para'][0:200]
+        if 'categories' in article:
+            article_info += " " + " ".join(article['categories'])
+
+        enc_desc = self.trf.encode(actor_desc, show_progress_bar=False)
+        enc_info = self.trf.encode(article_info, show_progress_bar=False)
+        sims = cos_sim(enc_desc, enc_info)
+        return float(sims[0][0])
+    
+    def _call_ranker(self, score_df, context):
+        if context:
+            X = score_df[self.wiki_ranker.feature_names_in_]
+            y_proba = self.wiki_ranker.predict_proba(X)[:, 1]
+        else:
+            X = score_df[self.wiki_ranker_no_context.feature_names_in_]
+            y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
+        score_df['ranker_score'] = y_proba
+        score_df['is_max_for_task'] = (score_df['y_pred_proba'] == score_df['y_pred_proba'].max()).astype(int)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['y_pred_proba'] > 0.5)
+        return score_df
+
 
     def pick_best_wiki(self, 
                        query_term, 
@@ -1545,11 +1880,11 @@ class WikiMatcher:
                        context="", 
                        country="",
                        actor_desc="",
-                      wiki_sort_method=None, 
-                      rank_fields=None):
+                       wiki_sort_method=None, 
+                       rank_fields=None):
         """
-        Select the best Wikipedia article from search results.
-        
+        Select the best Wikipedia article from search results using a scoring matrix approach.
+
         Args:
             query_term: Query term to match
             results: List of Wikipedia article search results
@@ -1558,163 +1893,95 @@ class WikiMatcher:
             actor_desc: Actor description to help with disambiguation
             wiki_sort_method: Method to use for sorting results
             rank_fields: Fields to use for ranking
-            
+
         Returns:
             dict or None: Best matching Wikipedia article or None if no good match
         """
+        import pandas as pd
+
         # Use instance method if not provided
         if wiki_sort_method is None:
             wiki_sort_method = self.wiki_sort_method
-            
+
         # Set default rank fields if not provided
         if rank_fields is None:
             rank_fields = ['title', 'categories', 'alternative_names', 'redirects']
-            
+
         # Clean query term
         query_term = self.text_processor.clean_query(query_term)
         logger.debug(f"Using query term '{query_term}'")
-        
-        # Construct country-qualified query if country provided
-        #query_country = f"{query_term} ({country})" if country else query_term
-        
+
         # Handle empty results
         if not results:
             logger.debug("No Wikipedia results. Returning None")
             return None
-            
+
         # Remove disambiguation pages, stubs, etc.
         good_res = self.wiki_searcher._trim_results(results)
         if not good_res:
+            logger.debug("No valid results after filtering disambiguation pages, etc.")
             return None
-            
+
         logger.debug(f"Filtered down to {len(good_res)} valid results")
-        
-        # Find exact title matches
-        exact_matches = self._find_exact_title_matches(query_term, good_res, country)
-        logger.debug(f"Found {len(exact_matches)} exact title matches")
-        
-        # Find redirect matches
-        redirect_matches = self._find_redirect_matches(query_term, good_res, country)
-        logger.debug(f"Found {len(redirect_matches)} redirect matches")
-        
-        # Find alternative name matches
-        alt_matches = self._find_alt_name_matches(query_term, good_res)
-        alt_titles = [a['title'] for a in alt_matches]
-        if alt_titles:
-            logger.debug(f"Found {len(alt_matches)} alternative name matches: {alt_titles}")
+
+        # Early exit: If only one result, return it
+        if len(good_res) == 1:
+            best = good_res[0]
+            best['wiki_reason'] = "Only one valid result"
+            logger.debug(f"Only one valid result: {best['title']}")
+            return best
+
+        # Create scoring dataframe
+        df = self._create_scoring_dataframe(good_res, query_term, context=context, 
+                                            actor_desc=actor_desc, 
+                                            country=country)
+
+        # Apply prioritized selection rules
+        selected = self._apply_selection_rules(df, articles=good_res, context=context)
+
+        if selected is not None:
+            logger.debug(f"Selected article: {selected['title']} (reason: {selected['wiki_reason']})")
+            return selected
         else:
-            logger.debug(f"Found {len(alt_matches)} alternative name matches")
+            logger.debug("No good match found")
+            # print the best overall score
+            best_overall = df.sort_values('combined_score', ascending=False).iloc[0].to_dict()
+            logger.debug(f"Skipping best overall score: ({best_overall['title']}): {best_overall['combined_score']}")
+            return None
         
-        # Handle single exact title match with no redirects
-        if len(exact_matches) == 1 and not redirect_matches:
-            best = exact_matches[0]
-            logger.debug(f"Only one exact title match and no redirects: {best['title']}")
-            best['wiki_reason'] = "Only one exact title match and no redirects"
-            return best
+    def _expand_query(self, query_term, context=None, doc=None):
+        """
+        Expand the query term using named entity recognition (NER) and acronyms.
+        """
+        if not context and not doc:
+            logger.info("Either context or doc must be provided for NER expansion--returning original query term")
+            return query_term 
+
+        if context and not doc:
+            context_doc = self.nlp(context)
+        else:
+            context_doc = doc
         
-            
-        # Handle multiple exact matches
-        if exact_matches:
-            if wiki_sort_method == "alt_names":
-                # Sort by number of alternative names
-                exact_matches.sort(key=lambda x: -len(x.get('alternative_names', [])))
-                if exact_matches:
-                    best = exact_matches[0]
-                    logger.debug(f"Multiple title exact matches: using longest alt names")
-                    best['wiki_reason'] = "Multiple title exact matches: using longest alt names"
-                    return best
-            elif wiki_sort_method in ["neural", "lcs"]:
-                # Try context-based similarity first
-                if context:
-                    combined_matches = exact_matches + redirect_matches
-                    if combined_matches:
-                        best = self._rank_by_neural_similarity(combined_matches, context, actor_desc)
-                        if best:
-                            best['wiki_reason'] = "Best match by context similarity"
-                            if best in exact_matches:
-                                logger.debug(f"Best match by context similarity: {best['title']}")
-                                return best
-                
-                # Fall back to query-based similarity
-                best = self._rank_by_neural_similarity(exact_matches, query_term)
-                if best:
-                    logger.debug(f"Picking from multiple exact matches using title similarity: {best['title']}")
-                    best['wiki_reason'] = "Best of exact matches using title similarity"
-                    return best
+
+        if context_doc:
+            expanded_query = [i.text for i in context_doc.ents if query_term in i.text]
+            if expanded_query:
+                # take the first one
+                expanded_query = expanded_query[0]
+                if len(expanded_query) > len(query_term):
+                    query_term = expanded_query
+                    logger.debug(f"Using NER to expand context: {expanded_query}")
         
-        # Handle single redirect match
-        if len(redirect_matches) == 1:
-            best = redirect_matches[0]
-            logger.debug(f"Single redirect match: {best['title']}")
-            best['wiki_reason'] = "Single redirect exact match"
-            return best
-            
-        # Handle two redirect matches - pick one with longer intro
-        if len(redirect_matches) == 2:
-            if len(redirect_matches[0]['intro_para']) > len(redirect_matches[1]['intro_para']):
-                logger.debug("Two redirect matches with same title. Picking one with longer intro.")
-                best = redirect_matches[0]
-            else:
-                best = redirect_matches[1]
-            best['wiki_reason'] = "Two exact redirect matches, returning page with longer intro"
-            return best
-            
-        # Handle multiple redirect matches
-        if redirect_matches:
-            logger.debug(f"Multiple redirect matches. Using {wiki_sort_method} to select best.")
-            
-            if wiki_sort_method == "alt_names":
-                redirect_matches.sort(key=lambda x: -len(x.get('alternative_names', [])))
-                best = redirect_matches[0]
-                logger.debug(f"Using best match in redirects using alt names: {best['title']}")
-                best['wiki_reason'] = "Multiple redirect matches; picking by longest alt names"
-                return best
-            elif wiki_sort_method in ["neural", "lcs"]:
-                # Try context-based similarity first
-                if context:
-                    best = self._rank_by_neural_similarity(redirect_matches, context)
-                    if best:
-                        logger.debug(f"Best match in redirects using context similarity: {best['title']}")
-                        best['wiki_reason'] = "Best match in redirects using context similarity"
-                        return best
-                
-                # Fall back to query-based similarity
-                logger.debug("Falling back to query-based similarity for redirects")
-                query_context = query_term + (context or "")
-                best = self._rank_by_neural_similarity(redirect_matches, query_context)
-                if best:
-                    logger.debug(f"Best match using redirect similarity: {best['title']}")
-                    best['wiki_reason'] = "Best match using redirect similarity"
-                    return best
-        
-        # Fall back to neural similarity between context and intro paragraphs
-        if context:
-            logger.debug("Falling back to text-intro neural similarity")
-            best = self._rank_by_neural_similarity(good_res[0:50], context)
-            if best:
-                    logger.debug(f"Best match by context similarity: {best['title']}")
-                    best['wiki_reason'] = "Best match by context similarity"
-                    return best
-                
-        # Last resort: title similarity
-        logger.debug("Falling back to title neural similarity")
-        best_match, sim_score = self._check_titles_similarity(query_term, good_res)
-        if best_match:
-            logger.debug(f"Best match by title similarity: {best_match['title']} with score {sim_score}")
-            best_match['wiki_reason'] = f"Best match by title similarity"
-            return best_match
-            
-        # Check alt matches with title similarity
-        if alt_matches:
-            logger.debug("Checking alt name matches with title similarity")
-            best_match, sim_score = self._check_titles_similarity(query_term, alt_matches)
-            if best_match:
-                logger.debug(f"Best match by alt name similarity: {best_match['title']} with score {sim_score}")
-                best_match['wiki_reason'] = f"Best match by alt name similarity"
-                return best_match
-                
-        logger.debug("No good match found")
-        return None
+            acronym_dict = self.text_processor.make_acronym_dicts(doc=context_doc)
+            # Check if query term is an acronym
+            # and expand it if found in the acronym dictionary
+            if query_term in acronym_dict:
+                logger.debug(f"Using acronym expansion: {query_term} --> {acronym_dict[query_term]}")
+                query_term = acronym_dict[query_term]
+            if query_term in acronym_dict:
+                query_term = acronym_dict[query_term]
+                logger.debug(f"Using acronym expansion: {query_term}")
+        return query_term
 
     def query_wiki(self, 
                    query_term, 
@@ -1740,25 +2007,8 @@ class WikiMatcher:
         # Do NER expansion by default
         if context:
             logger.debug("Context present, so attempting NER expansion")
-            context_doc = self.nlp(context)
-            if context_doc:
-                expanded_query = [i.text for i in context_doc.ents if query_term in i.text]
-                if expanded_query:
-                    # take the first one
-                    expanded_query = expanded_query[0]
-                    if len(expanded_query) > len(query_term):
-                        query_term = expanded_query
-                        logger.debug(f"Using NER to expand context: {expanded_query}")
-        
-                acronym_dict = self.text_processor.make_acronym_dicts(doc=context_doc)
-                # Check if query term is an acronym
-                # and expand it if found in the acronym dictionary
-                if query_term in acronym_dict:
-                    logger.debug(f"Using acronym expansion: {query_term} --> {acronym_dict[query_term]}")
-                    query_term = acronym_dict[query_term]
-                if query_term in acronym_dict:
-                    query_term = acronym_dict[query_term]
-                    logger.debug(f"Using acronym expansion: {query_term}")
+            query_term = self._expand_query(query_term, context)
+
         # Try exact search first
         logger.debug("Starting with exact search")
         results = self.wiki_searcher.search_wiki(
