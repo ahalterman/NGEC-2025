@@ -1109,7 +1109,7 @@ class WikiClient:
                         # Exact match on alternative names
                         {"term": {"alternative_names": {"value": query_term, "boost": 125}}},
                         # Analyzed match on alternative names
-                        {"match": {"alternative_names": {"query": query_term, "boost": 25}}},
+                        {"match": {"alternative_names": {"query": query_term, "boost": 50}}},
 
                         # Analyzed match on short description and intro para
                         {"match": {"intro_para": {"query": query_term, "boost": 5}}},
