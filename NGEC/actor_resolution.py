@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 # Constants
-DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
+DEFAULT_MODEL_PATH = "nomic-ai/nomic-embed-text-v1.5"
 DEFAULT_SIM_MODEL_PATH = 'actor_sim_model2'
 DEFAULT_BASE_PATH = "./assets"
 
@@ -658,7 +658,7 @@ class ModelManager:
             SentenceTransformer: Loaded transformer model
         """
         if 'trf' not in self.models:
-            self.models['trf'] = SentenceTransformer(model_dir, trust_remote_code=True)
+            self.models['trf'] = SentenceTransformer(model_dir, trust_remote_code=True, device=self.device)
         return self.models['trf']
 
     def load_actor_sim_model(self, model_dir=DEFAULT_SIM_MODEL_PATH):
