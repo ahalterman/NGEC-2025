@@ -9,19 +9,28 @@ import os
 import random
 import pickle
 
-from actor_resolution import WikiMatcher
+from actor_resolution import WikiMatcher, WikiClient
 from actor_resolution import TextPreProcessor, CountryDetector
+
 
 import spacy
 nlp = spacy.load("en_core_web_lg")
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 # Initialize WikiMatcher after logger setup
-wiki_matcher = WikiMatcher(device='cpu', # cuda:0
+wiki_client = WikiClient()
+wiki_matcher = WikiMatcher(device='cuda:0', # cuda:0
                            nlp=nlp)
 # Initialize TextPreProcessor
 text_preprocessor = TextPreProcessor()
 country_detector = CountryDetector()
+
+results = wiki_client.run_wiki_search("Bill Clinton", use_importance=True)
+results = wiki_client.run_wiki_search("Islamic State", use_importance=False)
+[r['title'] for r in results][0:10]
+[r['raw_es_score'] for r in results][0:10]
 
 
 wiki_df = pd.read_csv("../setup/train_wiki_model/wiki_gold_standard_1.csv")
@@ -29,6 +38,101 @@ wiki_df2 = pd.read_csv("../setup/train_wiki_model/wiki_gold_standard_2.csv")
 wiki_df = pd.concat([wiki_df, wiki_df2])
 wiki_df['Correct Wiki Title'] = wiki_df['Correct Wiki Title'].str.strip()
 wiki_df['Correct Wiki Title'] = wiki_df['Correct Wiki Title'].replace({'none': 'None'})
+wiki_df = wiki_df.reset_index(drop=True)
+
+#### TUNE WIKI BOOSTS ####
+
+config = {
+    'use_importance': False,
+    'max_results': 50
+}
+
+def check_results(wiki_df, config=None):
+    present_list = []
+    for n, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
+        actor_text_for_wiki = row['Query']
+        correct_title = row['Correct Wiki Title']
+        results =  wiki_client.run_wiki_search(actor_text_for_wiki, **config)
+        if len(results) == 0:
+            present_list.append(False)
+            continue
+        if correct_title is None or correct_title == "None" or correct_title == "" or correct_title == "nan" or pd.isna(correct_title):
+            present_list.append(True)
+            continue
+        if correct_title in [r['title'] for r in results]:
+            present_list.append(True)
+        else:
+            present_list.append(False)
+    present_mean = np.mean(present_list)
+    print(f"Mean present: {present_mean}")
+    return present_mean
+
+check_results(wiki_df, config)
+
+# Do a hyperparameter search (use_importance, max_results, boosts)
+# title_exact_boost=250,
+# title_fuzzy_boost=50,
+# redirects_exact_boost=100,
+# redirects_fuzzy_boost=50,
+# alternative_names_boost=100,
+# alternative_names_fuzzy_boost=20,
+# short_desc_boost=10,
+# intro_para_boost=5,
+
+# Define a set of configurations to test
+configurations = [
+    {'use_importance': False, 'max_results': 50, 'title_exact_boost': 250, 'title_fuzzy_boost': 50,
+     'redirects_exact_boost': 100, 'redirects_fuzzy_boost': 50, 'alternative_names_boost': 100,
+     'alternative_names_fuzzy_boost': 20, 'short_desc_boost': 10, 'intro_para_boost': 5}
+    , # baseline
+    {'use_importance': False, 'max_results': 50, 'title_exact_boost': 300, 'title_fuzzy_boost': 50,
+     'redirects_exact_boost': 100, 'redirects_fuzzy_boost': 50, 'alternative_names_boost': 100,
+     'alternative_names_fuzzy_boost': 20, 'short_desc_boost': 10, 'intro_para_boost': 5}
+    , # increase title_exact_boost
+    # baseline with more results
+    {'use_importance': False, 'max_results': 300, 'title_exact_boost': 250, 'title_fuzzy_boost': 50,
+     'redirects_exact_boost': 100, 'redirects_fuzzy_boost': 50, 'alternative_names_boost': 100,
+     'alternative_names_fuzzy_boost': 20, 'short_desc_boost': 10, 'intro_para_boost': 5},
+     # baseline, use importance
+    {'use_importance': True, 'max_results': 50, 'title_exact_boost': 250, 'title_fuzzy_boost': 50,
+     'redirects_exact_boost': 100, 'redirects_fuzzy_boost': 50, 'alternative_names_boost': 100,
+     'alternative_names_fuzzy_boost': 20, 'short_desc_boost': 10, 'intro_para_boost': 5},
+     # try with 100 results, baseline
+    {'use_importance': False, 'max_results': 100, 'title_exact_boost': 250, 'title_fuzzy_boost': 50,
+     'redirects_exact_boost': 100, 'redirects_fuzzy_boost': 50, 'alternative_names_boost': 100,
+     'alternative_names_fuzzy_boost': 20, 'short_desc_boost': 10, 'intro_para_boost': 5},
+     # 200 results, baseline
+    {'use_importance': False, 'max_results': 200, 'title_exact_boost': 250, 'title_fuzzy_boost': 50,
+     'redirects_exact_boost': 100, 'redirects_fuzzy_boost': 50, 'alternative_names_boost': 100,
+     'alternative_names_fuzzy_boost': 20, 'short_desc_boost': 10, 'intro_para_boost': 5},
+     # try one with identical boosts
+    {'use_importance': False, 'max_results': 100, 'title_exact_boost': 25, 'title_fuzzy_boost': 25,
+     'redirects_exact_boost': 25, 'redirects_fuzzy_boost': 25, 
+     'alternative_names_boost': 25,
+     'alternative_names_fuzzy_boost': 25,
+     'short_desc_boost': 25, 'intro_para_boost': 25},
+]
+# Initialize a list to store results
+results_list = []
+# Iterate over each configuration
+for config in configurations[-1:]:
+    print(f"Testing configuration: {config}")
+    # Check the results for the current configuration
+    present_mean = check_results(wiki_df, config)
+    # Store the results
+    results_list.append({
+        'config': config,
+        'present_mean': present_mean
+    })
+
+# Importance doesn't help much, and is MUCH slower (20 mins vs. 1.5 mins)
+# 0.8755 vs. 0.8716
+# Increasing max results is very helpful at some speed cost (1:26 vs. 2:29 for 300):
+# 50: 0.8716
+# 100: 0.9018
+# 100, flat scores: 0.8924
+# 200: 0.9358
+# 300: 0.9446
 
 
 #### CREATE SCORE DATAFRAME ####
@@ -86,12 +190,13 @@ for index, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
     if text_input:
         actor_text_for_wiki = wiki_matcher._expand_query(actor_text_for_wiki, text_input)
     try:
-        results = wiki_matcher.wiki_searcher.search_wiki(
+        results = wiki_client.run_wiki_search(
                                         actor_text_for_wiki, 
-                                        limit_term=None, 
-                                        fuzziness='AUTO', 
-                                        max_results=50,
+                                        use_importance=False, 
+                                        max_results=200,
                                     )
+        if len(results) > 200:
+            print(row)
         score_df = wiki_matcher._create_scoring_dataframe(results, 
                                             actor_text_for_wiki,
                                             context=text_input,
@@ -120,6 +225,7 @@ for index, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
     score_df['y'] = score_df['title'] == score_df['correct_title'] 
     score_df['task'] = index
     score_df['passage'] = passage_context
+    score_df['full_text'] = text_input
     score_dfs.append(score_df)
 
 # pickle the results
@@ -136,7 +242,7 @@ all_scores.to_csv("wiki_scores_combined.csv", index=False)
 ##### TRAIN THE MODEL ####
 
 all_scores = pd.read_csv("wiki_scores_combined.csv")
-all_scores['task'].nunique()  # 1429 examples
+all_scores['task'].nunique()  # 1814 examples
 
 # Now we want to fit a model to predict the y value
 from sklearn.model_selection import train_test_split
@@ -144,9 +250,10 @@ from sklearn.metrics import classification_report, accuracy_score, precision_rec
 from xgboost import XGBClassifier
 
 # Get unique task IDs and split them into train and test sets
-random.setstate(42) 
+random.setstate(617) 
 task_ids = all_scores['task'].unique()
 train_tasks, test_tasks = train_test_split(task_ids, test_size=0.2, random_state=42)
+
 train_df_list, test_df_list = [], []
 for task in train_tasks:
     train_df_list.append(all_scores[all_scores['task'] == task])
@@ -159,12 +266,12 @@ test_df = all_scores[all_scores['task'].isin(test_tasks)]
 
 # Verify the split worked as expected
 print(f"Training set: {len(train_tasks)} tasks, {len(train_df)} rows")
-# Training set: 1143 tasks, 71358 rows
+# Training set: 1451 tasks, 277594 rows
 print(f"Test set: {len(test_tasks)} tasks, {len(test_df)} rows")
-# Test set: 286 tasks, 17984 rows
+# Test set: 363 tasks, 69081 rows
 
 
-omit_columns = ['y', 'correct_title', 'title', 'combined_score', # 'combined_score_norm',
+omit_columns = ['y', 'correct_title', 'title', 'combined_score', 'full_text', # 'combined_score_norm',
                 'task', 'passage', 'query_term_orig', 'query_term']#, 'title_sim', 'title_sim_norm']
 
 X_train = train_df.drop(columns=omit_columns)
@@ -173,14 +280,15 @@ y_train = train_df['y']
 y_test = test_df['y']
 
 
+
 # Now fit an XGBoost model
 xgb_model = XGBClassifier(n_estimators=1000,
                     random_state=42,
-                    max_depth=5,
-                    min_samples_split=2,
-                    min_samples_leaf=1,
-                    ####subsample=0.5,
-                    ####learning_rate=0.1,
+                    #max_depth=5,
+                    #min_samples_split=2,
+                    #min_samples_leaf=2,
+                    #subsample=0.5,
+                    #learning_rate=0.1,
                     class_weight='balanced',
                     n_jobs=-1)
 xgb_model.fit(X_train, y_train)
@@ -197,17 +305,21 @@ loaded_model.load_model(model_file)
 
 def predict_xgboost(score_df, xgb_model, just_title=False,
                     score_threshold=0.5):
+    score_df = score_df.reset_index(drop=True)
+    # make sure there's only one query term in the score_df
+    if score_df['query_term'].nunique() > 1:
+        raise ValueError(f"score_df should only contain one query term. Yours has: {score_df['query_term'].unique()}")
     X = score_df[xgb_model.feature_names_in_]
     y_proba = xgb_model.predict_proba(X)[:, 1]
-    score_df['y_pred_proba'] = y_proba
+    score_df.loc[:, 'y_pred_proba'] = y_proba
 
     # Find the max probability for each task
-    score_df = score_df.reset_index(drop=True)
     task_max_proba = score_df.groupby('task')['y_pred_proba'].transform('max')
-    score_df['is_max_for_task'] = (score_df['y_pred_proba'] == task_max_proba)
+    score_df.loc[:, 'is_max_for_task'] = (score_df['y_pred_proba'] == task_max_proba)
 
+    # score_df['y'].sum()
     # Create a column where True is the max predicted proba (over 0.5) and False otherwise
-    score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['y_pred_proba'] > score_threshold)
+    score_df.loc[:, 'is_predicted_match'] = score_df['is_max_for_task'] & (score_df['y_pred_proba'] > score_threshold)
     if score_df['is_predicted_match'].sum() == 0:
         print("No predictions made")
         return None
@@ -216,10 +328,11 @@ def predict_xgboost(score_df, xgb_model, just_title=False,
         return pred_row['title'].values[0]
     else:
         return pred_row
-        
-
-predict_xgboost(test_df_list[15], xgb_model, just_title=True)
-predict_xgboost(test_df_list[15], xgb_model)
+ 
+n = 8
+test_df_list[n]['query_term_orig'].iloc[0]
+predict_xgboost(test_df_list[n], xgb_model, just_title=True)
+predict_xgboost(test_df_list[n], xgb_model)
 
 # better eval
 # first, get the true titles for each task as a list
@@ -263,10 +376,17 @@ true_titles = np.array(true_titles)
 correct = pred_titles == true_titles
 np.mean(correct)
 # np.float64(0.740)
-# 0.60 ????
+# 0.727
+# 0.802
 
 for n, i in enumerate(true_titles[0:40]):
-    print(f"Doc {n}\nTrue: {i}\nPredicted: {pred_titles[n]}\nProb: {pred_probas[n]}\n")
+    correct = "Correct" if (pred_titles[n] == i) else "INCORRECT"
+    print(f"Doc {n}\n{correct}\nQuery: {test_df_list[n]['query_term_orig'].values[0]}\nTrue: {i}\nPredicted: {pred_titles[n]}\nProb: {pred_probas[n]}\n")
+
+text = test_df_list[8].iloc[0]['passage']
+wiki_query = test_df_list[8].iloc[0]['query_term_orig']
+text = test_df_list[8].iloc[0]['passage']
+predict_xgboost(score_df, xgb_model)
 
 for n, pred in enumerate(pred_titles):
     true = true_titles[n]
