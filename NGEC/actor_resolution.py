@@ -99,7 +99,13 @@ class TextPreProcessor:
             
         return qt
     
-    def extract_entity_components(self, span_text, nlp, job_titles=None, job_title_embeddings=None, get_embedding_func=None):
+    def extract_entity_components(self, 
+                                  span_text, 
+                                  nlp=None, 
+                                  doc=None,
+                                  job_titles=None, 
+                                  job_title_embeddings=None, 
+                                  get_embedding_func=None):
         """
         Extracts core entity, role, and geographic information from a text span.
 
@@ -112,7 +118,10 @@ class TextPreProcessor:
         Returns:
             Dict with core_entity, role, and geographic_info
         """
-        doc = nlp(span_text)
+        if doc is None:
+            if nlp is None:
+                raise ValueError("nlp object must be provided if pre-processed doc is not given.")
+            doc = nlp(span_text)
 
         # Initialize results
         results = {
@@ -768,6 +777,7 @@ class AgentMatcher:
     """
     
     def __init__(self, trf_model=None, base_path=DEFAULT_BASE_PATH, 
+                 agents_file="PLOVER_agents.txt",
                  device=None, text_processor=None):
         """
         Initialize the agent matcher.
@@ -775,11 +785,13 @@ class AgentMatcher:
         Args:
             trf_model: Sentence transformer model
             base_path: Path to directory containing agent files
+            agents_file: Name of the PLOVER/CAMEO agents file
             device: Device to use for inference ('cuda' or None)
             text_processor: TextPreProcessor instance
         """
         self.base_path = base_path
         self.device = device
+        self.agents_file = agents_file
         
         # Initialize resources
         if trf_model is None:
@@ -804,7 +816,7 @@ class AgentMatcher:
         Returns:
             list: Cleaned list of agent pattern dictionaries
         """
-        file = os.path.join(self.base_path, "PLOVER_agents.txt")
+        file = os.path.join(self.base_path, self.agents_file)
         with open(file, "r", encoding="utf-8") as f:
             data = f.read()
 
@@ -1075,7 +1087,7 @@ class WikiClient:
             raise ValueError(f"Error checking Wikipedia index: {e}")
 
     def run_wiki_search(self, query_term, limit_term="", max_results=200,
-                        use_importance=True,
+                        use_importance=False,
                         title_exact_boost=250,
                         title_fuzzy_boost=50,
                         redirects_exact_boost=100,
