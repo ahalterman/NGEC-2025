@@ -23,7 +23,13 @@ import torch
 from xgboost import XGBClassifier
 
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+#logger.addHandler(logging.NullHandler())
+# Use a real logger for debugging
+logger.setLevel(logging.DEBUG)
+# Set up a rich handler for better logging output
+from rich.logging import RichHandler
+handler = RichHandler()
+logger.addHandler(handler)
 
 # Constants
 DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
@@ -776,9 +782,12 @@ class AgentMatcher:
         match = matcher.trf_agent_match("Chancellor", country="DEU")
     """
     
-    def __init__(self, trf_model=None, base_path=DEFAULT_BASE_PATH, 
+    def __init__(self, 
+                 trf_model=None, 
+                 base_path=DEFAULT_BASE_PATH, 
                  agents_file="PLOVER_agents.txt",
-                 device=None, text_processor=None):
+                 device=None, 
+                 text_processor=None):
         """
         Initialize the agent matcher.
         
@@ -1309,18 +1318,15 @@ class WikiSearcher:
         else:
             self.text_processor = text_processor
     
-    def search_wiki(self, query_term, limit_term="", fuzziness="AUTO", max_results=200, 
-                   score_type="best_fields"):
+    def search_wiki(self, query_term, limit_term="", max_results=200):
         """
         Search Wikipedia for a given query term.
         
         Args:
             query_term: Term to search for
             limit_term: Term to limit results by
-            fuzziness: Elasticsearch fuzziness parameter
             max_results: Maximum number of results to return
             fields: Fields to search in
-            score_type: Elasticsearch score type
             
         Returns:
             list: List of Wikipedia article dictionaries
@@ -1333,9 +1339,7 @@ class WikiSearcher:
         return self.wiki_client.run_wiki_search(
             query_term=query_term,
             limit_term=limit_term,
-            fuzziness=fuzziness,
             max_results=max_results,
-            score_type=score_type
         )
 
     def text_ranker_features(self, matches, fields):
@@ -1441,8 +1445,12 @@ class WikiMatcher:
         best_article = matcher.query_wiki("Barack Obama")
     """
     
-    def __init__(self, wiki_searcher=None, text_processor=None, 
-                trf_model=None, actor_sim_model=None, device=None,
+    def __init__(self, 
+                 wiki_searcher=None, 
+                 text_processor=None, 
+                trf_model=None, 
+                actor_sim_model=None, 
+                device=None,
                 nlp=None,
                 wiki_sort_method="neural"):
         """
@@ -2074,16 +2082,16 @@ class WikiMatcher:
             context_doc = self.nlp(context)
         else:
             context_doc = doc
-        
 
         if context_doc:
+            logger.debug(f"Expanding query term '{query_term}' using NER and acronyms")
             expanded_query = [i.text for i in context_doc.ents if query_term in i.text]
             if expanded_query:
                 # take the first one
                 expanded_query = expanded_query[0]
                 if len(expanded_query) > len(query_term):
                     query_term = expanded_query
-                    logger.debug(f"Using NER to expand context: {expanded_query}")
+                    logger.debug(f"Used NER to expand context: {expanded_query}")
         
             acronym_dict = self.text_processor.make_acronym_dicts(doc=context_doc)
             # Check if query term is an acronym
@@ -2127,7 +2135,6 @@ class WikiMatcher:
         results = self.wiki_searcher.search_wiki(
             query_term, 
             limit_term=limit_term, 
-            fuzziness=0, 
             max_results=max_results,
         )
         best = self.pick_best_wiki(
@@ -2144,7 +2151,6 @@ class WikiMatcher:
         results = self.wiki_searcher.search_wiki(
             query_term, 
             limit_term=limit_term, 
-            fuzziness=1, 
             max_results=max_results
         )
         best = self.pick_best_wiki(
@@ -2190,8 +2196,12 @@ class WikiParser:
     # Actor types that should be treated as countries themselves
     SPECIAL_ACTOR_TYPES = ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]
     
-    def __init__(self, country_detector=None, text_processor=None, agent_matcher=None,
-                base_path=DEFAULT_BASE_PATH, device=None):
+    def __init__(self, 
+                 country_detector=None, 
+                 text_processor=None, 
+                 agent_matcher=None,
+                base_path=DEFAULT_BASE_PATH, 
+                device=None):
         """
         Initialize the Wikipedia parser.
         
@@ -2216,7 +2226,10 @@ class WikiParser:
         if agent_matcher is None:
             model_manager = ModelManager(base_path, device)
             trf_model = model_manager.load_trf_model()
-            self.agent_matcher = AgentMatcher(trf_model, base_path, device, self.text_processor)
+            self.agent_matcher = AgentMatcher(trf_model, 
+                                              base_path=base_path, 
+                                              device=device, 
+                                              text_processor=self.text_processor)
         else:
             self.agent_matcher = agent_matcher
     
@@ -2946,7 +2959,7 @@ class EventProcessor:
                         actor_text = actor_text[0]
                         
                     # Resolve actor to code
-                    res = self.actor_resolver.agent_to_code(actor_text, query_date=query_date)
+                    res = self.actor_resolver.actor_to_code(actor_text, query_date=query_date)
                     
                     # Update attribute with resolution information
                     if res:
@@ -3004,7 +3017,7 @@ class ActorResolver:
     
     Example:
         resolver = ActorResolver()
-        code = resolver.agent_to_code("German Chancellor")
+        code = resolver.actor_to_code("German Chancellor")
         processed_events = resolver.process(events)
     """
     
@@ -3042,8 +3055,8 @@ class ActorResolver:
         self.agent_matcher = AgentMatcher(
             self.trf, 
             base_path, 
-            self.device, 
-            self.text_processor
+            device=self.device, 
+            text_processor=self.text_processor
         )
         
         # Initialize Wikipedia components
@@ -3053,12 +3066,13 @@ class ActorResolver:
             self.text_processor
         )
         self.wiki_matcher = WikiMatcher(
-            self.wiki_searcher, 
-            self.text_processor, 
-            self.trf, 
-            self.actor_sim, 
-            self.device, 
-            wiki_sort_method
+            wiki_searcher=self.wiki_searcher, 
+            text_processor=self.text_processor, 
+            trf_model=self.trf, 
+            actor_sim_model=self.actor_sim, 
+            device=self.device, 
+            nlp=self.nlp,
+            wiki_sort_method=wiki_sort_method
         )
         self.wiki_parser = WikiParser(
             self.country_detector,
@@ -3079,7 +3093,7 @@ class ActorResolver:
         self.save_intermediate = save_intermediate
         self.wiki_sort_method = wiki_sort_method
 
-    def agent_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term=""):
+    def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term=""):
         """
         Resolve an actor mention to a code representing their role.
         
@@ -3272,3 +3286,22 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': [{'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}]}
+    agent_matcher = AgentMatcher()
+    actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
+    #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}
+    
+    resolver = ActorResolver()
+    resolver.actor_to_code("German Chancellor")
+    resolver.actor_to_code("Angela Merkel")
+    resolver.actor_to_code("Angela Merkel",
+                           query_date="2015-01-01")
+    
+    # Now demonstrate the wiki lookup functionality
+    wiki = resolver.wiki_matcher.query_wiki("Merkel",
+                                            context = "Angela Merkel is the Chancellor of Germany.")
+    
+    resolver.wiki_matcher.query_wiki("Obama")
+    resolver.wiki_matcher.query_wiki("Obama",
+                                     context = "Michelle Obama is the former First Lady of the United States.")
