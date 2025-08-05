@@ -1,17 +1,16 @@
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+
 import pandas as pd
-from datasets import Dataset
-from transformers import pipeline
+from tqdm import tqdm
 from rich.progress import track
 import time
 import jsonlines
-import os
-import numpy as np
-from tqdm import tqdm
 import re
-from tqdm import tqdm
+import json
+import os
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
-
 
 import logging
 logger = logging.getLogger(__name__)
@@ -96,7 +95,7 @@ class AttributeModel:
         self.model = LLM(model="ahalt/event-attribute-extractor",
                         enable_prefix_caching=True,
                         max_model_len=8000,
-                        gpu_memory_utilization=0.80)
+                        gpu_memory_utilization=0.8)
         self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         self.sampling_params = _load_sampling_params()
         self.silent=silent
@@ -108,12 +107,32 @@ class AttributeModel:
         self.event_definitions = _load_event_definitions(event_definitions_file, base_path)
 
 
-    def _get_event_definitions(self,
-                               doc,
-                               event,
-                               event_def,
-                               mode_def=None,
-                               extraction_notes=None):
+    def _get_event_info(self, event):
+        """
+        Convert an event dict to a message for the model.
+        """
+        mode_def = None
+        extraction_notes = None
+        doc = event['event_text']
+        event_type = event['event_type']
+        event_rows = am.event_definitions.loc[am.event_definitions['event'] == event_type]
+        event_def = event_rows['event_def'].values[0]
+        # Get mode definition and extraction notes if they exist
+        if 'event_mode' in event:
+            if event['event_mode'] != "":
+                if 'mode' in am.event_definitions.columns and 'mode_def' in am.event_definitions.columns:
+                    mode_def = event_rows.loc[event_rows['mode'] == event['event_mode'], 'mode_def'].values[0]
+                if 'extraction_notes' in am.event_definitions.columns:
+                    extraction_notes = event_rows.loc[event_rows['mode'] == event['event_mode'], 'extraction_notes'].values[0]
+
+        return doc, event_type, event_def, mode_def, extraction_notes
+    
+    def _make_user_message(self,
+                           doc,
+                           event,
+                           event_def,
+                           mode_def=None,
+                           extraction_notes=None):
         """
         Logic to get the event/mode definitions for a given event type.
 
@@ -126,35 +145,26 @@ class AttributeModel:
         """
 
         user_message = f"### Document:\n\n{doc}\n\n"
-        user_message += f"### Event: **{event}**: {event_def}\n\n"
+        user_message += f"### Event: **{event}**: {event_def}\n"
         if mode_def:
-            user_message += f"### Specific Sub-Event: **{mode_def}**\n\n"
+            user_message += f"### Specific Sub-Event: **{mode_def}**\n"
         if extraction_notes:
-            user_message += f"### Special Instructions: {extraction_notes}\n\n"
+            if not pd.isna(extraction_notes):
+                user_message += f"### Special Instructions: {extraction_notes}\n"
         user_message += "Extract the attributes of the given event in JSON format."
+        return user_message
 
-    def event_to_message(self, event):
-        """
-        Convert an event dict to a message for the model.
-        """
-        doc = event['event_text']
-        event_type = event['event_type']
-        event_rows = event_definitions.loc[event_definitions['event'] == event_type]
-        event_def = event_rows['event_def'].values[0]
-        # Get mode definition and extraction notes if they exist
-        if 'event_mode' in event:
-            if 'mode' in event_definitions.columns and 'mode_def' in event_definitions.columns:
-                mode_def = event_rows.loc[event_rows['mode'] == event['event_mode'], 'mode_def'].values[0]
-        # TODO: Get extraction notes if they exist
-        # TODO: add self. back in everywhere here
-        
-        return self._get_event_definitions(doc, event_type, event_def, mode_def, extraction_notes)
-
-    def make_prompt(self, doc, event_type, event_def, event_specific_notes=None):
-
+    def make_prompt(self, event):
+        doc, event_type, event_def, mode_def, event_specific_notes = self._get_event_info(event)
+        user_message = self._make_user_message(doc, 
+                                               event_type, 
+                                               event_def,
+                                               mode_def,
+                                               event_specific_notes)
         messages = [
                     {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": f"### Document:\n\n{doc}\n\n### Event type: {event_type}: {event_def}\n\n{f'### Special instructions: {event_specific_notes}' if event_specific_notes else ''}\n\nExtract the attributes of the given event in JSON format."}            ]
+                    {"role": "user", "content": user_message}
+                    ]
         prompt = self.tokenizer.apply_chat_template(
                     messages, 
                     tokenize=False, 
@@ -162,11 +172,31 @@ class AttributeModel:
                     enable_thinking=False
                 )
         return prompt
+    
+    def call_llm_batch(self, prompts):
+        if type(prompts) is not list:
+            prompts = [prompts]
+        outputs = self.model.generate(prompts, sampling_params=self.sampling_params)
+        responses = [i.outputs[0].text.strip() for i in outputs]
+        #print(responses)
+
+        json_responses = []
+        error_responses = []
+        for response in responses:
+            response = re.sub("<think>.*?</think>", "", response, flags=re.DOTALL)  # Remove <think> tags and content
+            try:
+                json_responses.append(json.loads(response))
+            except json.JSONDecodeError as e:
+                print(f"Error decoding JSON: {e}")
+                json_responses.append([])  # Append empty list on error
+                error_responses.append(response)
+        logger.info(f"Number of JSON decode errors: {len(error_responses)}")
+        logger.debug(f"Error responses: {error_responses}")
+        return json_responses
                 
 
     def process(self,
-                event_list, 
-                show_progress=False):
+                event_list):
         """
         Given event records from the previous steps in the NGEC pipeline,
         run the QA model to identify the spans of text corresponding with
@@ -199,19 +229,39 @@ class AttributeModel:
         logger.debug("Starting attribute process")
 
         # Create a list of prompts
-        prompts = []
-        for i in event_list:
-            event_type = i['event_type']
-            event_def = self.event_definitions.loc[self.event_definitions['event'] == event_type, 'event_def'].values[0]
-            event_specific_notes = self.event_definitions.loc[self.event_definitions['event'] == event_type, 'extraction_notes'].values[0] if 'extraction_notes' in self.event_definitions.columns else None
-            
-            # Create a prompt for each event
-            prompt = self.make_prompt(i['event_text'], event_type, event_def, event_specific_notes)
-            prompts.append(prompt)
+        print("Making prompts...")
+        prompts = [am.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=am.silent)]
+        final_attributes = self.call_llm_batch(prompts)
+
+        # Post-processing (split the ; separated attributes into lists)
+
 
         # Now, at the very end, put the results back into the event list.
-        for i in event_list:
-            i['attributes'] = final_attributes[i['id']]
+        for n, i in enumerate(event_list):
+            # split each attribute into a list (semicolon separated)
+            attributes = final_attributes[n]
+            # [{'actor': 'a group of Hindu nationalists; the VHP',
+            #      'anchor_quote': 'A group of Hindu nationalists and the VHP rioted in '
+            #                      'Dehli last week, burning Muslim shops.',
+            #      'date': 'last week',
+            #      'event_type': 'PROTEST:Violent riot',
+            #      'location': 'Dehli',
+            #      'recipient': 'Muslim shops'}]
+            #i['attributes'] = final_attributes[n]
+            for event in attributes:
+                for key, value in event.items():
+                    if key in ['actor', 'date', 'recipient', 'location']:
+                        # If the value is a string, split it by semicolon and strip whitespace
+                        if isinstance(value, str):
+                            value = [v.strip() for v in value.split(';')]
+                        # If the value is a list, ensure all items are stripped of whitespace
+                        elif isinstance(value, list):
+                            value = [v.strip() for v in value]
+                        else:
+                            continue
+                        # Update the event with the cleaned value
+                        event[key] = value
+            event_list[n]['attributes'] = attributes
 
         if self.save_intermediate:
             fn = time.strftime("%Y_%m_%d-%H") + "_attribute_output.jsonl"
@@ -222,11 +272,6 @@ class AttributeModel:
 
 
 if __name__ == "__main__":
-    import jsonlines
-    import utilities
-    import spacy
-    nlp = spacy.load("en_core_web_sm") 
-
     data = [
         {"event_text": "A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.",
         "id": 123,
@@ -245,13 +290,25 @@ if __name__ == "__main__":
         "event_mode": ""}
     ]
 
-    doc_list = list(track(nlp.pipe([i['event_text'] for i in data])))
+    am = AttributeModel(silent=False, gpu=True)
+    prompt = am.make_prompt(data[0])
+    print(prompt)
+    output = am.call_llm_batch(prompt)
 
-    event_list = utilities.stories_to_events(data, doc_list)
-    qa_model = AttributeModel(model_dir = "NGEC/assets/PROP-SQuAD-trained-tinybert-6l-768d-squad2220302-1457",
-                             base_path = "NGEC/assets",
-                             silent=False)
+    all_prompts = [am.make_prompt(event) for event in data]
+    all_attributes = am.call_llm_batch(all_prompts)
 
-    output = qa_model.process(event_list, doc_list)
+    all_outputs = am.process(data)
 
-    print(output)   
+    #event_list[0]
+    #{'event_text': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
+    # 'id': 123, 
+    # '_doc_position': 0, 
+    # 'event_type': 'PROTEST', 
+    # 'event_mode': 'riot', 
+    # 'attributes': [{'event_type': 'PROTEST: Violent riot', 
+    #               'anchor_quote': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
+    #               'actor': ['a group of Hindu nationalists'], 
+    #               'recipient': ['Muslim shops'], 
+    #               'date': ['last week'], 
+    #               'location': ['Dehli']}]}
