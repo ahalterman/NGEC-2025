@@ -87,7 +87,7 @@ class AttributeModel:
         """
         
         if gpu:
-            self.device="cuda:0"
+            self.device="cuda"
         else:
             self.device=-1
         logger.info(f"Device (-1 is CPU): {self.device}")
@@ -115,14 +115,14 @@ class AttributeModel:
         extraction_notes = None
         doc = event['event_text']
         event_type = event['event_type']
-        event_rows = am.event_definitions.loc[am.event_definitions['event'] == event_type]
+        event_rows = self.event_definitions.loc[self.event_definitions['event'] == event_type]
         event_def = event_rows['event_def'].values[0]
         # Get mode definition and extraction notes if they exist
         if 'event_mode' in event:
             if event['event_mode'] != "":
-                if 'mode' in am.event_definitions.columns and 'mode_def' in am.event_definitions.columns:
+                if 'mode' in self.event_definitions.columns and 'mode_def' in self.event_definitions.columns:
                     mode_def = event_rows.loc[event_rows['mode'] == event['event_mode'], 'mode_def'].values[0]
-                if 'extraction_notes' in am.event_definitions.columns:
+                if 'extraction_notes' in self.event_definitions.columns:
                     extraction_notes = event_rows.loc[event_rows['mode'] == event['event_mode'], 'extraction_notes'].values[0]
 
         return doc, event_type, event_def, mode_def, extraction_notes
@@ -230,7 +230,7 @@ class AttributeModel:
 
         # Create a list of prompts
         print("Making prompts...")
-        prompts = [am.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=am.silent)]
+        prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
         final_attributes = self.call_llm_batch(prompts)
 
         # Post-processing (split the ; separated attributes into lists)
