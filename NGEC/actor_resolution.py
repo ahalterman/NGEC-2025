@@ -693,30 +693,24 @@ class ModelManager:
             self.models['actor_sim'] = SentenceTransformer(combo_path)
         return self.models['actor_sim']
     
-    #def load_wiki_ranker_model(self, model_dir=DEFAULT_MODEL_PATH):
-    #    """
-    #    Load the Wikipedia ranker models
+    def load_wiki_ranker_model(self, model_dir=DEFAULT_MODEL_PATH):
+        """
+        Load the Wikipedia ranker models
 
-    #    One model has context-related features and the other doesn't.
-    #    (We need this to handle the case where the context is not provided)
-    #    
-    #    Args:
-    #        model_dir: Directory containing the ranker model
-    #        
-    #    Returns:
-    #        XGBoost models: Tuple of loaded ranker model
-    #    """
-    #    if 'wiki_ranker' not in self.models:
-    #        combo_path = os.path.join(self.base_path, 'xgboost_model.json')
-    #        wiki_ranker = XGBClassifier()
-    #        wiki_ranker.load_model(combo_path)
-    #        self.models['wiki_ranker'] = wiki_ranker
-    #    if 'wiki_ranker_no_context' not in self.models:
-    #        combo_path = os.path.join(self.base_path, 'xgboost_model_no_context.json')
-    #        wiki_ranker_no_context = XGBClassifier()
-    #        wiki_ranker_no_context.load_model(combo_path)
-    #        self.models['wiki_ranker_no_context'] = wiki_ranker_no_context
-    #    return self.models['wiki_ranker'], self.models['wiki_ranker_no_context']
+        One model has context-related features and the other doesn't.
+        (We need this to handle the case where the context is not provided)
+        
+        Args:
+            model_dir: Directory containing the ranker model
+            
+        Returns:
+            XGBoost models: Tuple of loaded ranker model
+        """
+        combo_path = os.path.join(self.base_path, 'xgb_model.json')
+        wiki_ranker = XGBClassifier()
+        wiki_ranker.load_model(combo_path)
+        wiki_ranker_no_context = None
+        return wiki_ranker, wiki_ranker_no_context
 
 
 #######################################################
@@ -1448,11 +1442,11 @@ class WikiMatcher:
     def __init__(self, 
                  wiki_searcher=None, 
                  text_processor=None, 
-                trf_model=None, 
-                actor_sim_model=None, 
-                device=None,
-                nlp=None,
-                wiki_sort_method="neural"):
+                 trf_model=None, 
+                 actor_sim_model=None, 
+                 device=None,
+                 nlp=None,
+                 wiki_sort_method="neural"):
         """
         Initialize the Wikipedia matcher.
         
@@ -1476,14 +1470,14 @@ class WikiMatcher:
             self.text_processor = text_processor
             
         # Initialize models if not provided
+        model_manager = ModelManager(device=device)
         if trf_model is None or actor_sim_model is None:
-            model_manager = ModelManager(device=device)
             self.trf = trf_model if trf_model else model_manager.load_trf_model()
             self.actor_sim = actor_sim_model if actor_sim_model else model_manager.load_actor_sim_model()
-            #self.wiki_ranker, self.wiki_ranker_no_context = model_manager.load_wiki_ranker_model()
         else:
             self.trf = trf_model
             self.actor_sim = actor_sim_model
+        self.wiki_ranker, self.wiki_ranker_no_context = model_manager.load_wiki_ranker_model()
 
         
         if nlp is None:
@@ -1665,6 +1659,7 @@ class WikiMatcher:
         Returns:
             pandas.DataFrame: DataFrame with article scores
         """
+        logger.debug("Creating scoring rules df...")
         if len(articles) == 0:
             return pd.DataFrame()
         # Prepare data for DataFrame
@@ -1691,7 +1686,6 @@ class WikiMatcher:
 
             # Intro paragraph length
             intro_length = len(article.get('intro_para', ''))
-
 
             data.append({
                 'index': i,
@@ -1803,7 +1797,6 @@ class WikiMatcher:
         Args:
             df: DataFrame with article scores
             articles: List of Wikipedia article dictionaries
-            wiki_sort_method: Method to use for sorting results
             context: Context text to help with disambiguation
 
         Returns:
@@ -1854,7 +1847,7 @@ class WikiMatcher:
             best_context_match = redirect_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
             if best_context_match['context_sim_intro'] > 0.5:
                 selected = articles[best_context_match['index']]
-                logger.debug(f"Returning best context match among redirect matches. Title: {selected['title']}: {best_context_match['context_sim']}")
+                logger.debug(f"Returning best context match among redirect matches. Title: {selected['title']}: {best_context_match['context_sim_intro']}")
                 selected['wiki_reason'] = "Best context match among redirect matches"
                 return selected
 
@@ -1875,7 +1868,7 @@ class WikiMatcher:
             best_alt_match = alt_matches.sort_values('context_sim_intro', ascending=False).iloc[0]
             if best_alt_match['context_sim_intro'] > 0.6:
                 selected = articles[best_alt_match['index']]
-                logger.debug(f"Returning best context match among alternative name matches. Title: {selected['title']}: {selected['context_sim']}")
+                logger.debug(f"Returning best context match among alternative name matches. Title: {selected['title']}: {best_alt_match['context_sim_intro']}")
                 selected['wiki_reason'] = "Best context match among alternative name matches"
                 return selected
 
@@ -1990,9 +1983,15 @@ class WikiMatcher:
             X = score_df[self.wiki_ranker_no_context.feature_names_in_]
             y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
         score_df['ranker_score'] = y_proba
-        score_df['is_max_for_task'] = (score_df['y_pred_proba'] == score_df['y_pred_proba'].max()).astype(int)
-        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['y_pred_proba'] > 0.5)
-        return score_df
+        score_df['is_max_for_task'] = (score_df['ranker_score'] == score_df['ranker_score'].max()).astype(int)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > 0.5)
+        pick = score_df[score_df['is_predicted_match'] == True]
+        if not pick.empty:
+            pick = pick.iloc[0].to_dict()
+            logger.debug(f"Found an article with neural methods. Title: {pick['title']}")
+        else:
+            pick = None
+        return pick
 
 
     def pick_best_wiki(self, 
@@ -2001,7 +2000,7 @@ class WikiMatcher:
                        context="", 
                        country="",
                        actor_desc="",
-                       wiki_sort_method=None, 
+                       wiki_sort_method='neural', 
                        rank_fields=None):
         """
         Select the best Wikipedia article from search results using a scoring matrix approach.
@@ -2018,8 +2017,7 @@ class WikiMatcher:
         Returns:
             dict or None: Best matching Wikipedia article or None if no good match
         """
-        import pandas as pd
-
+        logger.debug(f"Using wiki sort method {wiki_sort_method}")
         # Use instance method if not provided
         if wiki_sort_method is None:
             wiki_sort_method = self.wiki_sort_method
@@ -2051,24 +2049,36 @@ class WikiMatcher:
             best['wiki_reason'] = "Only one valid result"
             logger.debug(f"Only one valid result: {best['title']}")
             return best
-
-        # Create scoring dataframe
-        df = self._create_scoring_dataframe(good_res, query_term, context=context, 
-                                            actor_desc=actor_desc, 
-                                            country=country)
-
-        # Apply prioritized selection rules
-        selected = self._apply_selection_rules(df, articles=good_res, context=context)
-
-        if selected is not None:
-            logger.debug(f"Selected article: {selected['title']} (reason: {selected['wiki_reason']})")
-            return selected
+        
+        score_df = self._create_scoring_dataframe(good_res, query_term, context=context, 
+                                                actor_desc=actor_desc, 
+                                                country=country) 
+        if wiki_sort_method == "rules":
+            logger.debug("Using rules-based selection method")
+            best = self._apply_selection_rules(score_df, articles=good_res, context=context)
+            if best:
+                logger.debug(f"Selected article using rules: {best['title']} (reason: {best['wiki_reason']})")
+                return best
         else:
-            logger.debug("No good match found")
-            # print the best overall score
-            best_overall = df.sort_values('combined_score', ascending=False).iloc[0].to_dict()
-            logger.debug(f"Skipping best overall score: ({best_overall['title']}): {best_overall['combined_score']}")
-            return None
+            logger.debug("Using neural selection method")
+            # Create scoring dataframe
+            
+
+            # Apply prioritized selection rules
+            logger.debug("Calling ranker...")
+            selected = self._call_ranker(score_df, context=context)
+            selected['wiki_reason'] = "Neural"
+
+            if selected is not None:
+                logger.debug(f"Selected article: {selected['title']} (reason: {selected['wiki_reason']})")
+                return selected
+            else:
+                logger.debug("No good match found")
+                # print the best overall score
+                best_overall = df.sort_values('combined_score', ascending=False).iloc[0].to_dict()
+                logger.debug(f"Skipping best overall score: ({best_overall['title']}): {best_overall['combined_score']}")
+                return None
+        return None
         
     def _expand_query(self, query_term, context=None, doc=None):
         """
@@ -2110,6 +2120,7 @@ class WikiMatcher:
                    country="", 
                    context="", 
                    actor_desc="",
+                   method="neural",
                    max_results=200):
         """
         Search Wikipedia and return the best matching article.
@@ -2125,6 +2136,8 @@ class WikiMatcher:
         Returns:
             dict or None: Best matching Wikipedia article or None if no good match
         """
+        if method not in ["neural", "rules"]:
+            raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
         # Do NER expansion by default
         if context:
             logger.debug("Context present, so attempting NER expansion")
@@ -2141,7 +2154,9 @@ class WikiMatcher:
             query_term, 
             results, 
             country=country, 
-            context=context
+            context=context,
+            actor_desc=actor_desc,
+            wiki_sort_method=method
         )
         if best:
             return best
@@ -2159,6 +2174,7 @@ class WikiMatcher:
             country=country, 
             context=context,
             actor_desc=actor_desc,
+            wiki_sort_method=method,
         )
        
         return best
@@ -3299,9 +3315,17 @@ if __name__ == "__main__":
                            query_date="2015-01-01")
     
     # Now demonstrate the wiki lookup functionality
-    wiki = resolver.wiki_matcher.query_wiki("Merkel",
-                                            context = "Angela Merkel is the Chancellor of Germany.")
+    wiki = resolver.wiki_matcher.query_wiki("Merkel", context = "Angela Merkel is the Chancellor of Germany.")
     
-    resolver.wiki_matcher.query_wiki("Obama")
+    res = resolver.wiki_matcher.query_wiki("Obama", method="rules")
     resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Michelle Obama is the former First Lady of the United States.")
+                                     context = "Michelle Obama is the former First Lady of the United States.",
+                                     method = "rules")
+    
+    resolver.wiki_matcher.query_wiki("Obama",
+                                     context = "Obama is the former First Lady of the United States.",
+                                     method = "rules")
+    
+    resolver.wiki_matcher.query_wiki("Obama",
+                                     context = "Obama is the former First Lady of the United States.",
+                                     method = "neural")
