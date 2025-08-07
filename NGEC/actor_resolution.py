@@ -21,6 +21,10 @@ import pylcs
 from sentence_transformers.util import cos_sim
 import torch
 from xgboost import XGBClassifier
+import pkg_resources
+from importlib import resources
+
+
 
 logger = logging.getLogger(__name__)
 #logger.addHandler(logging.NullHandler())
@@ -34,7 +38,21 @@ logger.addHandler(handler)
 # Constants
 DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
 DEFAULT_SIM_MODEL_PATH = 'actor_sim_model2'
-DEFAULT_BASE_PATH = "./assets"
+
+def get_base_path():
+    """Get the base path for assets, whether running from source or installed package."""
+    try:
+        # Try to find assets in the current directory (development)
+        if os.path.exists('./NGEC/assets'):
+            return './NGEC/assets'
+        # Fall back to package resources (installed)
+        return pkg_resources.resource_filename('NGEC', 'assets')
+    except:
+        # Final fallback
+        return './NGEC/assets'
+
+
+DEFAULT_BASE_PATH = get_base_path()
 
 # Threshold constants
 THRESHOLD_COSINE_SIMILARITY = 0.8
@@ -515,6 +533,7 @@ class CountryDetector:
         Args:
             base_path: Path to directory containing the countries.csv file
         """
+        self.base_path = base_path
         self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_county_dict(base_path)
     
     def _load_county_dict(self, base_path):
@@ -527,8 +546,12 @@ class CountryDetector:
         Returns:
             tuple: Two lists of pattern tuples for direct and indirect country mentions
         """
-        file = os.path.join(base_path, "countries.csv")
-        countries = pd.read_csv(file)
+        try:
+            with resources.files('NGEC').joinpath('assets/countries.csv').open('r') as f:
+                countries = pd.read_csv(f)
+        except AttributeError:
+            with resources.open_text('NGEC.assets', 'countries.csv') as f:
+                countries = pd.read_csv(f)
         
         # Direct country name/nationality patterns
         nat_list = []
@@ -709,7 +732,9 @@ class ModelManager:
         combo_path = os.path.join(self.base_path, 'xgb_model.json')
         wiki_ranker = XGBClassifier()
         wiki_ranker.load_model(combo_path)
-        wiki_ranker_no_context = None
+        logger.warning("Using context-based XGBoost model for *no context* ranking.")
+        wiki_ranker_no_context =  XGBClassifier()
+        wiki_ranker_no_context.load_model(combo_path)
         return wiki_ranker, wiki_ranker_no_context
 
 
@@ -1040,12 +1065,14 @@ class WikiClient:
         client.check_wiki(search)
     """
     
-    def __init__(self):
+    def __init__(self,
+                 es_host="localhost",
+                 es_port=9200):
         """Initialize the Wikipedia client."""
-        self.conn = self.setup_es()
+        self.conn = self.setup_es(es_host, es_port)
         self.check_wiki(self.conn)
     
-    def setup_es(self):
+    def setup_es(self, es_host="localhost", es_port=9200):
         """
         Establish connection to Elasticsearch and return search object.
         
@@ -1056,7 +1083,7 @@ class WikiClient:
             ConnectionError: If Elasticsearch connection fails
         """
         try:
-            client = Elasticsearch()
+            client = Elasticsearch(hosts=[{'host': es_host, 'port': es_port}])
             client.ping()
             conn = Search(using=client, index="wiki")
             return conn
@@ -1690,6 +1717,11 @@ class WikiMatcher:
             data.append({
                 'index': i,
                 'title': title,
+                'short_desc': article.get('short_desc', ''),
+                'intro_para': article.get('intro_para', ''),
+                'categories': article.get('categories', []),
+                'infobox': article.get('infobox', {}),
+                'query_term': query_term,
                 'exact_title_match': exact_title_match,
                 'redirect_match': redirect_match,
                 'alt_name_match': alt_name_match,
@@ -2067,15 +2099,15 @@ class WikiMatcher:
             # Apply prioritized selection rules
             logger.debug("Calling ranker...")
             selected = self._call_ranker(score_df, context=context)
-            selected['wiki_reason'] = "Neural"
+            selected['wiki_reason'] = f"XGBoost (score={selected['ranker_score']:.4f})"
 
             if selected is not None:
-                logger.debug(f"Selected article: {selected['title']} (reason: {selected['wiki_reason']})")
+                logger.debug(f"Selected article: {selected['title']} (reason={selected['wiki_reason']})")
                 return selected
             else:
                 logger.debug("No good match found")
                 # print the best overall score
-                best_overall = df.sort_values('combined_score', ascending=False).iloc[0].to_dict()
+                best_overall = score_df.sort_values('combined_score', ascending=False).iloc[0].to_dict()
                 logger.debug(f"Skipping best overall score: ({best_overall['title']}): {best_overall['combined_score']}")
                 return None
         return None
