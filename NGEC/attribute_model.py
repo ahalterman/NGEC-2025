@@ -11,17 +11,34 @@ import json
 import os
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
+from importlib import resources
 
 import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+ 
 
 
 def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
-                            base_path="assets/"):
+                            base_path=None):
     """
     Load a CSV of event definitions (including special instructions for the model.)
     """
+    if base_path is None:
+        # Use importlib.resources to access package data
+        try:
+            with resources.files("ngec").joinpath("assets", def_file).open() as f:
+                event_definitions = pd.read_csv(f)
+        except (FileNotFoundError, ModuleNotFoundError):
+            # Fallback to file-based approach for development
+            current_dir = os.path.dirname(__file__)
+            file_path = os.path.join(current_dir, "assets", def_file)
+            event_definitions = pd.read_csv(file_path)
+    else:
+        # Use provided base_path
+        file_path = os.path.join(base_path, def_file)
+        event_definitions = pd.read_csv(file_path)
+
     event_definitions = pd.read_csv(os.path.join(base_path, def_file))
     if 'event' not in event_definitions.columns:
         raise ValueError(f"During loading of the event definitions file, 'event' column was not found.")
@@ -77,7 +94,7 @@ class AttributeModel:
                  batch_size=8,
                  save_intermediate=False,
                  gpu=False,
-                 base_path="assets/"
+                 base_path=None
                  ):
         """
         Initialize the attribute model
@@ -91,7 +108,7 @@ class AttributeModel:
         else:
             self.device=-1
         logger.info(f"Device (-1 is CPU): {self.device}")
-        print("Loading model")
+        logger.debug("Loading model")
         self.model = LLM(model="ahalt/event-attribute-extractor",
                         enable_prefix_caching=True,
                         max_model_len=8000,
@@ -272,6 +289,10 @@ class AttributeModel:
 
 
 if __name__ == "__main__":
+    # add debug logging
+    logger = logging.getLogger(__name__)
+    logging.basicConfig(level=logging.DEBUG)
+
     data = [
         {"event_text": "A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.",
         "id": 123,
