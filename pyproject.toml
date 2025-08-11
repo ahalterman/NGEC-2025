@@ -31,7 +31,7 @@ dependencies = [
     'sentence_transformers>=5.0.0,<6.0',
     'vllm>=0.10.0,<1.0',
     'flash-attn>=2.8.2,<3.0',
-    'elasticsearch>==7.17.9',
+    'elasticsearch==7.17.9',
     'elasticsearch-dsl==7.4.1',
     'spacy==3.8.7',
     'pylcs>=0.1.1,<1.0',
