@@ -27,7 +27,7 @@ def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
     if base_path is None:
         # Use importlib.resources to access package data
         try:
-            with resources.files("ngec").joinpath("assets", def_file).open() as f:
+            with resources.files("NGEC").joinpath("assets", def_file).open() as f:
                 event_definitions = pd.read_csv(f)
         except (FileNotFoundError, ModuleNotFoundError):
             # Fallback to file-based approach for development
@@ -39,7 +39,6 @@ def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
         file_path = os.path.join(base_path, def_file)
         event_definitions = pd.read_csv(file_path)
 
-    event_definitions = pd.read_csv(os.path.join(base_path, def_file))
     if 'event' not in event_definitions.columns:
         raise ValueError(f"During loading of the event definitions file, 'event' column was not found.")
     if 'event_def' not in event_definitions.columns:
@@ -94,7 +93,8 @@ class AttributeModel:
                  batch_size=8,
                  save_intermediate=False,
                  gpu=False,
-                 base_path=None
+                 base_path=None,
+                 max_gpu_memory=0.8,
                  ):
         """
         Initialize the attribute model
@@ -112,7 +112,7 @@ class AttributeModel:
         self.model = LLM(model="ahalt/event-attribute-extractor",
                         enable_prefix_caching=True,
                         max_model_len=8000,
-                        gpu_memory_utilization=0.8)
+                        gpu_memory_utilization=max_gpu_memory)
         self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         self.sampling_params = _load_sampling_params()
         self.silent=silent
