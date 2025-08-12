@@ -1,3 +1,4 @@
+import gc
 import os
 os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 
@@ -95,6 +96,7 @@ class AttributeModel:
                  gpu=False,
                  base_path=None,
                  max_gpu_memory=0.8,
+                 vllm_model=None 
                  ):
         """
         Initialize the attribute model
@@ -109,10 +111,13 @@ class AttributeModel:
             self.device=-1
         logger.info(f"Device (-1 is CPU): {self.device}")
         logger.debug("Loading model")
-        self.model = LLM(model="ahalt/event-attribute-extractor",
-                        enable_prefix_caching=True,
-                        max_model_len=8000,
-                        gpu_memory_utilization=max_gpu_memory)
+        if vllm_model:
+            self.model = vllm_model
+        else:
+            self.model = LLM(model="ahalt/event-attribute-extractor",
+                             enable_prefix_caching=True,
+                             max_model_len=8000,
+                             gpu_memory_utilization=max_gpu_memory)
         self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         self.sampling_params = _load_sampling_params()
         self.silent=silent
@@ -320,6 +325,13 @@ if __name__ == "__main__":
     all_attributes = am.call_llm_batch(all_prompts)
 
     all_outputs = am.process(data)
+
+    # clear the cuda cache
+    import torch
+    import gc
+    torch.cuda.empty_cache()
+    gc.collect()
+
 
     #event_list[0]
     #{'event_text': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
