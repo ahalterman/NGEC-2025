@@ -928,7 +928,7 @@ class AgentMatcher:
             existing_hash = ""
             
         # Get current hash of agents file
-        agent_file = os.path.join(self.base_path, "PLOVER_agents.txt")
+        agent_file = os.path.join(self.base_path, self.agents_file)
         with open(agent_file, "r", encoding="utf-8") as f:
             data = f.read() 
         current_hash = hash(data)
