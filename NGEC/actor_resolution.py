@@ -35,7 +35,7 @@ handler = RichHandler()
 logger.addHandler(handler)
 
 # Constants
-DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v2"
+DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
 DEFAULT_SIM_MODEL_PATH = 'assets/actor_sim_model2'
 
 def get_base_path():
