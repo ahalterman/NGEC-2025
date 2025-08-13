@@ -36,7 +36,7 @@ logger.addHandler(handler)
 
 # Constants
 DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
-DEFAULT_SIM_MODEL_PATH = 'assets/actor_sim_model2'
+DEFAULT_SIM_MODEL_PATH = 'actor_sim_model2'
 
 def get_base_path():
     """Get the base path for assets, whether running from source or installed package."""
