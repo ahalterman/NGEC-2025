@@ -47,7 +47,7 @@ NGEC = [
     "assets/*",
     "assets/**/*",  
     "assets/event_models/*",
-    "actor_sim_model2/*",
-    "actor_sim_model2/1_Pooling/*",
-    "actor_sim_model2/eval/*"
+    "assets/actor_sim_model2/*",
+    "assets/actor_sim_model2/1_Pooling/*",
+    "assets/actor_sim_model2/eval/*"
 ]
