@@ -25,9 +25,8 @@ import pkg_resources
 from importlib import resources
 
 
-
 logger = logging.getLogger(__name__)
-#logger.addHandler(logging.NullHandler())
+logger.addHandler(logging.NullHandler())
 # Use a real logger for debugging
 logger.setLevel(logging.DEBUG)
 # Set up a rich handler for better logging output
@@ -1066,13 +1065,36 @@ class WikiClient:
     """
     
     def __init__(self,
-                 es_host="localhost",
-                 es_port=9200):
-        """Initialize the Wikipedia client."""
-        self.conn = self.setup_es(es_host, es_port)
+                 es_config=None):
+        """Initialize the Wikipedia client.
+
+        es_config is a dict with es_host, es_port, es_user, es_password
+        """
+        if not es_config:
+            es_config = {
+                "es_host": "localhost",
+                "es_port": 9200,
+                "es_user": None,
+                "es_password": None
+            }
+        # fill in any missing keys with the default
+        for key, default in [("es_host", "localhost"), ("es_port", 9200), ("es_user", None), ("es_password", None)]:
+            if key not in es_config:
+                es_config[key] = default
+
+        self.conn = self.setup_es(
+            es_host=es_config["es_host"],
+            es_port=es_config["es_port"],
+            es_user=es_config["es_user"],
+            es_password=es_config["es_password"]
+        )
         self.check_wiki(self.conn)
-    
-    def setup_es(self, es_host="localhost", es_port=9200):
+
+    def setup_es(self, 
+                 es_host="localhost", 
+                 es_port=9200, 
+                 es_user=None, 
+                 es_password=None):
         """
         Establish connection to Elasticsearch and return search object.
         
@@ -1083,7 +1105,10 @@ class WikiClient:
             ConnectionError: If Elasticsearch connection fails
         """
         try:
-            client = Elasticsearch(hosts=[{'host': es_host, 'port': es_port}])
+            client = Elasticsearch(hosts=[{'host': es_host,
+                                           'port': es_port}],
+                                   http_auth=(es_user, es_password) if es_user and es_password else None
+                                   )
             client.ping()
             conn = Search(using=client, index="wiki")
             return conn
@@ -1321,7 +1346,9 @@ class WikiSearcher:
         filtered = searcher._trim_results(results)
     """
     
-    def __init__(self, wiki_client=None, text_processor=None):
+    def __init__(self, wiki_client=None, 
+                 text_processor=None,
+                 es_config=None):
         """
         Initialize the Wikipedia searcher.
         
@@ -1330,7 +1357,7 @@ class WikiSearcher:
             text_processor: TextPreProcessor instance
         """
         if wiki_client is None:
-            self.wiki_client = WikiClient()
+            self.wiki_client = WikiClient(es_config=es_config)
         else:
             self.wiki_client = wiki_client
             
@@ -1473,7 +1500,8 @@ class WikiMatcher:
                  actor_sim_model=None, 
                  device=None,
                  nlp=None,
-                 wiki_sort_method="neural"):
+                 wiki_sort_method="neural",
+                 es_config=None):
         """
         Initialize the Wikipedia matcher.
         
@@ -1487,7 +1515,7 @@ class WikiMatcher:
         """
         # Initialize components or use provided ones
         if wiki_searcher is None:
-            self.wiki_searcher = WikiSearcher()
+            self.wiki_searcher = WikiSearcher(es_config=es_config)
         else:
             self.wiki_searcher = wiki_searcher
             
@@ -3074,7 +3102,8 @@ class ActorResolver:
                 base_path=DEFAULT_BASE_PATH,
                 save_intermediate=False,
                 wiki_sort_method="neural",
-                gpu=False):
+                gpu=False,
+                es_config=None):
         """
         Initialize the ActorResolver with the necessary models and data.
         
@@ -3108,7 +3137,7 @@ class ActorResolver:
         )
         
         # Initialize Wikipedia components
-        self.wiki_client = WikiClient()
+        self.wiki_client = WikiClient(es_config=es_config)
         self.wiki_searcher = WikiSearcher(
             self.wiki_client, 
             self.text_processor
@@ -3335,12 +3364,18 @@ def main():
 if __name__ == "__main__":
     main()
 
+    exit(0)  # Exit cleanly after running main
+
+    ## Testing junk to remove later
+
+    from actor_resolution import ActorResolver, AgentMatcher, WikiMatcher, WikiParser, ModelManager, TextPreProcessor, CountryDetector
+
     event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': [{'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}]}
     agent_matcher = AgentMatcher()
     actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
     #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}
     
-    resolver = ActorResolver()
+    resolver = ActorResolver(es_config=es_config)
     resolver.actor_to_code("German Chancellor")
     resolver.actor_to_code("Angela Merkel")
     resolver.actor_to_code("Angela Merkel",
