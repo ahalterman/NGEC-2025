@@ -1,6 +1,9 @@
 import gc
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# The line below is only useful for debugging/timing 
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# Address vLLM multiprocessing method error
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 import pandas as pd
 from tqdm import tqdm
