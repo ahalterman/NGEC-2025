@@ -54,7 +54,7 @@ def get_base_path():
 DEFAULT_BASE_PATH = get_base_path()
 
 # Threshold constants
-THRESHOLD_COSINE_SIMILARITY = 0.8
+THRESHOLD_COSINE_SIMILARITY = 0.6
 THRESHOLD_DOT_SIMILARITY = 45
 THRESHOLD_NEURAL_TITLE_MATCH = 0.9
 THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
@@ -2130,9 +2130,9 @@ class WikiMatcher:
             # Apply prioritized selection rules
             logger.debug("Calling ranker...")
             selected = self._call_ranker(score_df, context=context)
-            selected['wiki_reason'] = f"XGBoost (score={selected['ranker_score']:.4f})"
 
             if selected is not None:
+                selected['wiki_reason'] = f"XGBoost (score={selected['ranker_score']:.4f})"
                 logger.debug(f"Selected article: {selected['title']} (reason={selected['wiki_reason']})")
                 return selected
             else:
