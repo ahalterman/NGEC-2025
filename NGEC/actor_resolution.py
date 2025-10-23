@@ -803,41 +803,61 @@ class AgentMatcher:
         match = matcher.trf_agent_match("Chancellor", country="DEU")
     """
     
-    def __init__(self, 
-                 trf_model=None, 
-                 base_path=DEFAULT_BASE_PATH, 
+    def __init__(self,
+                 trf_model=None,
+                 base_path=DEFAULT_BASE_PATH,
                  agents_file="PLOVER_agents.txt",
-                 device=None, 
-                 text_processor=None):
+                 device=None,
+                 text_processor=None,
+                 use_classifier=True):
         """
         Initialize the agent matcher.
-        
+
         Args:
             trf_model: Sentence transformer model
             base_path: Path to directory containing agent files
             agents_file: Name of the PLOVER/CAMEO agents file
             device: Device to use for inference ('cuda' or None)
             text_processor: TextPreProcessor instance
+            use_classifier: Whether to use classifier-based matching (default True)
         """
         self.base_path = base_path
         self.device = device
         self.agents_file = agents_file
-        
+        self.use_classifier = use_classifier
+        self.classifier = None
+
         # Initialize resources
         if trf_model is None:
             model_manager = ModelManager(base_path, device)
             self.trf = model_manager.load_trf_model()
         else:
             self.trf = trf_model
-            
+
         if text_processor is None:
             self.text_processor = TextPreProcessor()
         else:
             self.text_processor = text_processor
-            
+
         # Load agent data
         self.agents = self._load_and_clean_agents()
         self.trf_matrix = self._load_embeddings()
+
+        # Try to load classifier if requested
+        if use_classifier:
+            classifier_path = os.path.join(base_path, 'actor_classifier.pkl')
+            if os.path.exists(classifier_path):
+                try:
+                    with open(classifier_path, 'rb') as f:
+                        self.classifier = pickle.load(f)
+                    logger.info("Loaded actor classifier for code matching")
+                except Exception as e:
+                    logger.warning(f"Failed to load classifier: {e}. Falling back to similarity.")
+                    self.classifier = None
+                    self.use_classifier = False
+            else:
+                logger.warning(f"Classifier not found at {classifier_path}. Using similarity matching.")
+                self.use_classifier = False
     
     def _load_and_clean_agents(self):
         """
@@ -954,21 +974,77 @@ class AgentMatcher:
 
     def trf_agent_match(self, text, country="", method="cosine", threshold=THRESHOLD_COSINE_SIMILARITY):
         """
-        Compare input text to the agent file using sentence transformer embeddings.
-        
+        Compare input text to the agent file using classifier or similarity matching.
+
         Args:
             text: Text to match against agent patterns
             country: Country code to include in the result
-            method: Similarity method to use ('cosine' or 'dot')
-            threshold: Similarity threshold below which matches are ignored
-            
+            method: Similarity method to use ('cosine' or 'dot') - only used if classifier unavailable
+            threshold: Confidence threshold below which matches are ignored
+
         Returns:
             dict or None: Match information or None if no match above threshold
         """
+        # Handle empty inputs
+        if country is None:
+            country = ""
+        text = self.text_processor.clean_query(text)
+        if not text:
+            return None
+
+        # Get embedding (needed for both classifier and similarity)
+        query_emb = self.trf.encode(text, show_progress_bar=False)
+
+        # CLASSIFIER APPROACH (if available)
+        if self.use_classifier and self.classifier is not None:
+            try:
+                # Predict with probability
+                proba = self.classifier.predict_proba([query_emb])[0]
+                pred_idx = np.argmax(proba)
+                confidence = proba[pred_idx]
+                predicted_code = self.classifier.classes_[pred_idx]
+
+                # Apply threshold
+                if confidence < threshold:
+                    logger.debug(f"Classifier confidence {confidence:.3f} below threshold for '{text}'")
+                    return None
+
+                # Find the best matching pattern for this code (for interpretability)
+                # Get all patterns with this code
+                code_patterns = [i for i, agent in enumerate(self.agents) if agent['code_1'] == predicted_code]
+                if code_patterns:
+                    # Find most similar pattern among those with the predicted code
+                    code_embeddings = self.trf_matrix[code_patterns]
+                    sims = 1 - cdist(code_embeddings, np.expand_dims(query_emb.T, 0), metric="cosine")
+                    best_local_idx = np.argmax(sims)
+                    matched_pattern_idx = code_patterns[best_local_idx]
+                    matched_pattern = self.agents[matched_pattern_idx]['pattern']
+                else:
+                    matched_pattern = predicted_code.lower()
+
+                result = {
+                    'code_1': predicted_code,
+                    'code_2': '',
+                    'country': country,
+                    'pattern': matched_pattern,
+                    'conf': float(confidence),
+                    'query': text,
+                    'description': matched_pattern,
+                    'source': 'classifier'
+                }
+
+                logger.debug(f"Classifier match: '{text}' -> {predicted_code} (conf={confidence:.3f})")
+                return result
+
+            except Exception as e:
+                logger.warning(f"Classifier prediction failed: {e}. Falling back to similarity matching.")
+                # Fall through to similarity approach
+
+        # SIMILARITY APPROACH (original, used as fallback)
         # Validate parameters
         if method not in ['cosine', 'dot']:
             raise ValueError("distance method must be one of ['cosine', 'dot']")
-            
+
         # Adjust threshold based on method
         if method == "dot" and threshold < 1:
             threshold = THRESHOLD_DOT_SIMILARITY
@@ -976,39 +1052,32 @@ class AgentMatcher:
         if method == "cosine" and threshold > 2:
             threshold = 0.1
             logger.info(f"Threshold is too high for cosine. Setting to {threshold}")
-            
-        # Handle empty inputs
-        if country is None:
-            country = ""
-        text = self.text_processor.clean_query(text)
-        if not text:
-            return None
-            
+
         # Compute similarity
-        query_trf = self.trf.encode(text, show_progress_bar=False)
         if method == "dot":
-            sims = np.dot(self.trf_matrix, query_trf.T)
+            sims = np.dot(self.trf_matrix, query_emb.T)
         else:  # cosine
-            sims = 1 - cdist(self.trf_matrix, np.expand_dims(query_trf.T, 0), metric="cosine")
-            
+            sims = 1 - cdist(self.trf_matrix, np.expand_dims(query_emb.T, 0), metric="cosine")
+
         # Get best match
         best_idx = np.argmax(sims)
         max_sim = np.max(sims)
-        
+
         # Return None if below threshold
         if max_sim < threshold:
             best_pattern = self.agents[best_idx]['pattern']
             logger.debug(f"Agent comparison. Closest result for '{text}' is '{best_pattern}' with confidence {max_sim}")
             return None
-            
+
         # Create match object
         match = self.agents[best_idx].copy()
         match['country'] = country
         match['description'] = match['pattern']
         match['query'] = text
         match['conf'] = max_sim
-        
-        logger.debug(f"Match from trf_agent_match: {match}")
+        match['source'] = 'similarity'
+
+        logger.debug(f"Similarity match: '{text}' -> {match['code_1']} (conf={max_sim:.3f})")
         return match
 
     def short_text_to_agent(self, text, strip_ents=False, threshold=THRESHOLD_COSINE_SIMILARITY, 
