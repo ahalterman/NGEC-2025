@@ -38,6 +38,12 @@ dependencies = [
     'textacy>=0.13.0,<1.0',
 ]
 
+[project.optional-dependencies]
+models = [
+    'en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl',
+    'en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl',
+]
+
 [tool.setuptools.packages.find]
 where = ["."] # Search for packages in the current directory
 
@@ -50,3 +56,7 @@ NGEC = [
     "assets/actor_sim_model2/1_Pooling/*",
     "assets/actor_sim_model2/eval/*"
 ]
+
+[tool.uv.sources]
+en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
+en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
