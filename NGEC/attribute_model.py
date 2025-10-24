@@ -1,6 +1,6 @@
 import gc
 import os
-# The line below is only useful for debugging/timing 
+# The line below is only useful for debugging/timing
 #os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 # Address vLLM multiprocessing method error
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
@@ -13,13 +13,20 @@ import jsonlines
 import re
 import json
 import os
-from vllm import LLM, SamplingParams
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, pipeline
 from importlib import resources
 
 import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+# Import vLLM only if needed (it might not be installed)
+try:
+    from vllm import LLM, SamplingParams
+    VLLM_AVAILABLE = True
+except ImportError:
+    VLLM_AVAILABLE = False
+    logger.warning("vLLM not available. Only transformers backend will be supported.")
  
 
 
@@ -91,7 +98,7 @@ def _load_sampling_params():
 
 
 class AttributeModel:
-    def __init__(self, 
+    def __init__(self,
                  event_definitions_file=None,
                  silent=False, # whether to silence progress bars and logs
                  batch_size=8,
@@ -99,30 +106,70 @@ class AttributeModel:
                  gpu=False,
                  base_path=None,
                  max_gpu_memory=0.8,
-                 vllm_model=None 
+                 vllm_model=None,
+                 backend="vllm"  # "vllm" or "transformers"
                  ):
         """
         Initialize the attribute model
 
         Parameters
-        ---------
+        ----------
+        event_definitions_file : str, optional
+            Path to event definitions CSV file
+        silent : bool, default=False
+            Whether to silence progress bars and logs
+        batch_size : int, default=8
+            Batch size for processing
+        save_intermediate : bool, default=False
+            Whether to save intermediate results
+        gpu : bool, default=False
+            Whether to use GPU
+        base_path : str, optional
+            Base path for loading files
+        max_gpu_memory : float, default=0.8
+            GPU memory utilization for vLLM
+        vllm_model : vllm.LLM, optional
+            Pre-initialized vLLM model to use
+        backend : str, default="vllm"
+            Which backend to use: "vllm" or "transformers"
         """
-        
+
+        self.backend = backend
+
         if gpu:
             self.device="cuda"
         else:
-            self.device=-1
-        logger.info(f"Device (-1 is CPU): {self.device}")
-        logger.debug("Loading model")
-        if vllm_model:
-            self.model = vllm_model
+            self.device="cpu"
+        logger.info(f"Device: {self.device}")
+        logger.info(f"Backend: {self.backend}")
+
+        # Load model based on backend
+        if self.backend == "vllm":
+            if not VLLM_AVAILABLE:
+                raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
+            logger.debug("Loading vLLM model")
+            if vllm_model:
+                self.model = vllm_model
+            else:
+                self.model = LLM(model="ahalt/event-attribute-extractor",
+                                 enable_prefix_caching=True,
+                                 max_model_len=8000,
+                                 gpu_memory_utilization=max_gpu_memory)
+            self.sampling_params = _load_sampling_params()
+        elif self.backend == "transformers":
+            logger.debug("Loading transformers model")
+            # Use transformers pipeline
+            device_id = 0 if self.device == "cuda" else -1
+            self.model = pipeline(
+                "text-generation",
+                model="ahalt/event-attribute-extractor",
+                device=device_id,
+                torch_dtype="auto" if self.device == "cuda" else None,
+            )
         else:
-            self.model = LLM(model="ahalt/event-attribute-extractor",
-                             enable_prefix_caching=True,
-                             max_model_len=8000,
-                             gpu_memory_utilization=max_gpu_memory)
+            raise ValueError(f"Unknown backend: {self.backend}. Must be 'vllm' or 'transformers'")
+
         self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
-        self.sampling_params = _load_sampling_params()
         self.silent=silent
         self.batch_size=batch_size
         self.save_intermediate=save_intermediate
@@ -201,9 +248,30 @@ class AttributeModel:
     def call_llm_batch(self, prompts):
         if type(prompts) is not list:
             prompts = [prompts]
-        outputs = self.model.generate(prompts, sampling_params=self.sampling_params)
-        responses = [i.outputs[0].text.strip() for i in outputs]
-        #print(responses)
+
+        if self.backend == "vllm":
+            # vLLM backend
+            outputs = self.model.generate(prompts, sampling_params=self.sampling_params)
+            responses = [i.outputs[0].text.strip() for i in outputs]
+        elif self.backend == "transformers":
+            # Transformers pipeline backend
+            responses = []
+            for prompt in prompts:
+                output = self.model(
+                    prompt,
+                    max_new_tokens=1024,
+                    temperature=0.5,
+                    top_p=0.8,
+                    top_k=20,
+                    do_sample=True,
+                    return_full_text=False,
+                    pad_token_id=self.tokenizer.eos_token_id,
+                )
+                # Extract the generated text
+                generated_text = output[0]["generated_text"].strip()
+                responses.append(generated_text)
+        else:
+            raise ValueError(f"Unknown backend: {self.backend}")
 
         json_responses = []
         error_responses = []
@@ -319,7 +387,11 @@ if __name__ == "__main__":
         "event_mode": ""}
     ]
 
-    am = AttributeModel(silent=False, gpu=True)
+    # Example: Use vLLM backend (default)
+    am = AttributeModel(silent=False, gpu=True, backend="vllm")
+    # Or use transformers backend:
+    # am = AttributeModel(silent=False, gpu=True, backend="transformers")
+
     prompt = am.make_prompt(data[0])
     print(prompt)
     output = am.call_llm_batch(prompt)
