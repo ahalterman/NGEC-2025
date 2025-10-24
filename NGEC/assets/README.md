@@ -1,1 +1,0 @@
-- ISO --> COW conversion document. Credit: https://github.com/leops95/cow2iso

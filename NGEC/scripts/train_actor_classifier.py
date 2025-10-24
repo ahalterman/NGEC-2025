@@ -278,6 +278,10 @@ def main():
     # Analyze errors
     analyze_errors(clf, X_test, y_test, patterns_test, seed=42)
 
+    # Now fit on full data
+    logger.info("\nRefitting classifier on full dataset...")
+    clf.fit(X, y)   
+
     # Save model
     logger.info(f"\nSaving classifier to {output_model}")
     with open(output_model, 'wb') as f:
