@@ -81,13 +81,13 @@ OUTPUT FORMAT:
 Return valid JSON only. Empty array [] if no events."""
     return system_content_short
 
-def _load_sampling_params():
+def _load_vllm_sampling_params():
     """
-    Load the sampling parameters for the model.
+    Load the sampling parameters for the vLLM model.
     """
     sampling_params = SamplingParams(
         temperature=0.5,       # Greedy decoding breaks Qwen
-        top_p=0.8,             # Qwen3 non-thinking recommendation  
+        top_p=0.8,             # Qwen3 non-thinking recommendation
         top_k=20,              # Qwen3 recommendation
         presence_penalty=1.5,  # Recommended for quantized models
         min_p=0.0,
@@ -95,6 +95,7 @@ def _load_sampling_params():
         max_tokens=1024,
     )
     return sampling_params
+
 
 
 class AttributeModel:
@@ -107,7 +108,7 @@ class AttributeModel:
                  base_path=None,
                  max_gpu_memory=0.8,
                  vllm_model=None,
-                 backend="vllm"  # "vllm" or "transformers"
+                 backend="vllm"  # "vllm" or "transformers" or "mlx"
                  ):
         """
         Initialize the attribute model
@@ -155,7 +156,8 @@ class AttributeModel:
                                  enable_prefix_caching=True,
                                  max_model_len=8000,
                                  gpu_memory_utilization=max_gpu_memory)
-            self.sampling_params = _load_sampling_params()
+            self.sampling_params = _load_vllm_sampling_params()
+            self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         elif self.backend == "transformers":
             logger.debug("Loading transformers model")
             # Use transformers pipeline
@@ -166,10 +168,28 @@ class AttributeModel:
                 device=device_id,
                 torch_dtype="auto" if self.device == "cuda" else None,
             )
+            self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
+        elif self.backend == "mlx":
+            try:
+                from mlx_lm import load, generate
+                from mlx_lm.sample_utils import make_sampler
+            except ImportError:
+                raise ImportError("mlx_lm is not installed. Please install it or use another backend.")
+            logger.debug("Loading MLX model")
+            # MLX doesn't use device parameter the same way as PyTorch
+            self.model, self.tokenizer = load("ahalt/event-attribute-extractor")
+            # Store the generate function and create sampler
+            self.mlx_generate = generate
+            self.sampler = make_sampler(
+                temp=0.5,           # temperature
+                top_p=0.8,          # nucleus sampling
+                top_k=20,           # top-k sampling
+                min_p=0.0,          # minimum probability
+                min_tokens_to_keep=1,
+            )
         else:
-            raise ValueError(f"Unknown backend: {self.backend}. Must be 'vllm' or 'transformers'")
+            raise ValueError(f"Unknown backend: {self.backend}. Must be 'vllm', 'transformers', or 'mlx'")
 
-        self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         self.silent=silent
         self.batch_size=batch_size
         self.save_intermediate=save_intermediate
@@ -270,6 +290,21 @@ class AttributeModel:
                 # Extract the generated text
                 generated_text = output[0]["generated_text"].strip()
                 responses.append(generated_text)
+        elif self.backend == "mlx":
+            # MLX backend
+            responses = []
+            for prompt in prompts:
+                # Generate with MLX
+                output = self.mlx_generate(
+                    model=self.model,
+                    tokenizer=self.tokenizer,
+                    prompt=prompt,
+                    max_tokens=1024,
+                    sampler=self.sampler,
+                    verbose=False,
+                )
+                # The output from mlx_lm.generate is a string
+                responses.append(output.strip())
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
