@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "NGEC"
+name = "ngec"
 version = "0.1.0" 
 authors = [
     { name="Andy Halterman", email="ahalterman0@gmail.com" }, 
@@ -18,14 +18,14 @@ classifiers = [
 ]
 dependencies = [
     'dateparser>=1.2.0,<2.0',
-    'jsonlines>=4.0.0,<5.0', 
-    'numpy>=2.0.0,<3.0',  
-    'pandas>=2.2.0,<3.0',  
+    'jsonlines>=4.0.0,<5.0',
+    'numpy>=2.0.0,<3.0',
+    'pandas>=2.2.0,<3.0',
     'rich>=14.0.0,<15.0',
-    'scikit_learn>=1.6.0,<2.0',  
+    'scikit_learn>=1.6.0,<2.0',
     'tqdm>=4.60.0,<5.0',
     'Unidecode>=1.4.0,<2.0',
-    'xgboost>=3.0.0,<4.0',  
+    'xgboost>=3.0.0,<4.0',
     'torch>=2.6.0,<3.0',
     'transformers>=4.53.3,<5.0',
     'sentence_transformers>=5.0.0,<6.0',
@@ -48,7 +48,7 @@ models = [
 where = ["."] # Search for packages in the current directory
 
 [tool.setuptools.package-data]
-NGEC = [
+ngec = [
     "assets/*",
     "assets/**/*",  
     "assets/event_models/*",

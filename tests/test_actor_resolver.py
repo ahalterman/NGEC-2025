@@ -1,6 +1,6 @@
 # Just a smoke test for the actor resolver
 
-from NGEC import ActorResolver
+from ngec import ActorResolver
 es_config = {
                 "es_host": "167.71.184.1",
                 "es_port": 9200,
