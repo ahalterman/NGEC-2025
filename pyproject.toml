@@ -36,6 +36,7 @@ dependencies = [
     'pylcs>=0.1.1,<1.0',
     'skops>=0.13.0,<1.0',
     'textacy>=0.13.0,<1.0',
+    "mordecai3>=3.4.0",
 ]
 
 [project.optional-dependencies]
@@ -60,3 +61,4 @@ ngec = [
 [tool.uv.sources]
 en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
 en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
+mordecai3 = { git = "https://github.com/ahalterman/mordecai3" }
