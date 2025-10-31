@@ -1,12 +1,12 @@
-from NGEC import ActorResolver
-from NGEC.actor_resolution import WikiMatcher
+from ngec import ActorResolver
+from ngec.actor_resolution import WikiMatcher
 import pytest
 import spacy
-from NGEC import AttributeModel
+from ngec import AttributeModel
 
 @pytest.fixture(scope='session', autouse=True)
 def ag():
-    return ActorResolver(base_path="./assets/")
+    return ActorResolver()
 
 @pytest.fixture(scope='session', autouse=True)
 def matcher():

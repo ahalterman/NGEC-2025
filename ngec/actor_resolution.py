@@ -42,13 +42,13 @@ def get_base_path():
     """Get the base path for assets, whether running from source or installed package."""
     try:
         # Try to find assets in the current directory (development)
-        if os.path.exists('./NGEC/assets'):
-            return './NGEC/assets'
+        if os.path.exists('./ngec/assets'):
+            return './ngec/assets'
         # Fall back to package resources (installed)
-        return pkg_resources.resource_filename('NGEC', 'assets')
+        return pkg_resources.resource_filename('ngec', 'assets')
     except:
         # Final fallback
-        return './NGEC/assets'
+        return './ngec/assets'
 
 
 DEFAULT_BASE_PATH = get_base_path()
@@ -546,10 +546,10 @@ class CountryDetector:
             tuple: Two lists of pattern tuples for direct and indirect country mentions
         """
         try:
-            with resources.files('NGEC').joinpath('assets/countries.csv').open('r') as f:
+            with resources.files('ngec').joinpath('assets/countries.csv').open('r') as f:
                 countries = pd.read_csv(f)
         except AttributeError:
-            with resources.open_text('NGEC.assets', 'countries.csv') as f:
+            with resources.open_text('ngec.assets', 'countries.csv') as f:
                 countries = pd.read_csv(f)
         
         # Direct country name/nationality patterns

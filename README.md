@@ -24,3 +24,7 @@ To verify, find the `ngec` entry in `uv.lock`, it should include this key:
 ```
 source = { editable = "." }
 ```
+
+### Tests against external ES instance
+
+Create a `.env` file with the ES credentials. 

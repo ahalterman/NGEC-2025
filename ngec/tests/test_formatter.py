@@ -1,5 +1,5 @@
 import pytest
-from ..formatter import resolve_date
+from ngec.formatter import resolve_date
 
 def test_resolution():
     event = {"pub_date": "June 20, 2012",

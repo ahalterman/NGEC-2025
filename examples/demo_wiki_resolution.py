@@ -1,6 +1,6 @@
 import jsonlines
 import spacy
-from NGEC import ActorResolver
+from ngec import ActorResolver
 from tqdm import tqdm
 from pprint import pprint
 import pandas as pd
@@ -12,7 +12,7 @@ import pandas as pd
 
 # Change the logging levels--Elasticsearch is very verbose
 import logging
-logging.getLogger("NGEC.actor_resolution").setLevel(logging.WARNING)
+logging.getLogger("ngec.actor_resolution").setLevel(logging.WARNING)
 
 es_logger = logging.getLogger('elasticsearch')
 es_logger.setLevel(logging.WARNING)
@@ -24,10 +24,10 @@ nlp = spacy.load("en_core_web_sm")
 data = pd.read_csv("Guardian_SDF_sample.csv.zip", compression='zip')
 
 # Instantiate the model.
-# This assumes that you're running the code from the NGEC/docs directory.
-actor_resolution_model = ActorResolver(spacy_model=nlp, 
-                                           base_path="../NGEC/assets/", 
-                                           save_intermediate=False, 
+# This assumes that you're running the code from the ngec/docs directory.
+actor_resolution_model = ActorResolver(spacy_model=nlp,
+                                           base_path="../ngec/assets/",
+                                           save_intermediate=False,
                                            gpu=False) # Set to True if you have a GPU
 
 # Run spaCy over the docs

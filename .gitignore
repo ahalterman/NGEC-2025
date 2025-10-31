@@ -8,3 +8,9 @@ __pycache__/
 
 # uv related files
 uv.lock 
+
+# Environment variable files
+.env
+
+# VS code workspace settings
+*.code-workspace

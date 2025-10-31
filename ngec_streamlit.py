@@ -1,9 +1,9 @@
-from NGEC import EventClass
-from NGEC import  AttributeModel
-from NGEC import ActorResolver
-from NGEC import GeolocationModel
-from NGEC import Formatter
-from NGEC import utilities
+from ngec import EventClass
+from ngec import  AttributeModel
+from ngec import ActorResolver
+from ngec import GeolocationModel
+from ngec import Formatter
+from ngec import utilities
 
 import streamlit as st
 
@@ -81,8 +81,8 @@ def format_output(cleaned_events):
 
 
 save_intermediate=False
-attribute_dir="NGEC/assets/deberta_squadnewsqa_2023-05-22"
-base_path="./NGEC/assets/"
+attribute_dir="ngec/assets/deberta_squadnewsqa_2023-05-22"
+base_path="./ngec/assets/"
 save_intermediate=False
 expand_actors=True
 geo_model="/home/andy/projects/mordecai/mordecai3/assets/mordecai_2023-02-07_good.pt"

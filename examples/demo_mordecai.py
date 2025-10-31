@@ -5,7 +5,7 @@ from pprint import pprint
 
 # Create the Geoparser object
 # Make sure the path to the model is correct
-geo = Geoparser("NGEC/assets/mordecai_2023-03-28.pt")
+geo = Geoparser("ngec/assets/mordecai_2023-03-28.pt")
 
 output = geo.geoparse_doc("The Mexican government sent 300 National Guard troopers to bolster the southern state of Guerrero on Tuesday, where a local police chief and 12 officers were shot dead in a brutal ambush the day before.")
 

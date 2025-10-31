@@ -62,3 +62,9 @@ ngec = [
 en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
 en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
 mordecai3 = { git = "https://github.com/ahalterman/mordecai3" }
+
+[dependency-groups]
+dev = [
+    "dotenv>=0.9.9",
+    "pytest>=8.4.2",
+]

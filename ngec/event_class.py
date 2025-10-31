@@ -7,7 +7,7 @@ import numpy as np
 
 class EventClass:
     def __init__(self, 
-                 model_dir="NGEC/assets/event_models/",
+                 model_dir="ngec/assets/event_models/",
                  threshold=0.6, 
                  progress_bar=False,
                  event_types = ['ACCUSE', 'AGREE', 'AID', 'ASSAULT', 'COERCE', 'CONCEDE',

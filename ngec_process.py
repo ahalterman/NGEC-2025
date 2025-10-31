@@ -1,8 +1,8 @@
-from NGEC import  AttributeModel
-from NGEC import ActorResolver
-from NGEC import GeolocationModel
-from NGEC import Formatter
-from NGEC import utilities
+from ngec import  AttributeModel
+from ngec import ActorResolver
+from ngec import GeolocationModel
+from ngec import Formatter
+from ngec import utilities
 
 import spacy
 from tqdm import tqdm
@@ -26,7 +26,7 @@ logger.propagate = False
 
 loggers = [logging.getLogger(name) for name in logging.root.manager.loggerDict]
 for i in loggers:
-    if re.search("NGEC\.", i.name):
+    if re.search("ngec\.", i.name):
         i.addHandler(handler) 
         i.setLevel(logging.INFO)
         i.propagate = False
@@ -45,7 +45,7 @@ def load_nlp():
     return nlp
 
 
-def read_input(input_file="NGEC/PLOVER_coding_201908_220302-1049.jsonl", max_stories=10):
+def read_input(input_file="ngec/PLOVER_coding_201908_220302-1049.jsonl", max_stories=10):
     import jsonlines
     """
     Read in Factiva stories and return a list of stories for processing
@@ -80,10 +80,10 @@ def read_input(input_file="NGEC/PLOVER_coding_201908_220302-1049.jsonl", max_sto
 @plac.opt('save_intermediate', "Write output of each intermediate step?", type=bool)
 @plac.opt('geo_model', "Location of the geolocation model", type=Path)
 @plac.opt('gpu', "Set to True if GPU is available", abbrev='d', type=bool)
-def ngec(input_file="NGEC/PLOVER_coding_201908_220302-1049.jsonl",
+def ngec(input_file="ngec/PLOVER_coding_201908_220302-1049.jsonl",
         max_stories=-1,
-        attribute_dir="NGEC/assets/roberta-base-squad2_2022-08-02",
-        base_path="NGEC/assets/",
+        attribute_dir="ngec/assets/roberta-base-squad2_2022-08-02",
+        base_path="ngec/assets/",
         save_intermediate=False,
         expand_actors=True,
         geo_model="../mordecai3/mordecai_2023-02-07_good.pt",
