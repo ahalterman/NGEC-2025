@@ -68,3 +68,16 @@ dev = [
     "dotenv>=0.9.9",
     "pytest>=8.4.2",
 ]
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    # Ignore 3rd-party library deprecation warnings
+    'ignore::DeprecationWarning:spacy',
+    "ignore:Importing 'parser.split_arg_string' is deprecated, it will only be available in 'shell_completion' in Click 9.0:DeprecationWarning",
+
+    # Ignore SWIG deprecation warning from xgboost/scipy
+    'ignore:.*[Ss]wig.*:DeprecationWarning',
+]
+markers = [
+    'external: run tests with external Elasticsearch server (requires config in .env)',
+]

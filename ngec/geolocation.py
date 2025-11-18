@@ -1,12 +1,11 @@
 from mordecai3 import Geoparser
 from rich.progress import track
-from rich import print
 import time
 import jsonlines
 import pandas as pd
 import os
-
 import logging
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 

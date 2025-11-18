@@ -21,18 +21,12 @@ import pylcs
 from sentence_transformers.util import cos_sim
 import torch
 from xgboost import XGBClassifier
-import pkg_resources
 from importlib import resources
 
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
-# Use a real logger for debugging
-logger.setLevel(logging.DEBUG)
-# Set up a rich handler for better logging output
-from rich.logging import RichHandler
-handler = RichHandler()
-logger.addHandler(handler)
+
 
 # Constants
 DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
@@ -45,7 +39,7 @@ def get_base_path():
         if os.path.exists('./ngec/assets'):
             return './ngec/assets'
         # Fall back to package resources (installed)
-        return pkg_resources.resource_filename('ngec', 'assets')
+        return resources.files('ngec') / 'assets'
     except:
         # Final fallback
         return './ngec/assets'
@@ -3434,6 +3428,16 @@ def main():
 
 
 if __name__ == "__main__":
+
+    import logging
+    from rich.logging import RichHandler
+
+    # Use a real logger for debugging
+    logging.basicConfig(
+        level=logging.DEBUG,
+        handlers=[RichHandler()]
+    )
+    
     main()
 
     exit(0)  # Exit cleanly after running main

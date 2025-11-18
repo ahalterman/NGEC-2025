@@ -7,16 +7,15 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 import pandas as pd
 from tqdm import tqdm
-from rich.progress import track
 import time
 import jsonlines
 import re
 import json
-import os
+import logging
 from transformers import AutoTokenizer, pipeline
 from importlib import resources
 
-import logging
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 

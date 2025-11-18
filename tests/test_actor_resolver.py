@@ -5,10 +5,14 @@ import pytest
 from dotenv import load_dotenv
 
 from ngec import ActorResolver
+from ngec.logging import setup_logging
+
+setup_logging(quiet_third_party=True)
 
 # Load environment variables from .env file
 load_dotenv()
 
+@pytest.mark.external
 def test_actor_resolver():
     es_config = {
         "es_host": os.getenv("ES_HOST", "localhost"),
@@ -23,6 +27,9 @@ def test_actor_resolver():
     
     resolver = ActorResolver(es_config=es_config)
     res = resolver.actor_to_code("Angela Merkel")
+
+    # res["all_code1s"] may be in any order, sort it for consistent testing
+    res["all_code1s"].sort()
     
     expected = {'pattern': 'NA', 
                 'code_1': 'ELI', 

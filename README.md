@@ -28,3 +28,27 @@ source = { editable = "." }
 ### Tests against external ES instance
 
 Create a `.env` file with the ES credentials. 
+
+
+## Logging
+
+Some of the third-party dependencies have very verbose loggers by default. To quiet those:
+
+```python
+from ngec.logging import quiet_third_party_loggers
+
+quiet_third_party_loggers()
+```
+
+There is also a more general helper function included that can do this as well:
+
+```python
+import logging
+from ngec.logging import setup_logging
+
+setup_logging(
+    level=logging.DEBUG,
+    format_string="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    quiet_third_party=True
+)
+```
