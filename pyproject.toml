@@ -29,7 +29,6 @@ dependencies = [
     'torch>=2.6.0,<3.0',
     'transformers>=4.53.3,<5.0',
     'sentence_transformers>=5.0.0,<6.0',
-    #'vllm>=0.10.0,<1.0',
     'elasticsearch==7.17.9',
     'elasticsearch-dsl==7.4.1',
     'spacy==3.8.7',
@@ -44,6 +43,17 @@ models = [
     'en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl',
     'en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl',
 ]
+
+# vLLM backend (probably needs to be manually installed on macOS)
+vllm = [
+    'vllm>=0.10.0,<1.0',
+]
+
+# MLX backend (macOS only)
+mlx = [
+    'mlx>=0.1.0; sys_platform == "darwin"',
+]
+
 
 [tool.setuptools.packages.find]
 where = ["."] # Search for packages in the current directory

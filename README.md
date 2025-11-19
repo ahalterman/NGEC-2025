@@ -9,6 +9,33 @@ If you are not using `uv` to install `ngec`, the `mordecai3` install will not wo
 1. Manually install `mordecai3` from GitHub into whatever virtual environment you are using.
 2. Install `ngec`. 
 
+### spacy models
+
+ngec depends on the spacy `en_core_web_lg` and `en_core_web_trf` models, which are delivered as non-standard Python pacakges. 
+
+To attempt to install them alongside the package, use the `models` extra:
+
+```python3
+uv add ngec[models]
+```
+
+### Inference backend
+
+There are different options for the LLM inference backend. The most basic one, but also slowest is `"transformers"`, which is installed by default. 
+
+For Windows and Linux users, especially with CUDA, install vLLM, which can be done via an extra:
+
+```python3
+uv add ngec[models,vllm]
+```
+
+macOS users can try to use `"mlx"` by installing the corresponding extra:
+
+```python3
+uv add ngec[models,mlx]
+```
+
+
 ## Misc. notes
 
 To setup a local environment for package development with `uv`, this command 
