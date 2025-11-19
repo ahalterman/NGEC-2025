@@ -1,6 +1,5 @@
 import pytest
-import datetime
-from unittest.mock import MagicMock, patch
+
 
 def test_nat1(ag):
     cc, text = ag.country_detector.search_nat("Great Britain")
@@ -59,7 +58,6 @@ def test_shorttext_4(ag):
     assert code['code_1'] == "ELI"
 
 cop_list = ["cyber police", "crowd control police", "paris railway police", "seoul metropolitan police"]
-@pytest.mark.nondestructive
 @pytest.mark.parametrize("cop", cop_list)
 def test_cop_list(ag, cop):
     code = ag.agent_matcher.short_text_to_agent(cop)
@@ -67,21 +65,18 @@ def test_cop_list(ag, cop):
 
 crm_list = ["cyber criminals", "vandals", "white supremicists", "group of thieves", "motorcycle thieves", 
             "wanted persons", "smuggling gang"]
-@pytest.mark.nondestructive
 @pytest.mark.parametrize("crm", crm_list)
 def test_crm_list(ag, crm):
     code = ag.agent_matcher.short_text_to_agent(crm)
     assert code['code_1'] == "CRM"
 
 med_list = ["paramedic", "medic"]
-@pytest.mark.nondestructive
 @pytest.mark.parametrize("med", med_list)
 def test_med_list(ag, med):
     code = ag.agent_matcher.short_text_to_agent(med)
     assert code['code_1'] == "MED"
 
 reb_list = ["mujahideen", "jihadis"]
-@pytest.mark.nondestructive
 @pytest.mark.parametrize("code", reb_list)
 def test_crm_list(ag, code):
     code = ag.agent_matcher.short_text_to_agent(code)
