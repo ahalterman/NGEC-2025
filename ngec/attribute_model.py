@@ -6,18 +6,43 @@ import os
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 import pandas as pd
-from tqdm import tqdm
 import time
 import jsonlines
 import re
 import json
 import logging
-from transformers import AutoTokenizer, pipeline
-from importlib import resources
 
+from importlib import resources
+from tqdm import tqdm
+from transformers import AutoTokenizer, pipeline
+from typing import Literal, TypedDict, NotRequired, Any
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+# Types and classes for type annotations
+BackendType = Literal["vllm", "transformers", "mlx"]
+
+
+class EventDict(TypedDict):
+    """
+    Dictionary representing an event for AttributeModel processing.
+    
+    Required keys:
+        event_text: The text describing the event
+        event_type: The type/category of the event
+    
+    Optional keys:
+        event_mode: The mode of the event (optional)
+        
+    Additional keys are allowed and will be preserved.
+    """
+    event_text: str  # Required
+    event_type: str  # Required
+    event_mode: NotRequired[str]  # Optional
+    # Any other keys are allowed
+
 
 # Import vLLM only if needed (it might not be installed)
 try:
@@ -97,6 +122,7 @@ def _load_vllm_sampling_params():
 
 
 
+
 class AttributeModel:
     def __init__(self,
                  event_definitions_file=None,
@@ -107,7 +133,7 @@ class AttributeModel:
                  base_path=None,
                  max_gpu_memory=0.8,
                  vllm_model=None,
-                 backend="vllm"  # "vllm" or "transformers" or "mlx"
+                 backend: BackendType="vllm"
                  ):
         """
         Initialize the attribute model
@@ -130,8 +156,8 @@ class AttributeModel:
             GPU memory utilization for vLLM
         vllm_model : vllm.LLM, optional
             Pre-initialized vLLM model to use
-        backend : str, default="vllm"
-            Which backend to use: "vllm" or "transformers"
+        backend: BackendType="vllm"
+            Which backend to use: "vllm", "mlx", or "transformers"
         """
 
         self.backend = backend
@@ -323,7 +349,7 @@ class AttributeModel:
                 
 
     def process(self,
-                event_list):
+                event_list: list[EventDict]) -> list[dict[str, Any]]:
         """
         Given event records from the previous steps in the NGEC pipeline,
         run the QA model to identify the spans of text corresponding with
