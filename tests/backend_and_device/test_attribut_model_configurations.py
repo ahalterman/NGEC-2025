@@ -50,9 +50,9 @@ TRANSFORMERS_AVAILABLE = has_package("transformers")
 
 @pytest.fixture
 def sample_attribute_model_input():
-    from ngec.attribute_model import EventDict
+    from ngec.attribute_model import AttributeModelInput
     return [
-        EventDict(
+        AttributeModelInput(
             event_text="A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.",
             event_type="PROTEST",
         )

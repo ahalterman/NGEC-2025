@@ -43,7 +43,7 @@ should work:
 
 ```bash
 uv venv --python 3.13  # or another version >=3.10
-uv sync --extra models
+uv sync --extra models --group dev
 ```
 
 To verify, find the `ngec` entry in `uv.lock`, it should include this key:

@@ -1,10 +1,4 @@
-import gc
 import os
-# The line below is only useful for debugging/timing
-#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
-# Address vLLM multiprocessing method error
-os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
-
 import pandas as pd
 import time
 import jsonlines
@@ -15,19 +9,29 @@ import logging
 from importlib import resources
 from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
-from typing import Literal, TypedDict, NotRequired, Any
+from typing import Any, cast, Literal, TypedDict, NotRequired
 
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+
+# The line below is only useful for debugging/timing
+#os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+# Address vLLM multiprocessing method error
+os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 
-# Types and classes for type annotations
+#
+#   Types and classes for type annotations
+#   ================================
+#
+#   These don't do anything at runtime, but make it easier to see what kind
+#   of input the AttributeModel expects and what kind of output it produces.
+#
+
 BackendType = Literal["vllm", "transformers", "mlx"]
 
-
-class EventDict(TypedDict):
+class AttributeModelInput(TypedDict):
     """
-    Dictionary representing an event for AttributeModel processing.
+    Dictionary representing minimal input for AttributeModel processing.
     
     Required keys:
         event_text: The text describing the event
@@ -43,15 +47,27 @@ class EventDict(TypedDict):
     event_mode: NotRequired[str]  # Optional
     # Any other keys are allowed
 
+class Attributes(TypedDict):
+    """
+    Dictionary representing extracted attributes for an event.
+    """
+    event_type: str
+    anchor_quote: str
+    actor: list[str]
+    recipient: list[str]
+    date: list[str]
+    location: list[str]
 
-# Import vLLM only if needed (it might not be installed)
-try:
-    from vllm import LLM, SamplingParams
-    VLLM_AVAILABLE = True
-except ImportError:
-    VLLM_AVAILABLE = False
-    logger.warning("vLLM not available. Only transformers backend will be supported.")
- 
+class AttributeModelOutput(AttributeModelInput):
+    """
+    Dictionary representing output from AttributeModel processing.
+
+    The input list of dicts is augmented with an 'attributes' key for each
+    event.
+    
+    """
+    attributes: list[Attributes]  
+
 
 
 def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
@@ -159,21 +175,26 @@ class AttributeModel:
         backend: BackendType="vllm"
             Which backend to use: "vllm", "mlx", or "transformers"
         """
-
+        self.silent=silent
         self.backend = backend
 
         if gpu:
             self.device="cuda"
         else:
             self.device="cpu"
-        logger.info(f"Device: {self.device}")
-        logger.info(f"Backend: {self.backend}")
+        if not self.silent:
+            logger.info(f"Device: {self.device}")
+            logger.info(f"Backend: {self.backend}")
 
         # Load model based on backend
         if self.backend == "vllm":
-            if not VLLM_AVAILABLE:
+            try:
+                from vllm import LLM, SamplingParams
+            except ImportError:
+                if not self.silent: logger.error("vLLM not available. Use another backend.")
                 raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
-            logger.debug("Loading vLLM model")
+            
+            if not self.silent: logger.debug("Loading vLLM model")
             if vllm_model:
                 self.model = vllm_model
             else:
@@ -184,7 +205,7 @@ class AttributeModel:
             self.sampling_params = _load_vllm_sampling_params()
             self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         elif self.backend == "transformers":
-            logger.debug("Loading transformers model")
+            if not self.silent: logger.debug("Loading transformers model")
             # Use transformers pipeline
             device_id = 0 if self.device == "cuda" else -1
             self.model = pipeline(
@@ -200,7 +221,8 @@ class AttributeModel:
                 from mlx_lm.sample_utils import make_sampler
             except ImportError:
                 raise ImportError("mlx_lm is not installed. Please install it or use another backend.")
-            logger.debug("Loading MLX model")
+            
+            if not self.silent: logger.debug("Loading MLX model")
             # MLX doesn't use device parameter the same way as PyTorch
             self.model, self.tokenizer = load("ahalt/event-attribute-extractor")
             # Store the generate function and create sampler
@@ -215,7 +237,6 @@ class AttributeModel:
         else:
             raise ValueError(f"Unknown backend: {self.backend}. Must be 'vllm', 'transformers', or 'mlx'")
 
-        self.silent=silent
         self.batch_size=batch_size
         self.save_intermediate=save_intermediate
         self.system_prompt = _make_system_content_short()
@@ -349,7 +370,8 @@ class AttributeModel:
                 
 
     def process(self,
-                event_list: list[EventDict]) -> list[dict[str, Any]]:
+                event_list: list[AttributeModelInput] | list[dict[str, Any]]
+                ) -> list[AttributeModelOutput] | list[dict[str, Any]]:
         """
         Given event records from the previous steps in the NGEC pipeline,
         run the QA model to identify the spans of text corresponding with
@@ -382,7 +404,7 @@ class AttributeModel:
         logger.debug("Starting attribute process")
 
         # Create a list of prompts
-        print("Making prompts...")
+        if not self.silent: print("Making prompts...")
         prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
         final_attributes = self.call_llm_batch(prompts)
 
@@ -421,12 +443,17 @@ class AttributeModel:
             with jsonlines.open(fn, "w") as f:
                 f.write_all(event_list)
 
-        return event_list
+        # The way this works currently, process() mutates the input lists and 
+        # dicts, so technically there isn't really a need to return anything. 
+        # An alternative would be to explicitly copy the input and return a new
+        # list. Pros: probably more intuitive. Cons: more memory usage.
+        # Or, just return a list of attributes, but add a shared key to both
+        # the input list and output list to link them. 
+        return cast(list[AttributeModelOutput], event_list)
 
 
 if __name__ == "__main__":
     # add debug logging
-    logger = logging.getLogger(__name__)
     logging.basicConfig(level=logging.DEBUG)
 
     data = [
