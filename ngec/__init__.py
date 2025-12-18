@@ -1,6 +1,8 @@
 
 import warnings
 
+from huggingface_hub import snapshot_download
+
 from .event_class import EventClass
 from .actor_resolution import ActorResolver
 from .geolocation import GeolocationModel
@@ -40,6 +42,23 @@ def _is_huggingface_model_installed(model):
 
 def _check_huggingface_models(models):
     pass
+
+
+def download_actor_resolver_model() -> None:
+    snapshot_download(
+        repo_id="jinaai/jina-embeddings-v3",
+        revision="main",          # or a commit hash
+    )
+
+
+def _has_cuda() -> bool:
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
+
+
 
 
 # Check on import

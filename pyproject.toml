@@ -18,24 +18,26 @@ classifiers = [
 ]
 dependencies = [
     'dateparser>=1.2.0,<2.0',
-    'jsonlines>=4.0.0,<5.0',
-    'numpy>=2.0.0,<3.0',
-    'pandas>=2.2.0,<3.0',
-    'rich>=14.0.0,<15.0',
-    'scikit_learn>=1.6.0,<2.0',
-    'tqdm>=4.60.0,<5.0',
-    'Unidecode>=1.4.0,<2.0',
-    'xgboost>=3.0.0,<4.0',
-    'torch>=2.6.0,<3.0',
-    'transformers>=4.53.3,<5.0',
-    'sentence_transformers>=5.0.0,<6.0',
+    'einops>=0.8.1', # Required for HF model download, but not installed if vllm is not installed
     'elasticsearch==7.17.9',
     'elasticsearch-dsl==7.4.1',
-    'spacy==3.8.7',
+    'hf-xet>=1.2.0',
+    'jsonlines>=4.0.0,<5.0',
+    'mordecai3>=3.4.0',
+    'numpy>=2.0.0,<3.0',
+    'pandas>=2.2.0,<3.0',
     'pylcs>=0.1.1,<1.0',
+    'rich>=14.0.0,<15.0',
+    'scikit_learn>=1.6.0,<2.0',
+    'sentence_transformers>=5.0.0,<6.0',
     'skops>=0.13.0,<1.0',
+    'spacy==3.8.7',
+    'tqdm>=4.60.0,<5.0',
     'textacy>=0.13.0,<1.0',
-    "mordecai3>=3.4.0",
+    'torch>=2.6.0,<3.0',
+    'transformers>=4.53.3,<5.0',
+    'Unidecode>=1.4.0,<2.0',
+    "xgboost<=3.1.1",
 ]
 
 [project.optional-dependencies]
@@ -78,6 +80,8 @@ mordecai3 = { git = "https://github.com/ahalterman/mordecai3" }
 [dependency-groups]
 dev = [
     "dotenv>=0.9.9",
+    "ipython>=8.37.0",
+    "pip>=25.3",
     "pytest>=8.4.2",
 ]
 

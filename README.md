@@ -4,10 +4,11 @@
 
 ## Installation
 
-If you are not using `uv` to install `ngec`, the `mordecai3` install will not work correctly. In that case:
+The recommended installation is with `uv`. 
 
-1. Manually install `mordecai3` from GitHub into whatever virtual environment you are using.
-2. Install `ngec`. 
+### Install PyTorch
+
+To make sure the correct version of PyTorch for your system is installed, install it manually first. 
 
 ### spacy models
 
@@ -34,6 +35,14 @@ macOS users can try to use `"mlx"` by installing the corresponding extra:
 ```python3
 uv add ngec[models,mlx]
 ```
+
+### Installing with pip
+
+If you are not using `uv` to install `ngec`, the `mordecai3` install will not work correctly. In that case:
+
+1. Manually install `mordecai3` from GitHub into whatever virtual environment you are using.
+2. Install `ngec`. 
+
 
 
 ## Misc. notes
