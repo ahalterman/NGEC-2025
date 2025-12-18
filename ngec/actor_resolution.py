@@ -3,7 +3,6 @@ import pandas as pd
 import re
 import spacy
 import numpy as np
-from sentence_transformers import SentenceTransformer
 import pickle
 import dateparser
 import unidecode
@@ -16,13 +15,15 @@ from rich import print
 from rich.progress import track
 import time
 import jsonlines
-from scipy.spatial.distance import cdist
 import pylcs
-from sentence_transformers.util import cos_sim
 import torch
-from xgboost import XGBClassifier
-from importlib import resources
 
+from importlib import resources
+from scipy.spatial.distance import cdist
+from sentence_transformers import SentenceTransformer
+from sentence_transformers.util import cos_sim
+from typing import Literal
+from xgboost import XGBClassifier
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -514,37 +515,38 @@ class CountryDetector:
     in text.
     
     Example:
-        detector = CountryDetector("./assets")
-        country, remaining_text = detector.search_nat("German Chancellor")
-        # Returns: ("DEU", "Chancellor")
+        >>> detector = CountryDetector()
+        >>> detector.search_nat("German Chancellor")
+        ("DEU", "Chancellor")
     """
     
-    def __init__(self, base_path=DEFAULT_BASE_PATH):
+    def __init__(self, country_csv_path: str | None = None):
         """
         Initialize the country detector.
         
         Args:
-            base_path: Path to directory containing the countries.csv file
+            country_csv_path: Path to a countries.csv-like file; if None, uses 
+            the built-in asset
         """
-        self.base_path = base_path
-        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_county_dict(base_path)
+        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_country_dict()
     
-    def _load_county_dict(self, base_path):
+    def _load_country_dict(self, country_csv_path: str | None = None):
         """
         Construct a list of regular expressions to find countries by their name and nationality.
         
         Args:
-            base_path: Path to directory containing the countries.csv file
+            country_csv_path: Path to a countries.csv-like file; if None, uses 
+            the built-in asset
             
         Returns:
             tuple: Two lists of pattern tuples for direct and indirect country mentions
         """
-        try:
+        if country_csv_path is None:
+            # Load from package resources
             with resources.files('ngec').joinpath('assets/countries.csv').open('r') as f:
                 countries = pd.read_csv(f)
-        except AttributeError:
-            with resources.open_text('ngec.assets', 'countries.csv') as f:
-                countries = pd.read_csv(f)
+        else:
+            countries = pd.read_csv(country_csv_path)
         
         # Direct country name/nationality patterns
         nat_list = []
@@ -586,7 +588,12 @@ class CountryDetector:
         
         return nat_list, nat_list_cat, nat_list_name, nat_list_name_cat
 
-    def search_nat(self, text, method="longest", categories=False, use_name=False):
+    def search_nat(self, 
+                   text: str, 
+                   method: Literal["longest", "first"] = "longest",
+                   categories: bool = False, 
+                   use_name: bool = False
+                   ) -> tuple[str | None, str]:
         """
         Search for country names/nationalities in text and return canonical form.
         
@@ -599,6 +606,9 @@ class CountryDetector:
         Returns:
             tuple: (country_code, trimmed_text) or (None, original_text) if no country found
         """
+        if method not in ["longest", "first"]:
+            raise ValueError(f"search_nat sorting option must be one of ['longest', 'first']. You gave {method}")
+
         if not text:
             return None, text
             
@@ -629,15 +639,13 @@ class CountryDetector:
         if method == "longest":
             # Return the longest match to handle e.g. "Saudi", "Britain"
             found.sort(key=lambda x: len(x[1]))
-            return found[0][0:2]
         elif method == "first":
             # Return the first occurrence in the text
             found.sort(key=lambda x: x[2].span()[0])
-            return found[0][0:2]
         else:
-            valid_methods = "['longest', 'first']"
-            raise ValueError(f"search_nat sorting option must be one of {valid_methods}. You gave {method}")
-
+            pass  # This should not happen due to earlier check
+        return found[0][0:2]
+            
 
 #######################################################
 # Model Management
