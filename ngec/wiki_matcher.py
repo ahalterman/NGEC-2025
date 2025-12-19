@@ -24,55 +24,19 @@ class WikiClient:
     """
     
     def __init__(self,
-                 es_config=None):
+                 es_client: Elasticsearch,
+                 ):
         """Initialize the Wikipedia client.
 
         es_config is a dict with es_host, es_port, es_user, es_password
         """
-        if not es_config:
-            es_config = {
-                "es_host": "localhost",
-                "es_port": 9200,
-                "es_user": None,
-                "es_password": None
-            }
-        # fill in any missing keys with the default
-        for key, default in [("es_host", "localhost"), ("es_port", 9200), ("es_user", None), ("es_password", None)]:
-            if key not in es_config:
-                es_config[key] = default
-
-        self.conn = self.setup_es(
-            es_host=es_config["es_host"],
-            es_port=es_config["es_port"],
-            es_user=es_config["es_user"],
-            es_password=es_config["es_password"]
-        )
-        self.check_wiki(self.conn)
-
-    def setup_es(self, 
-                 es_host="localhost", 
-                 es_port=9200, 
-                 es_user=None, 
-                 es_password=None):
-        """
-        Establish connection to Elasticsearch and return search object.
-        
-        Returns:
-            Search: Elasticsearch search object
-        
-        Raises:
-            ConnectionError: If Elasticsearch connection fails
-        """
         try:
-            client = Elasticsearch(hosts=[{'host': es_host,
-                                           'port': es_port}],
-                                   http_auth=(es_user, es_password) if es_user and es_password else None
-                                   )
-            client.ping()
-            conn = Search(using=client, index="wiki")
-            return conn
+            es_client.ping()
+            self.conn = Search(using=es_client, index="wiki")
         except Exception as e:
             raise ConnectionError(f"Could not connect to Elasticsearch: {e}")
+    
+        self.check_wiki(self.conn)
 
     def check_wiki(self, conn):
         """
@@ -201,87 +165,3 @@ class WikiClient:
 
         return results
 
-    #def run_wiki_search(self, query_term, limit_term="", fuzziness="AUTO", max_results=200,
-    #               fields=['title^50', 'redirects^50', 'alternative_names'],
-    #               score_type="best_fields"):
-    #    """
-    #    Search Wikipedia for a given query term.
-    #    
-    #    Args:
-    #        query_term: Term to search for
-    #        limit_term: Term to limit results by
-    #        fuzziness: Elasticsearch fuzziness parameter
-    #        max_results: Maximum number of results to return
-    #        fields: Fields to search in
-    #        score_type: Elasticsearch score type
-    #        
-    #    Returns:
-    #        list: List of Wikipedia article dictionaries
-    #    """
-    #    # Construct query
-    #    if not limit_term:
-    #        query = {
-    #            "bool": {
-    #                "should": [
-    #                    # Exact match on title (case-sensitive)
-    #                    {"term": {"title": {"value": query_term, "boost": 150}}},
-    #                    # Analyzed match on title (case-insensitive, tokenized)
-    #                    {"match": {"title": {"query": query_term, "boost": 50}}},
-
-    #                    # Exact match on redirects (for acronyms)
-    #                    {"term": {"redirects": {"value": query_term, "boost": 150}}},
-    #                    # Analyzed match on redirects
-    #                    {"match": {"redirects": {"query": query_term, "boost": 50}}},
-
-    #                    # Exact match on alternative names
-    #                    {"term": {"alternative_names": {"value": query_term, "boost": 125}}},
-    #                    # Analyzed match on alternative names
-    #                    {"match": {"alternative_names": {"query": query_term, "boost": 50}}},
-
-    #                    # Analyzed match on short description and intro para
-    #                    {"match": {"intro_para": {"query": query_term, "boost": 5}}},
-    #                    # Analyzed match on categories
-    #                    {"match": {"short_desc": {"query": query_term, "boost": 10}}}
-    #                ]
-    #            }
-    #        }
-    #    else:
-    #        # Include limit term in query
-    #        limit_fields = [
-    #            "title^100", "redirects^100", "alternative_names",
-    #            "intro_para", "categories", "infobox"
-    #        ]
-    #        query = {
-    #            "bool": {
-    #                "must": [
-    #                    {
-    #                        "multi_match": {
-    #                            "query": query_term,
-    #                            "fields": fields,
-    #                            "type": score_type,
-    #                            "fuzziness": fuzziness,
-    #                            "operator": "and"
-    #                        }
-    #                    },
-    #                    {
-    #                        "multi_match": {
-    #                            "query": limit_term,
-    #                            "fields": limit_fields,
-    #                            "type": "most_fields"
-    #                        }
-    #                    }
-    #                ]
-    #            }
-    #        }
-    #    
-    #    # Execute search
-    #    res = self.conn.query(query)[0:max_results].execute()
-    #    results = [hit.to_dict()['_source'] for hit in res['hits']['hits']]
-    #    # Add the scores to the results to use for ranking?
-    #    #scores = [hit.to_dict()['_score'] for hit in res['hits']['hits']]
-    #    #for i, result in enumerate(results):
-    #    #    result['raw_es_score'] = scores[i]
-    #    logger.debug(f"Number of hits for Wiki query: {len(results)}")
-    #    logger.debug(f"Titles of the first five results: {[result['title'] for result in results[0:5]]}")
-    #    
-    #    return results

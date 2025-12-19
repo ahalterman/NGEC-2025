@@ -5,6 +5,26 @@ from typing import Any
 from urllib3.exceptions import NewConnectionError
 
 
+def setup_es_client(hosts: str | list[str] | None | Any = "localhost",
+                    port: int | None = 9200,
+                    **kwargs) -> Elasticsearch:
+    """Helper class to setup a Elasticsearch client connection
+    
+    All arguments are passed on to elasticsearch.Elasticsearch() as is. 
+
+    If you are using the default package setup instructions with a local 
+    Elasticsearch instance, you likely do not need to change anything here.
+
+    Otherwise, the keys here correspond to arguments that are passed to 
+    elasticsearch.Elasticsearch(), as is. See the official documentation for 
+    more details on the different ways setup and connect to ES: 
+    
+    https://www.elastic.co/docs/reference/elasticsearch/clients/python/connecting
+    """
+    es = Elasticsearch(hosts=hosts, port=port, **kwargs)
+    return es
+
+
 @dataclass
 class ESConfig():
     """

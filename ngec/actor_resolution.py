@@ -1144,9 +1144,10 @@ class WikiSearcher:
         filtered = searcher._trim_results(results)
     """
     
-    def __init__(self, wiki_client=None, 
+    def __init__(self, 
+                 wiki_client: None | WikiClient=None, 
                  text_processor=None,
-                 es_config=None):
+                 es_client: None | Elasticsearch=None):
         """
         Initialize the Wikipedia searcher.
         
@@ -1155,7 +1156,7 @@ class WikiSearcher:
             text_processor: TextPreProcessor instance
         """
         if wiki_client is None:
-            self.wiki_client = WikiClient(es_config=es_config)
+            self.wiki_client = WikiClient(es_client=es_client)
         else:
             self.wiki_client = wiki_client
             
@@ -1299,7 +1300,7 @@ class WikiMatcher:
                  device=None,
                  nlp=None,
                  wiki_sort_method="neural",
-                 es_config=None):
+                 es_client: None | Elasticsearch=None,):
         """
         Initialize the Wikipedia matcher.
         
@@ -1313,7 +1314,7 @@ class WikiMatcher:
         """
         # Initialize components or use provided ones
         if wiki_searcher is None:
-            self.wiki_searcher = WikiSearcher(es_config=es_config)
+            self.wiki_searcher = WikiSearcher(es_client=es_client)
         else:
             self.wiki_searcher = wiki_searcher
             
@@ -2901,7 +2902,7 @@ class ActorResolver:
                 save_intermediate=False,
                 wiki_sort_method="neural",
                 gpu=False,
-                es_config=None):
+                es_client: None | Elasticsearch = None,):
         """
         Initialize the ActorResolver with the necessary models and data.
         
@@ -2935,7 +2936,7 @@ class ActorResolver:
         )
         
         # Initialize Wikipedia components
-        self.wiki_client = WikiClient(es_config=es_config)
+        self.wiki_client = WikiClient(es_client=es_client)
         self.wiki_searcher = WikiSearcher(
             self.wiki_client, 
             self.text_processor
@@ -3128,6 +3129,8 @@ def main():
     This function demonstrates how to use the ActorResolver.
     """
     import argparse
+
+    from es_client import setup_es_client
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Resolve actors in events to PLOVER codes")
@@ -3142,11 +3145,14 @@ def main():
     with jsonlines.open(args.input_file, "r") as f:
         events = list(f.iter())
     
+    es_client = setup_es_client()
+
     # Create actor resolver
     resolver = ActorResolver(
         base_path=args.base_path,
         save_intermediate=args.save_intermediate,
-        gpu=args.gpu
+        gpu=args.gpu,
+        es_client=es_client,
     )
     
     # Process events
@@ -3186,13 +3192,16 @@ if __name__ == "__main__":
         WikiMatcher,
         WikiParser,
     )
+    from es_client import setup_es_client
+
+    es_client = setup_es_client()
 
     event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': [{'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}]}
     agent_matcher = AgentMatcher()
     actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
     #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}
     
-    resolver = ActorResolver(es_config=es_config)
+    resolver = ActorResolver(es_client=es_client)
     resolver.actor_to_code("German Chancellor")
     resolver.actor_to_code("Angela Merkel")
     resolver.actor_to_code("Angela Merkel",
