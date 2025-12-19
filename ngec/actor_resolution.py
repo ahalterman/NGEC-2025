@@ -738,27 +738,11 @@ class ModelManager:
         """
         model_path = os.path.join(self.base_path, 'xgb_model.json')
         
-        try:
-            wiki_ranker = XGBClassifier()
-            wiki_ranker.load_model(model_path)
-            logger.warning("Using context-based XGBoost model for *no context* ranking.")
-            wiki_ranker_no_context =  XGBClassifier()
-            wiki_ranker_no_context.load_model(model_path)
-        except TypeError:
-            # maybe related to xgboost>=3.0? issue #24
-            logger.warning("Using legacy XGBoost model loading for ranking.")
-            # Load using XGBoost's native load
-            import xgboost as xgb
-            booster = xgb.Booster()
-            booster.load_model(model_path)
-            
-            # Wrap in XGBClassifier
-            wiki_ranker = XGBClassifier()
-            wiki_ranker._Booster = booster
-            
-            logger.warning("Using context-based XGBoost model for *no context* ranking.")
-            wiki_ranker_no_context = XGBClassifier()
-            wiki_ranker_no_context._Booster = booster
+        wiki_ranker = XGBClassifier()
+        wiki_ranker.load_model(model_path)
+        logger.warning("Using context-based XGBoost model for *no context* ranking.")
+        wiki_ranker_no_context =  XGBClassifier()
+        wiki_ranker_no_context.load_model(model_path)
         
         return wiki_ranker, wiki_ranker_no_context
 

@@ -28,7 +28,7 @@ dependencies = [
     'pandas>=2.2.0,<3.0',
     'pylcs>=0.1.1,<1.0',
     'rich>=14.0.0,<15.0',
-    'scikit_learn>=1.6.0,<2.0',
+    "scikit-learn<=1.7.2",  # see #24
     'sentence_transformers>=5.0.0,<6.0',
     'skops>=0.13.0,<1.0',
     'spacy==3.8.7',
@@ -37,7 +37,7 @@ dependencies = [
     'torch>=2.6.0,<3.0',
     'transformers>=4.53.3,<5.0',
     'Unidecode>=1.4.0,<2.0',
-    "xgboost<=3.1.1",
+    "xgboost>=3.1.1",
 ]
 
 [project.optional-dependencies]
