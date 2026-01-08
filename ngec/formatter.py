@@ -1,16 +1,20 @@
-import numpy as np
-from rich import print
+
+
+from datetime import datetime
+from importlib import resources
+import logging
+import os
+import re
+
+import dateparser
 import jsonlines
 import numpy as np
 import pandas as pd
-import os
-import dateparser
-from datetime import datetime
-import re
+from rich import print
 
-import logging
+
 logger = logging.getLogger(__name__)
-logger.addHandler(logging.NullHandler())
+
 
 # silence dateparser warning. https://github.com/scrapinghub/dateparser/issues/1013
 import warnings
@@ -20,13 +24,17 @@ warnings.filterwarnings(
 )
 
 
-def country_name_dict(base_path):
-    file = os.path.join(base_path, "countries.csv")
+def country_name_dict(file_path: str | None=None) -> dict:
+    if file_path is None:
+        file = str(resources.files('ngec').joinpath("assets", "countries.csv"))
+    else:
+        file = file_path
     countries = pd.read_csv(file)
     country_name_dict = {i:j for i, j in zip(countries['CCA3'], countries['Name'])}
     country_name_dict.update({"": ""})
     country_name_dict.update({"IGO": "Intergovernmental Organization"})
     return country_name_dict
+
 
 def resolve_date(event):
     """
@@ -74,10 +82,9 @@ def resolve_date(event):
 
 
 class Formatter:
-    def __init__(self, quiet=False, base_path="assets", geolocation_threshold=0.85):
+    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=0.85):
         self.quiet = quiet
-        self.base_path = base_path
-        self.iso_to_name = country_name_dict(self.base_path)
+        self.iso_to_name = country_name_dict(country_csv_path)
         self.geo_threshold = geolocation_threshold
 
     """
