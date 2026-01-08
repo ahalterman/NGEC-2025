@@ -29,3 +29,15 @@ def es_client_external():
     except Exception as e:
         logger.error(f"Failed to set up external ES client: {e}")
         pytest.skip("Elasticsearch client (external) setup failed")
+
+
+@pytest.fixture(scope='session')
+def es_client_local():
+    try:
+        client = setup_es_client(hosts=["localhost"], port=9200)
+        return client
+    except Exception as e:
+        logger.error(f"Failed to set up local ES client: {e}")
+        pytest.skip("Elasticsearch client (local) setup failed")
+
+
