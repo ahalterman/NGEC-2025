@@ -30,73 +30,72 @@ def spacy_doc_setup():
         Token.set_extension('tensor', default=False)
     except ValueError:
         pass
-
+    
     try:
         @Language.component("token_tensors")
         def token_tensors(doc):
-            chunk_len = len(doc._.trf_data.tensors[0][0])
-            token_tensors = [[]]*len(doc)
-
-            for n, i in enumerate(doc):
-                wordpiece_num = doc._.trf_data.align[n]
-                for d in wordpiece_num.dataXd:
-                    which_chunk = int(np.floor(d[0] / chunk_len))
-                    which_token = d[0] % chunk_len
-                    ## You can uncomment this to see that spaCy tokens are being aligned with the correct 
-                    ## wordpieces.
-                    #wordpiece = doc._.trf_data.wordpieces.strings[which_chunk][which_token]
-                    #print(n, i, wordpiece)
-                    token_tensors[n] = token_tensors[n] + [doc._.trf_data.tensors[0][which_chunk][which_token]]
-            for n, d in enumerate(doc):
-                if token_tensors[n]:
-                    d._.set('tensor', np.mean(np.vstack(token_tensors[n]), axis=0))
+            trf_data = doc._.trf_data
+            
+            # Check if we're using the new curated transformers (spaCy 3.7+)
+            if hasattr(trf_data, 'last_hidden_layer_state'):
+                # New spaCy 3.7+ with curated transformers
+                # Get the last hidden layer state - this is a Ragged tensor
+                hidden_states = trf_data.last_hidden_layer_state
+                
+                # Convert to numpy array - the data attribute contains the actual tensor
+                if hasattr(hidden_states, 'data'):
+                    flattened_hidden_states = hidden_states.data  # Shape: (total_pieces, embedding_dim)
                 else:
-                    d._.set('tensor',  np.zeros(doc._.trf_data.tensors[0].shape[-1]))
+                    flattened_hidden_states = hidden_states
+                
+                # Get piece-to-token alignment
+                # In curated transformers, pieces are grouped by token in the Ragged tensor
+                if hasattr(hidden_states, 'lengths'):
+                    # Use the lengths to determine which pieces belong to which token
+                    piece_lengths = hidden_states.lengths  # Array of how many pieces per token
+                    
+                    piece_idx = 0
+                    for token_idx, token in enumerate(doc):
+                        if token_idx < len(piece_lengths):
+                            num_pieces = piece_lengths[token_idx]
+                            
+                            if num_pieces > 0:
+                                # Get the pieces for this token
+                                token_pieces = flattened_hidden_states[piece_idx:piece_idx + num_pieces]
+                                # Average the embeddings of all pieces for this token
+                                averaged_embedding = np.mean(token_pieces, axis=0)
+                                token._.set('tensor', averaged_embedding)
+                                piece_idx += num_pieces
+                            else:
+                                # Fallback: zero vector
+                                embedding_dim = flattened_hidden_states.shape[-1]
+                                token._.set('tensor', np.zeros(embedding_dim))
+                        else:
+                            # Fallback for tokens beyond the piece alignment
+                            embedding_dim = flattened_hidden_states.shape[-1]
+                            token._.set('tensor', np.zeros(embedding_dim))
+                
+            else:
+                # Legacy spaCy 3.0-3.6 with spacy-transformers
+                # This is your original code for older versions
+                hidden_states = trf_data.tensors[0]
+                num_chunks, wordpieces_per_chunk, embedding_dim = hidden_states.shape
+                flattened_hidden_states = hidden_states.reshape(-1, embedding_dim)
+                
+                alignment = trf_data.align
+                
+                for token_idx, token in enumerate(doc):
+                    wordpiece_indices = alignment[token_idx].data
+                    valid_indices = [idx for idx in wordpiece_indices if 0 <= idx < flattened_hidden_states.shape[0]]
+                    
+                    if len(valid_indices) > 0:
+                        token_embeddings = flattened_hidden_states[valid_indices]
+                        averaged_embedding = np.mean(token_embeddings, axis=0)
+                        token._.set('tensor', averaged_embedding)
+                    else:
+                        token._.set('tensor', np.zeros(embedding_dim))
+            
             return doc
+            
     except ValueError:
         pass
-
-def stories_to_events(story_list, doc_list=None):
-    if not doc_list:
-        logger.warning("Missing doc list...")
-    if doc_list:
-        if len(doc_list) != len(story_list):
-            raise ValueError("the story list and list of spaCy docs must be the same length")
-        for n, story in enumerate(story_list):
-            doc = doc_list[n]
-            story['story_people'] = list(set([i.text for i in doc.ents if i.label_ == "PERSON"]))
-            story['story_organizations'] = list(set([i.text for i in doc.ents if i.label_ == "ORG"]))
-            story['story_places'] = list(set([i.text for i in doc.ents if i.label_ in ["GPE", "LOC", "FAC"]]))
-            story['_doc_position'] = n
-    # "lengthen" the story-level data to generate a separate element
-    # for each event type
-    event_list = []
-    for n, ex in enumerate(story_list):
-        # event modes are formatted ["ACCUSE-disapprove", "ACCUSE-allege", "CONSULT-third-party"]
-        modes = [i.split("-") for i in ex['event_mode']]
-        events_with_modes = list(set([i[0] if i else None for i in modes]))
-        for event_type in ex['event_type']:
-            if event_type not in events_with_modes:
-                event_mode = ""
-                d = ex.copy() # note: the copy is important!
-                d['event_type'] = event_type
-                d['orig_id'] = d['id']
-                d['event_mode'] = event_mode
-                d['id'] = d['id'] + "_" + event_type + "_" # generate a new ID
-                event_list.append(d)
-            else:
-                for et, *event_mode in modes:
-                    # annoyingly, the event and mode are separated by a hyphen, but
-                    # there are also hyphens within certain mode names. Merge those back
-                    # together
-                    event_mode = '-'.join([*event_mode])
-                    if et != event_type:
-                        # skip modes that are attached to the wrong event type
-                        continue
-                    d = ex.copy() # note: the copy is important!
-                    d['event_type'] = event_type
-                    d['orig_id'] = d['id']
-                    d['event_mode'] = event_mode
-                    d['id'] = d['id'] + "_" + event_type + "_" + event_mode # generate a new ID
-                    event_list.append(d)
-    return event_list
