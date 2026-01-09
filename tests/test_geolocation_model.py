@@ -1,10 +1,6 @@
 # Smoke test for geolocation model
 
-import spacy
-
-from ngec import GeolocationModel
-from ngec.utilities import spacy_doc_setup
-
+from ngec import GeolocationModel, load_nlp, setup_logging
 
 def test_geolocation_model():
     geolocation_model = GeolocationModel(geo_model=None, geo_path=None)
@@ -14,13 +10,8 @@ def test_geolocation_model():
 
 
 # not working, 
-def test_geolocation_model_process(es_client_external):
-    # TODO this should be in the package somewhere
-    def load_nlp():
-        spacy_doc_setup()
-        nlp = spacy.load("en_core_web_trf")
-        nlp.add_pipe("token_tensors")
-        return nlp
+def test_geolocation_model_process(es_client_local):   
+    setup_logging()
 
     nlp = load_nlp()    
     geolocation_model = GeolocationModel(geo_model=None, geo_path=None)

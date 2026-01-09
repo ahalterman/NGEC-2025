@@ -10,8 +10,6 @@ from ngec.logging import setup_logging
 
 setup_logging(quiet_third_party=True)
 
-# Load environment variables from .env file
-load_dotenv()
 
 @pytest.mark.external
 def test_actor_resolver(es_client_external):
@@ -39,7 +37,16 @@ def test_actor_resolver(es_client_external):
 @pytest.mark.external
 def test_actor_resolver_process(es_client_external):
     """Make sure the process method works; main entry point in production."""
-    pass
+    resolver = ActorResolver(es_client=es_client_external)
+    
+    input = [
+        {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': {'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}}
+    ]
+
+    res = resolver.process(input)
+
+
+
 
 
 def test_country_detector():

@@ -8,6 +8,8 @@ from .actor_resolution import ActorResolver
 from .geolocation import GeolocationModel
 from .attribute_model import AttributeModel
 from .formatter import Formatter
+from .utilities import load_nlp
+from .logging import setup_logging
 
 def _is_spacy_model_installed(model):
     try:

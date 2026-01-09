@@ -10,5 +10,3 @@ def ag():
         pytest.skip("Elasticsearch not available, skipping actor resolution tests.", allow_module_level=True)
     return ActorResolver()
 
-
-

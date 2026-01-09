@@ -1,3 +1,4 @@
+from copy import deepcopy
 import logging
 
 import numpy as np
@@ -108,8 +109,13 @@ def stories_to_events(story_list, doc_list=None):
     # for each event type
     event_list = []
     for n, ex in enumerate(story_list):
-        # event modes are formatted ["ACCUSE-disapprove", "ACCUSE-allege", "CONSULT-third-party"]
-        modes = [i.split("-") for i in ex['event_mode']]
+        # If there is no mode key, create one
+        if "event_mode" not in ex.keys():
+            modes = []
+        else:
+            # event modes are formatted ["ACCUSE-disapprove", "ACCUSE-allege", "CONSULT-third-party"]
+            modes = [i.split("-") for i in ex['event_mode']]
+        
         events_with_modes = list(set([i[0] if i else None for i in modes]))
         for event_type in ex['event_type']:
             if event_type not in events_with_modes:
@@ -136,3 +142,4 @@ def stories_to_events(story_list, doc_list=None):
                     d['id'] = d['id'] + "_" + event_type + "_" + event_mode # generate a new ID
                     event_list.append(d)
     return event_list
+

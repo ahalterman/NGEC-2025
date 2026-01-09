@@ -57,8 +57,6 @@ mlx = [
 ]
 
 
-
-
 [tool.setuptools.packages.find]
 where = ["."] # Search for packages in the current directory
 

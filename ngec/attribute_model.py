@@ -66,7 +66,7 @@ class AttributeModelOutput(AttributeModelInput):
     event.
     
     """
-    attributes: list[Attributes]  
+    attributes: Attributes  
 
 
 
@@ -245,6 +245,8 @@ class AttributeModel:
         self.event_definitions = _load_event_definitions(event_definitions_file, base_path)
 
 
+    # TODO (customization): add informative errors if the question info is not available for a 
+    # event type or mode or whatever
     def _get_event_info(self, event):
         """
         Convert an event dict to a message for the model.
@@ -436,7 +438,7 @@ class AttributeModel:
                             continue
                         # Update the event with the cleaned value
                         event[key] = value
-            event_list[n]['attributes'] = attributes
+            event_list[n]['attributes'] = attributes[0]
 
         if self.save_intermediate:
             fn = time.strftime("%Y_%m_%d-%H") + "_attribute_output.jsonl"
