@@ -1,10 +1,11 @@
+from collections import Counter
+from copy import deepcopy
+from importlib import resources
 import logging
 import os
 import pickle
 import re
 import time
-from collections import Counter
-from importlib import resources
 from typing import Literal
 
 import dateparser
@@ -2814,61 +2815,79 @@ class EventProcessor:
             
         Returns:
             list: The same event list with actor resolution information added
+
+        Examples:
+            >>> input = [
+                {"pub_date": "2007-07-01",
+                 # attribute model output, but only minimal subset needed here
+                 "attributes": {
+                    'actor': ['President Macron', 'Chancellor Angel Merkel'], 
+	                'recipient': ['N/A']
+                }},
+            ]
+            >>> ar.process(input)
+
+
         """
+        # Don't modify the input list
+        event_list = deepcopy(event_list)
+
         for event in track(event_list, description="Resolving actors..."):
+            
             # Get the date from the event
             query_date = event.get('pub_date', "today")
-            
-            # Process each attribute block
-            for attr_type, attr_block in event['attributes'].items():
-                # Skip location and date attributes
-                if attr_type in ["LOC", "DATE"]:
-                    continue
+
+            # We need to go through both 'actor' and 'recipient'
+            for attribute_key in ["actor", "recipient"]:
+                actor_list = event["attributes"][attribute_key]
+
+                # We are going to put the resolved actor info back in the event,
+                # under the relevant key ('actor' or 'recipient'); so basically
+                # moving one up from event["attributes"]
+                event[attribute_key] = []
+
+                # Resolve each actor
+                for actor in actor_list:
+                    # Malformed LLM output
+                    exclude = ["N/A"]
+                    if actor in exclude:
+                        continue
                     
-                # Process each attribute value
-                for attr in attr_block:
-                    # Get actor text
-                    actor_text = attr['text']
-                    if not isinstance(actor_text, str):
-                        logger.warning(f"Non-string actor text: {actor_text}")
-                        actor_text = actor_text[0]
-                        
-                    # Resolve actor to code
-                    res = self.actor_resolver.actor_to_code(actor_text, query_date=query_date)
+                    res = self.actor_resolver.actor_to_code(actor, query_date=query_date)
+
+                    # Normalize results
+                    # TODO: not sure what the agent matcher outputs but need
+                    # to sync it up with wiki matcher output
+                    this_actor = {}
+
+                    this_actor['wiki'] = res.get('wiki', "")
+                    this_actor['actor_wiki_job'] = res.get('actor_wiki_job', "")
                     
-                    # Update attribute with resolution information
-                    if res:
-                        # Add wiki information
-                        attr['wiki'] = res.get('wiki', "")
-                        attr['actor_wiki_job'] = res.get('actor_wiki_job', "")
-                        
-                        # Add code lists
-                        attr['all_code1s'] = res.get('all_code1s', [])
-                        attr['all_code2s'] = res.get('all_code2s', [])
-                        
-                        # Add country and codes
-                        attr['country'] = res.get('country', "")
-                        attr['code_1'] = res.get('code_1', "")
-                        attr['code_2'] = res.get('code_2', "")
-                        
-                        # Add query and pattern information
-                        attr['actor_role_query'] = res.get('query', "")
-                        attr['actor_resolved_pattern'] = res.get('description', "")
-                        
-                        # Add confidence and reason
-                        attr['actor_pattern_conf'] = float(res.get('conf', 0))
-                        attr['actor_resolution_reason'] = res.get('best_reason', "")
-                    else:
-                        # Set default values if resolution failed
-                        attr['wiki'] = ""
-                        attr['actor_wiki_job'] = ""
-                        attr['country'] = ""
-                        attr['code_1'] = ""
-                        attr['code_2'] = ""
-                        attr['actor_role_query'] = ""
-                        attr['actor_resolved_pattern'] = ""
-                        attr['actor_pattern_conf'] = ""
-                        attr['actor_resolution_reason'] = ""
+                    # Add code lists
+                    this_actor['all_code1s'] = res.get('all_code1s', [])
+                    this_actor['all_code2s'] = res.get('all_code2s', [])
+                    
+                    # Add country and codes
+                    this_actor['country'] = res.get('country', "")
+                    this_actor['code_1'] = res.get('code_1', "")
+                    this_actor['code_2'] = res.get('code_2', "")
+                    
+                    # Add query and pattern information
+                    this_actor['actor_role_query'] = res.get('query', "")
+                    this_actor['actor_resolved_pattern'] = res.get('description', "")
+                    
+                    # Add confidence and reason
+                    this_actor['actor_pattern_conf'] = float(res.get('conf', 0))
+                    this_actor['actor_resolution_reason'] = res.get('best_reason', "")
+                
+                    # Other stuff
+                    this_actor['description'] = res.get('description', "")
+                    this_actor['source'] = res.get('source', "")
+                    this_actor['best_reason'] = res.get('best_reason', "")
+
+                    # END normalize, now add it to the event actor/recipient list
+                    event[attribute_key].append(this_actor)
+
 
         # Save intermediate results if requested
         if save_intermediate:

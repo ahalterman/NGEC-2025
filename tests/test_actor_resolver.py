@@ -40,11 +40,17 @@ def test_actor_resolver_process(es_client_external):
     resolver = ActorResolver(es_client=es_client_external)
     
     input = [
-        {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': {'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}}
+        {"pub_date": "2007-07-01",
+         # attribute model output, but only minimal subset needed here
+         "attributes": {
+             'actor': ['President Macron', 'Chancellor Angel Merkel'],
+             'recipient': ['N/A']
+         }},
     ]
 
     res = resolver.process(input)
-
+    assert res[0]['actor'] is not None
+    assert res[0]['recipient'] is not None
 
 
 
