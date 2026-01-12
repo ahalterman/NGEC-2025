@@ -54,6 +54,7 @@ vllm = [
 # MLX backend (macOS only)
 mlx = [
     'mlx>=0.1.0; sys_platform == "darwin"',
+    "mlx-lm>=0.28.3",
 ]
 
 
