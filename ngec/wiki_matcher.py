@@ -1,4 +1,7 @@
-
+"""
+Functionality for matching a query term to a Wikipedia article. Relies on a
+Elasticsearch index of Wikipedia data.
+"""
 import logging
 
 from elasticsearch import Elasticsearch

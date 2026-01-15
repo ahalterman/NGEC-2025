@@ -1,4 +1,5 @@
 import logging
+
 import pytest
 
 from ngec.attribute_model import AttributeModel

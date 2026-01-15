@@ -3,6 +3,7 @@ from copy import deepcopy
 from importlib import resources
 import logging
 import os
+from pathlib import Path
 import pickle
 import re
 import time
@@ -27,7 +28,7 @@ from textacy.preprocessing.remove import accents as remove_accents
 from xgboost import XGBClassifier
 
 
-from ngec.wiki_matcher import WikiClient
+from .wiki_matcher import WikiClient
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -532,7 +533,7 @@ class CountryDetector:
             country_csv_path: Path to a countries.csv-like file; if None, uses 
             the built-in asset
         """
-        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_country_dict()
+        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_country_dict(country_csv_path=country_csv_path)
     
     def _load_country_dict(self, country_csv_path: str | None = None):
         """
@@ -720,8 +721,13 @@ class ModelManager:
             SentenceTransformer: Loaded similarity model
         """
         if 'actor_sim' not in self.models:
-            combo_path = os.path.join(self.base_path, model_dir)
-            self.models['actor_sim'] = SentenceTransformer(combo_path)
+            if self.base_path is not None:
+                path = Path(self.base_path).joinpath('actor_sim_model2')
+                self.models['actor_sim'] = SentenceTransformer(str(path))
+            else:
+                # TODO allow for custom model #26
+                path = resources.files('ngec').joinpath('assets', 'actor_sim_model2')
+                self.models['actor_sim'] = SentenceTransformer(str(path))
         return self.models['actor_sim']
     
     def load_wiki_ranker_model(self, model_dir=DEFAULT_MODEL_PATH):
@@ -1294,6 +1300,9 @@ class WikiMatcher:
     """
     
     def __init__(self, 
+                 # Quick fix for the ModelManagers that are instantiated here, to work with correct asset path
+                 # TODO: refactor this whole thing to provide ModelManager externally or something
+                 base_path,
                  wiki_searcher=None, 
                  text_processor=None, 
                  trf_model=None, 
@@ -1325,7 +1334,7 @@ class WikiMatcher:
             self.text_processor = text_processor
             
         # Initialize models if not provided
-        model_manager = ModelManager(device=device)
+        model_manager = ModelManager(base_path, device=device)
         if trf_model is None or actor_sim_model is None:
             self.trf = trf_model if trf_model else model_manager.load_trf_model()
             self.actor_sim = actor_sim_model if actor_sim_model else model_manager.load_actor_sim_model()
@@ -1336,7 +1345,7 @@ class WikiMatcher:
 
         
         if nlp is None:
-            model_manager = ModelManager(device=device)
+            model_manager = ModelManager(base_path, device=device)
             self.nlp = model_manager.load_spacy_lg()
         else:
             self.nlp = nlp
@@ -2938,7 +2947,7 @@ class ActorResolver:
         # Initialize utility classes
         self.text_processor = TextPreProcessor()
         self.cache_manager = CacheManager()
-        self.country_detector = CountryDetector(base_path)
+        self.country_detector = CountryDetector(base_path + "/countries.csv")
         
         # Initialize model manager and load models
         self.model_manager = ModelManager(base_path, self.device)
@@ -2961,6 +2970,7 @@ class ActorResolver:
             self.text_processor
         )
         self.wiki_matcher = WikiMatcher(
+            base_path = base_path,
             wiki_searcher=self.wiki_searcher, 
             text_processor=self.text_processor, 
             trf_model=self.trf, 
