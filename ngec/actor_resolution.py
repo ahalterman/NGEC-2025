@@ -2863,6 +2863,9 @@ class EventProcessor:
                         continue
                     
                     res = self.actor_resolver.actor_to_code(actor, query_date=query_date)
+                    # actor_to_code can return None, this will break the code below
+                    if res is None:
+                        res = {}
 
                     # Normalize results
                     # TODO: not sure what the agent matcher outputs but need
@@ -2998,7 +3001,7 @@ class ActorResolver:
         self.save_intermediate = save_intermediate
         self.wiki_sort_method = wiki_sort_method
 
-    def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term=""):
+    def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term="") -> dict | None:
         """
         Resolve an actor mention to a code representing their role.
         
