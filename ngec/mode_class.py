@@ -1,4 +1,7 @@
+from pathlib import Path
+
 import sklearn
+
 
 def _load_model(model_dir):
     """
@@ -19,7 +22,7 @@ def _load_model(model_dir):
 
 class ModeClass:
     def __init__(self, 
-                 model_dir="assets/mode_class_models/",
+                 model_dir=Path("assets/mode_class_models/"),
                  threshold=0.6 # we can set stuff like this here
                  ):
 

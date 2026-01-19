@@ -548,7 +548,7 @@ class CountryDetector:
         """
         if country_csv_path is None:
             # Load from package resources
-            with resources.files('ngec').joinpath('assets/countries.csv').open('r') as f:
+            with (resources.files('ngec') / 'assets' / 'countries.csv').open('r') as f:
                 countries = pd.read_csv(f)
         else:
             countries = pd.read_csv(country_csv_path)
