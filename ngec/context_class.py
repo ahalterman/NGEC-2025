@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import sklearn
 
 def _load_model(model_dir):
@@ -19,7 +21,7 @@ def _load_model(model_dir):
 
 class EventClass:
     def __init__(self, 
-                 model_dir="assets/event_class_models/",
+                 model_dir=Path("assets/event_class_models/"),
                  threshold=0.6 # we can set stuff like this here
                  ):
 
