@@ -1,5 +1,5 @@
 
-
+from dataclasses import dataclass
 from datetime import datetime
 from importlib import resources
 import logging
@@ -34,6 +34,13 @@ def country_name_dict(file_path: str | None=None) -> dict:
     country_name_dict.update({"": ""})
     country_name_dict.update({"IGO": "Intergovernmental Organization"})
     return country_name_dict
+
+
+@dataclass
+class ResolvedDate:
+    resolved_date: datetime | None
+    granularity: str | None
+    reason: str | None
 
 
 def resolve_date(event):
@@ -79,6 +86,167 @@ def resolve_date(event):
         event['date_resolved'] = resolved_date.strftime("%Y-%m-%d")
         event['date_raw'] = raw_date
         return event
+
+
+
+def _resolve_date(qa_string: str | None=None, ref_date: str | datetime.date | None=None) -> ResolvedDate:
+    """
+    Resolve Q&A string date to a specific date
+
+    Parameters
+    ----------
+    qa_string : str | None
+        Q&A span that contains the date, possibly a relative date reference.
+    ref_date : str | datetime.date | None
+        Date to use as reference date, e.g. article publication date. 
+
+    Returns
+    -------
+    ResolvedDate
+        Dataclass with resolved date and reason for resolution
+
+    Examples
+    --------
+    >>> _resolve_date("yesterday", "2021-01-01")
+    ResolvedDate(resolved_date=datetime(2021, 1, 1), granularity="day", reason="Resolved relative date with past reference")
+    """
+    na = set([None, ""])
+
+    # Either or both of the inputs might be missing, however, before we handle
+    # those possibilities, we need make sure we don't end up with a missing
+    # pub date due to failure to parse a non-missing string. 
+    if ref_date not in na:
+        ref_date = dateparser.parse(str(ref_date))
+        if ref_date is None:
+            return ResolvedDate(resolved_date=None, 
+                                granularity=None, 
+                                reason="Failed to parse publication date")
+
+    # Handle cases were inputs are incomplete
+    match (qa_string in na, ref_date in na):
+        case (True, True):
+            return ResolvedDate(resolved_date=None, 
+                                granularity=None,
+                                reason="No Q&A string or publication date")
+        case (True, False):
+            return ResolvedDate(resolved_date=ref_date, 
+                                granularity="uncertain", 
+                                reason="No Q&A string--using pub date")
+        case (False, True):
+            # Note: I don't want to fall back to today as base date. This is 
+            # not going to work well with the actual events coding when processing
+            # anything but recent data.
+            # Maybe in the future make that an optional parameter. 
+            return ResolvedDate(resolved_date=None, 
+                                granularity=None, 
+                                reason="No publication date")
+        case (False, False):
+            # We have both inputs and can proceed
+            base_date = ref_date
+
+    DateParser = dateparser.DateDataParser(languages=['en'], settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': "past"})
+    res = DateParser.get_date_data(qa_string)
+
+    # Did we succeed?
+    if res.date_obj is not None:
+        res = ResolvedDate(resolved_date=res.date_obj, 
+                           granularity=res.period, 
+                           reason="Resolved relative date with past reference")
+    else:
+        # Check whether we have a future reference
+        if re.search("next|later", qa_string):
+            qa_string = re.sub(r"next|later", "", qa_string).strip()
+            DateParser = dateparser.DateDataParser(languages=['en'], settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': "future"})
+            res = DateParser.get_date_data(qa_string)
+
+            if res.date_obj is not None:
+                res = ResolvedDate(resolved_date=res.date_obj, 
+                                   granularity=res.period,
+                                   reason="Resolved relative date with future reference")
+            else:
+                # If still not resolved, use publication date
+                res = ResolvedDate(resolved_date=res.date_obj, 
+                                   granularity="uncertain",
+                                   reason="dateparser failed to convert future relative date--using pub date")
+        # Nope, no future reference so dateparser just failed
+        else:
+            res = ResolvedDate(resolved_date=ref_date, 
+                               granularity= "uncertain", 
+                               reason="dateparser failed to convert relative date--using pub date")
+    
+    return res
+    
+
+
+
+def pick_event_loc(search_term: str | None, 
+                   geolocated_ents: list[dict | None],
+                   geo_overlap_threshold = 0.5,
+                   geo_confidence_threshold = 0.85) -> dict:
+    na_equiv = [None, "", "N/A", "NA", "n/a", "na"]
+
+    # Handle all 4 combinations of missing search term or empty geo_entities
+    match (search_term in na_equiv, not geolocated_ents):
+        case (False, False):
+            # Both search term and geo entities are present, fallthrough to 
+            # logic below
+            pass
+        case (False, True):
+            return {"event_loc": None, "reason": "no geo entities"}
+        case (True, False):
+            return {"event_loc": None, "reason": "no search term"}
+        case (True, True):
+            return {"event_loc": None, "reason": "no search term and no geo entities"}
+
+    # Calculate word overlap fraction between search term and each geo entity 
+    # search name
+    overlaps = [word_overlap_fraction(search_term, geo_entity.get("search_name", "")) for geo_entity in geolocated_ents]
+    if max(overlaps) < geo_overlap_threshold:
+        return {"event_loc": None, "reason": "no sufficient overlap in search terms"}
+    best_match = geolocated_ents[overlaps.index(max(overlaps))]
+    if best_match.get("score", 0.0) < geo_confidence_threshold:
+        return {"event_loc": None, "reason": "no sufficient confidence in geo entity"}
+    return {"event_loc": best_match, "reason": "success"}
+
+
+def word_overlap_fraction(word1: str, word2: str) -> float:
+    """
+    Calculate the overlap between two words as a fraction of their aligned length.
+    
+    Args:
+        word1: First word
+        word2: Second word
+    
+    Returns:
+        Float between 0 and 1 representing the overlap ratio
+    """
+    if not word1 or not word2:
+        return 0.0
+    
+    if word1 == word2:
+        return 1.0
+    
+    max_overlap = 0
+    len1, len2 = len(word1), len(word2)
+    
+    # Check all possible alignments
+    # word1 shifted right relative to word2
+    for i in range(len1):
+        overlap = sum(1 for j in range(min(len1 - i, len2)) 
+                     if word1[i + j] == word2[j])
+        max_overlap = max(max_overlap, overlap)
+    
+    # word2 shifted right relative to word1
+    for i in range(1, len2):
+        overlap = sum(1 for j in range(min(len2 - i, len1)) 
+                     if word2[i + j] == word1[j])
+        max_overlap = max(max_overlap, overlap)
+    
+    # The aligned length is the minimum of the two word lengths
+    # at the best alignment position
+    return max_overlap / max(len1, len2)
+
+
 
 
 class Formatter:
