@@ -1,10 +1,11 @@
 
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import asdict, dataclass
+from datetime import date, datetime
 from importlib import resources
 import logging
 import os
 import re
+import warnings
 
 import dateparser
 import jsonlines
@@ -17,7 +18,6 @@ logger = logging.getLogger(__name__)
 
 
 # silence dateparser warning. https://github.com/scrapinghub/dateparser/issues/1013
-import warnings
 warnings.filterwarnings(
     "ignore",
     message="The localize method is no longer necessary, as this time zone supports the fold attribute",
@@ -36,68 +36,44 @@ def country_name_dict(file_path: str | None=None) -> dict:
     return country_name_dict
 
 
-@dataclass
-class ResolvedDate:
-    resolved_date: datetime | None
-    granularity: str | None
-    reason: str | None
-
-
-def resolve_date(event):
+def resolve_date(event: dict) -> dict:
     """
     Create a new 'date_resolved' key with a date in YYYY-MM-DD format
-
-    TODO:
-    include granularity details (e.g. month, year.)?
     >>> DateDataParser().get_date_data('March 2015')
     DateData(date_obj=datetime.datetime(2015, 3, 16, 0, 0), period='month', locale='en')
     """
-    if 'DATE' not in event['attributes'].keys():
-        pub_date = dateparser.parse(event['pub_date']).strftime("%Y-%m-%d")
-        event['date_resolved'] = pub_date
-        event['date_raw'] = "No date detected--using publication date"
-        return event
-    if not event['attributes']['DATE']:
-        pub_date = dateparser.parse(event['pub_date']).strftime("%Y-%m-%d")
-        event['date_resolved'] = pub_date
-        event['date_raw'] = "<No date detected--using publication date>"
-        return event
-    
-    base_date = dateparser.parse(event['pub_date'])
-    raw_date = event['attributes']['DATE'][0]['text']
-    print(f"raw_date: {raw_date}")
-    
-    resolved_date = dateparser.parse(date_string=raw_date, settings={'RELATIVE_BASE': base_date,
-                                                                    'PREFER_DATES_FROM': "past"})
-    if not resolved_date:
-        if re.search("next|later", raw_date):
-            raw_date = re.sub(r"next|later", "", raw_date).strip()
-            resolved_date = dateparser.parse(date_string=raw_date, settings={'RELATIVE_BASE': base_date,
-                                                                    'PREFER_DATES_FROM': "future"})
-            if resolved_date:
-                event['date_resolved'] = resolved_date.strftime("%Y-%m-%d")
-                event['date_raw'] = raw_date
-                return event
-    if not resolved_date:
-        event['date_resolved'] = event['pub_date']
-        event['date_raw'] = "<dateparser failed to convert relative date--using pub date>"
-        return event
-    else:
-        event['date_resolved'] = resolved_date.strftime("%Y-%m-%d")
-        event['date_raw'] = raw_date
-        return event
+    date_string = event.get('attributes', {}).get('date', [{}])[0]
+    pub_date = event.get('pub_date', None)
+    res = _resolve_date(date_string=date_string, ref_date=pub_date)
+    event['date_resolved'] = asdict(res)
+    return event
 
 
+@dataclass
+class ResolvedDate:
+    resolved_date: datetime | str | None
+    granularity: str | None
+    reason: str | None
 
-def _resolve_date(qa_string: str | None=None, ref_date: str | datetime.date | None=None) -> ResolvedDate:
+    def _post_init__(self):
+        if isinstance(self.resolved_date, str):
+            try:
+                self.resolved_date = datetime.strptime(self.resolved_date, "%Y-%m-%d")
+            except ValueError:
+                raise ValueError(f"resolved_date string not in YYYY-MM-DD format: {self.resolved_date}")
+
+
+def _resolve_date(date_string: str | None=None, 
+                  ref_date: str | datetime | date | None=None
+                  ) -> ResolvedDate:
     """
     Resolve Q&A string date to a specific date
 
     Parameters
     ----------
-    qa_string : str | None
-        Q&A span that contains the date, possibly a relative date reference.
-    ref_date : str | datetime.date | None
+    date_string : str | None
+        Text that contains a date, possibly a relative date reference.
+    ref_date : str | datetime | date | None
         Date to use as reference date, e.g. article publication date. 
 
     Returns
@@ -116,63 +92,61 @@ def _resolve_date(qa_string: str | None=None, ref_date: str | datetime.date | No
     # those possibilities, we need make sure we don't end up with a missing
     # pub date due to failure to parse a non-missing string. 
     if ref_date not in na:
+        orig = ref_date
         ref_date = dateparser.parse(str(ref_date))
         if ref_date is None:
-            return ResolvedDate(resolved_date=None, 
-                                granularity=None, 
-                                reason="Failed to parse publication date")
+            logger.warning(f"<Failed to parse reference date: {orig}>") 
 
     # Handle cases were inputs are incomplete
-    match (qa_string in na, ref_date in na):
+    match (date_string in na, ref_date is None or ref_date in na):
         case (True, True):
             return ResolvedDate(resolved_date=None, 
                                 granularity=None,
-                                reason="No Q&A string or publication date")
+                                reason=f"<No date string or publication date, date_string={date_string}, ref_date={ref_date}>")
         case (True, False):
             return ResolvedDate(resolved_date=ref_date, 
                                 granularity="uncertain", 
-                                reason="No Q&A string--using pub date")
+                                reason="<No date string, using pub date>")
         case (False, True):
-            # Note: I don't want to fall back to today as base date. This is 
-            # not going to work well with the actual events coding when processing
-            # anything but recent data.
-            # Maybe in the future make that an optional parameter. 
+            # Don't fall back to 'today' as backup date, but maybe in the future
+            # make that a configurable option
             return ResolvedDate(resolved_date=None, 
                                 granularity=None, 
-                                reason="No publication date")
+                                reason="<No publication date>")
         case (False, False):
             # We have both inputs and can proceed
             base_date = ref_date
 
     DateParser = dateparser.DateDataParser(languages=['en'], settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': "past"})
-    res = DateParser.get_date_data(qa_string)
+    res = DateParser.get_date_data(date_string)
 
     # Did we succeed?
     if res.date_obj is not None:
         res = ResolvedDate(resolved_date=res.date_obj, 
                            granularity=res.period, 
-                           reason="Resolved relative date with past reference")
+                           reason="<Resolved relative date with past reference>")
     else:
         # Check whether we have a future reference
-        if re.search("next|later", qa_string):
-            qa_string = re.sub(r"next|later", "", qa_string).strip()
+        future_pattern = r"next|later"
+        if re.search(future_pattern, date_string):
+            date_string = re.sub(future_pattern, "", date_string).strip()
             DateParser = dateparser.DateDataParser(languages=['en'], settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': "future"})
-            res = DateParser.get_date_data(qa_string)
+            res = DateParser.get_date_data(date_string)
 
             if res.date_obj is not None:
                 res = ResolvedDate(resolved_date=res.date_obj, 
                                    granularity=res.period,
-                                   reason="Resolved relative date with future reference")
+                                   reason="<Resolved relative date with future reference>")
             else:
                 # If still not resolved, use publication date
-                res = ResolvedDate(resolved_date=res.date_obj, 
+                res = ResolvedDate(resolved_date=ref_date, 
                                    granularity="uncertain",
-                                   reason="dateparser failed to convert future relative date--using pub date")
+                                   reason="<dateparser failed to convert future relative date, using pub date>")
         # Nope, no future reference so dateparser just failed
         else:
             res = ResolvedDate(resolved_date=ref_date, 
                                granularity= "uncertain", 
-                               reason="dateparser failed to convert relative date--using pub date")
+                               reason="<dateparser failed to convert relative date, using pub date>")
     
     return res
     
@@ -531,12 +505,18 @@ class Formatter:
         for n, event in enumerate(event_list):
             #if n == 0:
             #    print(e)
-            event = self.find_event_loc(event)
-            event = self.add_meta(event)
+            #event = self.find_event_loc(event)
+            #event = self.add_meta(event)
+            event["event_location"] = pick_event_loc(
+                event.get('attributes', ["N/A"]).get('location', ["N/A"])[0],
+                event.get('geolocated_ents', []),
+                geo_confidence_threshold=self.geo_threshold
+            )
             try:
                 event = resolve_date(event)
             except Exception as exception:
                 logger.warning(f"{exception} parsing date for event number {n}")
+        
         if return_raw:
             return event_list
         else:

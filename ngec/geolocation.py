@@ -6,8 +6,10 @@ import pandas as pd
 import os
 import logging
 
+
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
 
 def country_name_dict(base_path):
     file = os.path.join(base_path, "countries.csv")
@@ -97,29 +99,3 @@ class GeolocationModel:
         return story_list
 
 
-
-if __name__ == "__main__":
-    #import streamlit as st
-
-    #@st.cache(allow_output_mutation=True, suppress_st_warning=True)
-    #def make_ag():
-    #    ag = ActorResolver()
-    #    return ag
-
-    #ag = make_ag()
-
-    #query_text = st.text_input("Enter an actor string")
-    #query_date = st.text_input("Enter a date", "today")
-
-    #best = ag.agent_to_code(query_text, query_date)
-    #st.write(best)
-    import jsonlines
-
-    ag = ActorResolver()
-    with jsonlines.open("PLOVER_coding_201908_with_attr.jsonl", "r") as f:
-        data = list(f.iter())
-
-    out = ag.process(data)
-    with jsonlines.open("PLOVER_coding_201908_with_actor.jsonl", "w") as f:
-        f.write_all(out)
-    

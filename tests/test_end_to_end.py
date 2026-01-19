@@ -20,8 +20,6 @@ es_client_local = setup_es_client(hosts=["localhost"], port=9200)
 
 
 def test_end_to_end_with_one_story(es_client_local):
-    pytest.skip("Haven't finished implementation")
-
     setup_logging()
 
     nlp = load_nlp()    
@@ -48,10 +46,10 @@ def test_end_to_end_with_one_story(es_client_local):
     story_list = geolocation_model.process(story_list, doc_list)
     event_list = utilities.stories_to_events(story_list, doc_list)
     event_list = attribute_model.process(event_list)
-    # works through here, but the actor resolver process is still setup for
-    # old Q&A style AM output; ditto with formatter I suspect
     event_list = actor_resolution_model.process(event_list)
-    cleaned_events = formatter.process(event_list)
+    cleaned_events = formatter.process(event_list, return_raw=True)
+    # TODO these aren't really cleaned up events yet, big mess of all outputs
+    assert cleaned_events is not None
 
 
 # Just want to make sure it doesn't accidentally only work with a single member
