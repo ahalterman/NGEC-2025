@@ -14,10 +14,6 @@ from ngec import Formatter
 from ngec import utilities
 from ngec import load_nlp, setup_logging
 
-# temp test helper
-from ngec.es_client import setup_es_client
-es_client_local = setup_es_client(hosts=["localhost"], port=9200)
-
 
 def test_end_to_end_with_one_story(es_client_local):
     setup_logging()
