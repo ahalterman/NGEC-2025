@@ -13,6 +13,7 @@ import dateparser
 import jsonlines
 import numpy as np
 import pandas as pd
+import platformdirs
 import pylcs
 import spacy
 import torch
@@ -49,6 +50,20 @@ def get_base_path():
     except:
         # Final fallback
         return './ngec/assets'
+
+
+def get_cache_path():
+    """
+    Get platform-appropriate cache directory for computed embeddings.
+
+    Returns:
+        Path: Cache directory path (e.g., ~/.cache/plover/ on Linux/Mac)
+    """
+    cache_dir = Path(platformdirs.user_cache_dir("plover", "ngec"))
+    # Create embeddings subdirectory
+    embeddings_cache = cache_dir / "embeddings"
+    embeddings_cache.mkdir(parents=True, exist_ok=True)
+    return embeddings_cache
 
 
 DEFAULT_BASE_PATH = get_base_path()
@@ -821,6 +836,7 @@ class AgentMatcher:
                  trf_model=None,
                  base_path=DEFAULT_BASE_PATH,
                  agents_file="PLOVER_agents.txt",
+                 cache_path=None,
                  device=None,
                  text_processor=None,
                  use_classifier=True):
@@ -831,11 +847,13 @@ class AgentMatcher:
             trf_model: Sentence transformer model
             base_path: Path to directory containing agent files
             agents_file: Name of the PLOVER/CAMEO agents file
+            cache_path: Path to cache directory for computed embeddings (default: platform cache dir)
             device: Device to use for inference ('cuda' or None)
             text_processor: TextPreProcessor instance
             use_classifier: Whether to use classifier-based matching (default True)
         """
         self.base_path = base_path
+        self.cache_path = cache_path if cache_path is not None else get_cache_path()
         self.device = device
         self.agents_file = agents_file
         self.use_classifier = use_classifier
@@ -949,42 +967,45 @@ class AgentMatcher:
     def _load_embeddings(self):
         """
         Load pre-computed embedding matrices or compute and save them if needed.
-        
+
+        Embeddings are cached in a user-writable cache directory to avoid modifying
+        installed package files. The cache key is based on the agents file content
+        hash and filename, allowing multiple agent files to coexist.
+
         Returns:
             numpy.ndarray: Matrix of agent pattern embeddings
         """
-        # Check if the agents file and embedding matrix are mismatched
-        hash_file = os.path.join(self.base_path, "PLOVER_agents.hash")
-        try:
-            with open(hash_file, "r") as f:
-                existing_hash = f.read()
-        except FileNotFoundError:
-            existing_hash = ""
-            
-        # Get current hash of agents file
+        # Read agents file and compute hash for cache key
         agent_file = os.path.join(self.base_path, self.agents_file)
         with open(agent_file, "r", encoding="utf-8") as f:
-            data = f.read() 
+            data = f.read()
         current_hash = hash(data)
-        
-        # Recompute embeddings if hash mismatch
-        if str(existing_hash) != str(current_hash):
-            logger.info("Agents file and pre-computed matrix are mismatched. Recomputing...")
-            patterns = [agent['pattern'] for agent in self.agents]
-            trf_matrix = self.trf.encode(patterns, show_progress_bar=False, device=self.device)
-            
-            # Save new embeddings and hash
-            file_bert = os.path.join(self.base_path, "bert_matrix.pkl")
-            with open(file_bert, "wb") as f:
-                pickle.dump(trf_matrix, f)
-            with open(hash_file, "w") as f:
-                f.write(str(current_hash))
-        
-        # Load embeddings
-        logger.info("Reading in BERT matrix")
-        file_bert = os.path.join(self.base_path, "bert_matrix.pkl")
-        with open(file_bert, "rb") as f:
-            return pickle.load(f)
+
+        # Create cache directory based on hash and filename
+        # This allows different agent files to have separate caches
+        cache_key = f"{current_hash}_{Path(self.agents_file).stem}"
+        cache_dir = Path(self.cache_path) / cache_key
+        cache_file = cache_dir / "bert_matrix.pkl"
+
+        # Check if cached embeddings exist and are valid
+        if cache_file.exists():
+            logger.info(f"Loading cached embeddings from {cache_file}")
+            with open(cache_file, "rb") as f:
+                return pickle.load(f)
+
+        # Cache miss - compute embeddings
+        logger.info(f"Computing embeddings for {len(self.agents)} agent patterns from {self.agents_file}")
+        logger.info(f"This is a one-time computation that will be cached for future use")
+        patterns = [agent['pattern'] for agent in self.agents]
+        trf_matrix = self.trf.encode(patterns, show_progress_bar=False, device=self.device)
+
+        # Save to cache
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with open(cache_file, "wb") as f:
+            pickle.dump(trf_matrix, f)
+        logger.info(f"Embeddings cached to {cache_file}")
+
+        return trf_matrix
 
     def trf_agent_match(self, text, country="", method="cosine", threshold=THRESHOLD_COSINE_SIMILARITY):
         """
