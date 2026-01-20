@@ -24,7 +24,7 @@ def test_nat4(ag):
 def test_nat5(ag):
     cc, text = ag.country_detector.search_nat("four Saudi men")
     assert cc == "SAU"
-    assert text == "four  men"
+    assert text == "four men"
 
 def test_nat6(ag):
     cc, text = ag.country_detector.search_nat("an American destroyer")
