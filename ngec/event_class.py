@@ -1,3 +1,6 @@
+
+from typing import Any, Protocol, List
+
 from sentence_transformers import SentenceTransformer
 from sklearn.linear_model import LogisticRegression
 # a safer pickle alternative
@@ -5,7 +8,27 @@ import skops.io as sio
 import numpy as np
 
 
-class EventClass:
+
+class EventClassifier(Protocol):
+    def process(self, story_list: List[dict[str, Any]]) -> List[dict[str, Any]]:
+        """Process a list of stories to detect the event class.
+        
+        Parameters
+        ----------
+        story_list: list of dicts
+          Each dictionary must have a 'event_text' key with the full text of the story.
+        
+        Returns
+        -------
+        story_list: list of dicts
+          Each story dictionary now contains an 'event_type' key with a list of detected events (str). E.g.: 
+          'event_type': ['SANCTION', 'MOBILIZE']
+        """
+        ...
+
+
+
+class EventClass(EventClassifier):
     def __init__(self, 
                  model_dir="ngec/assets/event_models/",
                  threshold=0.6, 
