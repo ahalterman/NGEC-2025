@@ -9,15 +9,20 @@ import os
 import random
 import pickle
 
-from actor_resolution import WikiMatcher, WikiClient
-from actor_resolution import TextPreProcessor, CountryDetector
+from NGEC.actor_resolution import WikiMatcher, WikiClient
+from NGEC.actor_resolution import TextPreProcessor, CountryDetector
 
 
 import spacy
 nlp = spacy.load("en_core_web_lg")
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
+
+# Do this for all loggers
+for log_name in logging.root.manager.loggerDict:
+    log = logging.getLogger(log_name)
+    log.setLevel(logging.INFO)
 
 # Initialize WikiMatcher after logger setup
 wiki_client = WikiClient()
@@ -33,12 +38,20 @@ results = wiki_client.run_wiki_search("Islamic State", use_importance=False)
 [r['raw_es_score'] for r in results][0:10]
 
 
-wiki_df = pd.read_csv("../setup/train_wiki_model/wiki_gold_standard_1.csv")
-wiki_df2 = pd.read_csv("../setup/train_wiki_model/wiki_gold_standard_2.csv")
+wiki_df = pd.read_csv("wiki_gold_standard_1.csv")
+wiki_df2 = pd.read_csv("wiki_gold_standard_2.csv")
 wiki_df = pd.concat([wiki_df, wiki_df2])
 wiki_df['Correct Wiki Title'] = wiki_df['Correct Wiki Title'].str.strip()
 wiki_df['Correct Wiki Title'] = wiki_df['Correct Wiki Title'].replace({'none': 'None'})
+wiki_df['Correct Wiki Title'] = wiki_df['Correct Wiki Title'].replace({'': 'None'})
 wiki_df = wiki_df.reset_index(drop=True)
+
+wiki_df.shape
+# (1966, 5)
+wiki_df['Document'].nunique()
+# 290
+wiki_df[wiki_df['Correct Wiki Title'] == 'None'].shape
+# 102
 
 #### TUNE WIKI BOOSTS ####
 
@@ -68,16 +81,13 @@ def check_results(wiki_df, config=None):
     return present_mean
 
 check_results(wiki_df, config)
+# mean present with 50: 0.873855544252289
+# Around 1:34 minutes 
+config['max_results'] = 200
+check_results(wiki_df, config)
+# Mean present: 0.9359104781281791
+# Around 2:10, but there might be some caching going on
 
-# Do a hyperparameter search (use_importance, max_results, boosts)
-# title_exact_boost=250,
-# title_fuzzy_boost=50,
-# redirects_exact_boost=100,
-# redirects_fuzzy_boost=50,
-# alternative_names_boost=100,
-# alternative_names_fuzzy_boost=20,
-# short_desc_boost=10,
-# intro_para_boost=5,
 
 # Define a set of configurations to test
 configurations = [
@@ -168,6 +178,10 @@ all_results = []
 for index, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
 
     text_input = row['Document']
+    # if text_input is NaN, set to empty string
+    if pd.isna(text_input):
+        text_input = ""
+    text_input = text_input.strip()
     actor_text_for_wiki = row['Query']
     correct_title = row['Correct Wiki Title']
     
@@ -207,7 +221,7 @@ for index, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
         print(f"Error processing row {index}: {e}")
         pred_title = None
         error = str(e)
-        logging.debug(f"Error occurred during lookup: {error}")
+        logging.info(f"Error occurred during lookup: {error}")
         continue
 
     # Save the raw results
@@ -226,6 +240,7 @@ for index, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
     score_df['task'] = index
     score_df['passage'] = passage_context
     score_df['full_text'] = text_input
+    score_df['text_is_empty'] = text_input == ""
     score_dfs.append(score_df)
 
 # pickle the results
@@ -266,13 +281,13 @@ test_df = all_scores[all_scores['task'].isin(test_tasks)]
 
 # Verify the split worked as expected
 print(f"Training set: {len(train_tasks)} tasks, {len(train_df)} rows")
-# Training set: 1451 tasks, 277594 rows
+# Training set: 1565 tasks, 299048 rows
 print(f"Test set: {len(test_tasks)} tasks, {len(test_df)} rows")
-# Test set: 363 tasks, 69081 rows
-
+# Test set: 392 tasks, 74158 rows
 
 omit_columns = ['y', 'correct_title', 'title', 'combined_score', 'full_text', # 'combined_score_norm',
-                'task', 'passage', 'query_term_orig', 'query_term']#, 'title_sim', 'title_sim_norm']
+                'task', 'passage', 'query_term_orig', 'query_term',
+                'short_desc', 'intro_para', 'categories', 'infobox']#, 'title_sim', 'title_sim_norm']
 
 X_train = train_df.drop(columns=omit_columns)
 X_test = test_df.drop(columns=omit_columns)
@@ -378,6 +393,7 @@ np.mean(correct)
 # np.float64(0.740)
 # 0.727
 # 0.802
+# 82.9%
 
 for n, i in enumerate(true_titles[0:40]):
     correct = "Correct" if (pred_titles[n] == i) else "INCORRECT"
@@ -424,9 +440,8 @@ def run_ablation(drop_vars: list,
                  train_n: int=-1,
                  train_df_list=train_df_list, 
                  test_df_list=test_df_list,
+                 omit_columns=omit_columns,
                  seed=1):
-    omit_columns = ['y', 'correct_title', 'title', 'combined_score', # 'combined_score_norm',
-                    'task', 'passage', 'query_term', 'query_term_orig']#, 'title_sim', 'title_sim_norm']
     omit_columns += drop_vars
     print(f"Running ablation with dropped variables: {drop_vars}")
     if train_n > 0:
@@ -509,8 +524,10 @@ for drop_vars in drop_vars_list:
 ablation_df = pd.DataFrame(ablation_results)
 # sort by f1
 ablation_df.sort_values('acc', ascending=False, inplace=True)
-ablation_df['norm_acc'] = ablation_df['acc'] / np.mean(possible)
+#ablation_df['norm_acc'] = ablation_df['acc'] / np.mean(possible)
 ablation_df
+
+ablation_df.to_csv("ablation_results.csv", index=False)
 
 ablation_n_results = []
 for seed in [1, 2, 3, 4, 5]:
