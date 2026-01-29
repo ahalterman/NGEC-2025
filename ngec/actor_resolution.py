@@ -29,7 +29,7 @@ from textacy.preprocessing.remove import accents as remove_accents
 from xgboost import XGBClassifier
 
 
-from .wiki_matcher import WikiClient
+from .actors.wiki_matcher import WikiClient
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())

@@ -1,6 +1,6 @@
 import pytest
 
-from ngec.wiki_matcher import WikiClient
+from ngec.actors.wiki_matcher import WikiClient
 
 @pytest.mark.external
 def test_WikiClient(es_client_external):
