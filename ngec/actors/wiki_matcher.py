@@ -391,7 +391,7 @@ class WikiMatcher:
         best_article = matcher.query_wiki("Barack Obama")
     """
 
-    TODO #26: allow overriding models; need to check this works correctly as implemented
+    # TODO #26: allow overriding models; need to check this works correctly as implemented
     
     def __init__(self, 
                  es_client: Elasticsearch,
