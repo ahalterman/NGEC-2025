@@ -3,11 +3,10 @@ from copy import deepcopy
 from importlib import resources
 import logging
 import os
-from pathlib import Path
 import pickle
 import re
 import time
-from typing import Literal
+
 
 import dateparser
 import jsonlines
@@ -24,8 +23,8 @@ from rich.progress import track
 from scipy.spatial.distance import cdist
 
 
-from .actors.common import ModelManager, TextPreProcessor
-from .actors.wiki_matcher import WikiClient, WikiSearcher, WikiMatcher
+from .actors.common import ModelManager, TextPreProcessor, clean_query, CountryDetector
+from .actors.wiki_matcher import WikiMatcher
 
 
 logger = logging.getLogger(__name__)
@@ -68,153 +67,6 @@ THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
 THRESHOLD_CONTEXT_MATCH = 0.6 # 0.7
 THRESHOLD_HIGH_CONFIDENCE = 0.90
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
-
-
-
-
-#######################################################
-# Country Detection
-#######################################################
-
-class CountryDetector:
-    """
-    Country detection and pattern matching utilities.
-    
-    This class provides methods for detecting countries and nationalities
-    in text.
-    
-    Example:
-        >>> detector = CountryDetector()
-        >>> detector.search_nat("German Chancellor")
-        ("DEU", "Chancellor")
-    """
-    
-    def __init__(self, country_csv_path: str | None = None):
-        """
-        Initialize the country detector.
-        
-        Args:
-            country_csv_path: Path to a countries.csv-like file; if None, uses 
-            the built-in asset
-        """
-        self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_country_dict(country_csv_path=country_csv_path)
-    
-    def _load_country_dict(self, country_csv_path: str | None = None):
-        """
-        Construct a list of regular expressions to find countries by their name and nationality.
-        
-        Args:
-            country_csv_path: Path to a countries.csv-like file; if None, uses 
-            the built-in asset
-            
-        Returns:
-            tuple: Two lists of pattern tuples for direct and indirect country mentions
-        """
-        if country_csv_path is None:
-            # Load from package resources
-            with (resources.files('ngec') / 'assets' / 'countries.csv').open('r') as f:
-                countries = pd.read_csv(f)
-        else:
-            countries = pd.read_csv(country_csv_path)
-        
-        # Direct country name/nationality patterns
-        nat_list = []
-        nat_list_name = []
-        for _, row in countries.iterrows():
-            # Handle nationalities
-            nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
-            for nat in nationalities:
-                pattern = (re.compile(nat + r"(?=[^a-z]|$)"), row['CCA3'])
-                pattern_name = (re.compile(nat + r"(?=[^a-z]|$)"), row['Name'])
-                nat_list.append(pattern)
-                nat_list_name.append(pattern_name)
-            
-            # Handle country names
-            pattern = (re.compile(row['Name']), row['CCA3'])
-            pattern_name = (re.compile(row['Name']), row['Name'])
-            nat_list.append(pattern)
-            nat_list_name.append(pattern_name)
-
-        
-        # Category patterns (for "of X" or "in X" constructions)
-        nat_list_cat = []
-        nat_list_name_cat = []
-        for prefix in ['of ', 'in ']: 
-            for _, row in countries.iterrows():
-                # Handle nationalities in categories
-                nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
-                for nat in nationalities:
-                    pattern = (re.compile(prefix + nat), row['CCA3'])
-                    pattern_name = (re.compile(prefix + nat), row['Name'])
-                    nat_list_cat.append(pattern)
-                    nat_list_name_cat.append(pattern_name)
-                
-                # Handle country names in categories
-                pattern = (re.compile(prefix + row['Name']), row['CCA3'])
-                pattern_name = (re.compile(prefix + row['Name']), row['Name'])
-                nat_list_cat.append(pattern)
-                nat_list_name_cat.append(pattern_name)
-        
-        return nat_list, nat_list_cat, nat_list_name, nat_list_name_cat
-
-    def search_nat(self, 
-                   text: str, 
-                   method: Literal["longest", "first"] = "longest",
-                   categories: bool = False, 
-                   use_name: bool = False
-                   ) -> tuple[str | None, str]:
-        """
-        Search for country names/nationalities in text and return canonical form.
-        
-        Args:
-            text: Text to search for country mentions
-            method: Method to use when multiple countries are found ('longest' or 'first')
-            categories: Whether to use category patterns (of X, in X)
-            use_name: Whether to return the *name* of the country instead of the ISO code
-            
-        Returns:
-            tuple: (country_code, trimmed_text) or (None, original_text) if no country found
-        """
-        if method not in ["longest", "first"]:
-            raise ValueError(f"search_nat sorting option must be one of ['longest', 'first']. You gave {method}")
-
-        if not text:
-            return None, text
-            
-        # Normalize text for consistent matching
-        text = unidecode.unidecode(text)
-        found = []
-        
-        # Use appropriate pattern list based on categories flag
-        if use_name:
-            patterns = self.nat_list_name_cat if categories else self.nat_list_name
-        else:
-            patterns = self.nat_list_cat if categories else self.nat_list
-        
-        # Find all matching countries
-        for pattern, country in patterns:
-            match = re.search(pattern, text)
-            if match:
-                # Remove the matched country/nationality from text
-                trimmed_text = re.sub(pattern, "", text).strip()
-                trimmed_text = re.sub(r" +", " ", trimmed_text).strip()
-                found.append((country, trimmed_text.strip(), match))
-        
-        # Return if no countries found
-        if not found:
-            return None, text
-            
-        # Return based on requested method
-        if method == "longest":
-            # Return the longest match to handle e.g. "Saudi", "Britain"
-            found.sort(key=lambda x: len(x[1]))
-        elif method == "first":
-            # Return the first occurrence in the text
-            found.sort(key=lambda x: x[2].span()[0])
-        else:
-            pass  # This should not happen due to earlier check
-        return found[0][0:2]
-            
 
 
 
@@ -280,6 +132,8 @@ class AgentMatcher:
         matcher = AgentMatcher(trf_model, "./assets")
         match = matcher.trf_agent_match("Chancellor", country="DEU")
     """
+
+    # TODO #26: allow overriding assets/models
     
     def __init__(self,
                  trf_model=None,
@@ -310,7 +164,7 @@ class AgentMatcher:
 
         # Initialize resources
         if trf_model is None:
-            model_manager = ModelManager(base_path, device)
+            model_manager = ModelManager(device)
             self.trf = model_manager.load_trf_model()
         else:
             self.trf = trf_model
@@ -472,7 +326,7 @@ class AgentMatcher:
         # Handle empty inputs
         if country is None:
             country = ""
-        text = self.text_processor.clean_query(text)
+        text = clean_query(text)
         if not text:
             return None
 
@@ -584,12 +438,12 @@ class AgentMatcher:
             
         # Extract country and clean text
         country, trimmed_text = country_detector.search_nat(text)
-        trimmed_text = self.text_processor.clean_query(trimmed_text)
+        trimmed_text = clean_query(trimmed_text)
         
         # Optionally strip entities
         if strip_ents:
             try:
-                model_manager = ModelManager(self.base_path, self.device)
+                model_manager = ModelManager(self.device)
                 doc = self.nlp(text)
                 trimmed_text = self.text_processor.strip_ents(doc)
             except IndexError:
@@ -620,6 +474,8 @@ class WikiParser:
         offices = parser.parse_offices(wiki_article['infobox'])
         actor_codes = parser.wiki_to_code(wiki_article)
     """
+
+    # TODO #26: allow overriding assets/models
     
     # Actor type priority dictionary - used for sorting/ranking actor codes
     ACTOR_TYPE_PRIORITIES = {
@@ -664,7 +520,7 @@ class WikiParser:
             self.text_processor = text_processor
             
         if agent_matcher is None:
-            model_manager = ModelManager(base_path, device)
+            model_manager = ModelManager(device)
             trf_model = model_manager.load_trf_model()
             self.agent_matcher = AgentMatcher(trf_model, 
                                               base_path=base_path, 
@@ -880,7 +736,7 @@ class WikiParser:
         elif current_offices:
             # Handle current offices
             for office in current_offices:
-                office_text = self.text_processor.clean_query(office['office'])
+                office_text = clean_query(office['office'])
                 code = self.agent_matcher.short_text_to_agent(office_text, country_detector=self.country_detector)
                 if code:
                     code['actor_wiki_job'] = office_text
@@ -1481,6 +1337,8 @@ class ActorResolver:
         code = resolver.actor_to_code("German Chancellor")
         processed_events = resolver.process(events)
     """
+
+    # TODO #26: allow overriding assets/models
     
     def __init__(self, 
                 spacy_model=None,
@@ -1488,7 +1346,8 @@ class ActorResolver:
                 save_intermediate=False,
                 wiki_sort_method="neural",
                 gpu=False,
-                es_client: None | Elasticsearch = None,):
+                es_client: None | Elasticsearch = None,
+                ):
         """
         Initialize the ActorResolver with the necessary models and data.
         
@@ -1499,19 +1358,21 @@ class ActorResolver:
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
         """
+        # TODO: #26, make it possible to override models
+        # This impacts all the other related classes here
+
         # Set device for model inference
         self.device = 'cuda' if gpu else None
         
         # Initialize utility classes
         self.text_processor = TextPreProcessor()
         self.cache_manager = CacheManager()
-        self.country_detector = CountryDetector(base_path + "/countries.csv")
+        self.country_detector = CountryDetector()
         
         # Initialize model manager and load models
-        self.model_manager = ModelManager(base_path, self.device)
+        self.model_manager = ModelManager(self.device)
         self.nlp = spacy_model if spacy_model else self.model_manager.load_spacy_lg()
         self.trf = self.model_manager.load_trf_model()
-        self.actor_sim = self.model_manager.load_actor_sim_model()
         
         # Initialize agent matcher
         self.agent_matcher = AgentMatcher(
@@ -1522,20 +1383,11 @@ class ActorResolver:
         )
         
         # Initialize Wikipedia components
-        self.wiki_client = WikiClient(es_client=es_client)
-        self.wiki_searcher = WikiSearcher(
-            self.wiki_client, 
-            self.text_processor
-        )
         self.wiki_matcher = WikiMatcher(
-            base_path = base_path,
-            wiki_searcher=self.wiki_searcher, 
-            text_processor=self.text_processor, 
-            trf_model=self.trf, 
-            actor_sim_model=self.actor_sim, 
+            es_client = es_client,
+            model_manager = self.model_manager, 
+            wiki_sort_method=wiki_sort_method,
             device=self.device, 
-            nlp=self.nlp,
-            wiki_sort_method=wiki_sort_method
         )
         self.wiki_parser = WikiParser(
             self.country_detector,

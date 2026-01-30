@@ -3,19 +3,26 @@ Functionality for matching a query term to a Wikipedia article. Relies on a
 Elasticsearch index of Wikipedia data.
 """
 
+from importlib import resources
 import logging
+from pathlib import Path
 import re
+from typing import Literal
 
 from elasticsearch import Elasticsearch
 from elasticsearch_dsl import Search
 import numpy as np
 import pandas as pd
 import pylcs
+from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
+from spacy.language import Language
+from spacy.tokens import Doc
 from textacy.preprocessing.remove import accents as remove_accents
 import torch
+from xgboost import XGBClassifier
 
-from .common import ModelManager, TextPreProcessor
+from .common import ModelManager, clean_query
 
 # Constants
 THRESHOLD_NEURAL_TITLE_MATCH = 0.9
@@ -203,7 +210,6 @@ class WikiSearcher:
     
     def __init__(self, 
                  wiki_client: None | WikiClient=None, 
-                 text_processor=None,
                  es_client: None | Elasticsearch=None):
         """
         Initialize the Wikipedia searcher.
@@ -216,11 +222,6 @@ class WikiSearcher:
             self.wiki_client = WikiClient(es_client=es_client)
         else:
             self.wiki_client = wiki_client
-            
-        if text_processor is None:
-            self.text_processor = TextPreProcessor()
-        else:
-            self.text_processor = text_processor
     
     def search_wiki(self, query_term, limit_term="", max_results=200):
         """
@@ -236,7 +237,7 @@ class WikiSearcher:
             list: List of Wikipedia article dictionaries
         """
         # Clean query term
-        query_term = self.text_processor.clean_query(query_term)
+        query_term = clean_query(query_term)
         logger.debug(f"Using query term: '{query_term}'")
         
         # Perform search via client
@@ -335,6 +336,47 @@ class WikiSearcher:
 # Wikipedia Matcher
 #######################################################
 
+
+def load_wiki_ranker_model(model_path: str | Path) -> tuple[XGBClassifier, XGBClassifier]:
+    """
+    Load the Wikipedia ranker models
+
+    One model has context-related features and the other doesn't.
+    (We need this to handle the case where the context is not provided)
+    
+    Args:
+        model_dir: Directory containing the ranker model
+        
+    Returns:
+        XGBoost models: Tuple of loaded ranker model
+    """
+    model_path = Path(model_path)
+    
+    wiki_ranker = XGBClassifier()
+    wiki_ranker.load_model(model_path)
+    logger.warning("Using context-based XGBoost model for *no context* ranking.")
+    wiki_ranker_no_context =  XGBClassifier()
+    wiki_ranker_no_context.load_model(model_path)
+    
+    return wiki_ranker, wiki_ranker_no_context
+
+
+def load_actor_sim_model(model_dir: str | Path) -> SentenceTransformer:
+    """
+    Load the actor similarity model trained on Wikipedia redirects.
+    
+    This model helps identify if two names refer to the same entity.
+    
+    Args:
+        model_dir: Directory containing the similarity model
+        
+    Returns:
+        SentenceTransformer: Loaded similarity model
+    """
+    model_dir = Path(model_dir)
+    return SentenceTransformer(str(model_dir))
+
+
 class WikiMatcher:
     """
     Match entities to Wikipedia articles.
@@ -348,59 +390,53 @@ class WikiMatcher:
         matcher = WikiMatcher(searcher)
         best_article = matcher.query_wiki("Barack Obama")
     """
+
+    TODO #26: allow overriding models; need to check this works correctly as implemented
     
     def __init__(self, 
-                 # Quick fix for the ModelManagers that are instantiated here, to work with correct asset path
-                 # TODO: refactor this whole thing to provide ModelManager externally or something
-                 base_path,
-                 wiki_searcher=None, 
-                 text_processor=None, 
-                 trf_model=None, 
-                 actor_sim_model=None, 
-                 device=None,
-                 nlp=None,
+                 es_client: Elasticsearch,
+                 model_manager: ModelManager,
                  wiki_sort_method="neural",
-                 es_client: None | Elasticsearch=None,):
+                 trf_model=None, 
+                 nlp=None,
+                 actor_sim_model: None | str | Path=None, 
+                 wiki_ranker_model: None | str | Path=None,
+                 device=None,
+                 ):
         """
         Initialize the Wikipedia matcher.
         
         Args:
             wiki_searcher: WikiSearcher instance
-            text_processor: TextPreProcessor instance
             trf_model: Sentence transformer model
             actor_sim_model: Actor similarity model
             device: Device to use for inference ('cuda' or None)
             wiki_sort_method: Method to use for sorting results
         """
         # Initialize components or use provided ones
-        if wiki_searcher is None:
-            self.wiki_searcher = WikiSearcher(es_client=es_client)
-        else:
-            self.wiki_searcher = wiki_searcher
-            
-        if text_processor is None:
-            self.text_processor = TextPreProcessor()
-        else:
-            self.text_processor = text_processor
+        self.wiki_searcher = WikiSearcher(es_client=es_client)
             
         # Initialize models if not provided
-        model_manager = ModelManager(base_path, device=device)
-        if trf_model is None or actor_sim_model is None:
-            self.trf = trf_model if trf_model else model_manager.load_trf_model()
-            self.actor_sim = actor_sim_model if actor_sim_model else model_manager.load_actor_sim_model()
+        if trf_model is None:
+            self.trf = model_manager.load_trf_model()
         else:
             self.trf = trf_model
-            self.actor_sim = actor_sim_model
-        self.wiki_ranker, self.wiki_ranker_no_context = model_manager.load_wiki_ranker_model()
-
         
         if nlp is None:
-            model_manager = ModelManager(base_path, device=device)
             self.nlp = model_manager.load_spacy_lg()
         else:
             self.nlp = nlp
-            
-        self.device = device
+
+        # Actor similarity model 
+        if actor_sim_model is None:
+            actor_sim_model = Path(str(resources.files("ngec"))) / "assets" / "actor_sim_model2"
+        self.actor_sim = load_actor_sim_model(actor_sim_model)
+
+        # Wiki Ranker models (xgboost)
+        if wiki_ranker_model is None:
+            wiki_ranker_model = Path(str(resources.files("ngec"))) / "assets" / 'xgb_model.json'
+        self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(wiki_ranker_model)
+
         self.wiki_sort_method = wiki_sort_method
             
     def _find_exact_title_matches(self, query_term, results, country=None):
@@ -919,7 +955,7 @@ class WikiMatcher:
                        context="", 
                        country="",
                        actor_desc="",
-                       wiki_sort_method='neural', 
+                       wiki_sort_method: Literal["rules", "neural"]='neural', 
                        rank_fields=None):
         """
         Select the best Wikipedia article from search results using a scoring matrix approach.
@@ -930,7 +966,7 @@ class WikiMatcher:
             context: Context text to help with disambiguation
             country: Country code to help with disambiguation
             actor_desc: Actor description to help with disambiguation
-            wiki_sort_method: Method to use for sorting results
+            wiki_sort_method: Literal["rules", "neural"]: Method to use for sorting results
             rank_fields: Fields to use for ranking
 
         Returns:
@@ -946,7 +982,7 @@ class WikiMatcher:
             rank_fields = ['title', 'categories', 'alternative_names', 'redirects']
 
         # Clean query term
-        query_term = self.text_processor.clean_query(query_term)
+        query_term = clean_query(query_term)
         logger.debug(f"Using query term '{query_term}'")
 
         # Handle empty results
@@ -1022,7 +1058,7 @@ class WikiMatcher:
                     query_term = expanded_query
                     logger.debug(f"Used NER to expand context: {expanded_query}")
         
-            acronym_dict = self.text_processor.make_acronym_dicts(doc=context_doc)
+            acronym_dict = make_acronym_dicts(doc=context_doc)
             # Check if query term is an acronym
             # and expand it if found in the acronym dictionary
             if query_term in acronym_dict:
@@ -1097,3 +1133,50 @@ class WikiMatcher:
         )
        
         return best
+
+
+
+def make_acronym_dicts(text: str | None=None, 
+                       doc: Doc | None=None, 
+                       nlp: None | Language=None) -> dict[str, str]:
+    """
+    Quick tool to identify acronyms (and their referents) in a doc.
+
+    Args:
+        text: string of text to process
+        doc: spaCy doc object
+    Returns:
+        acronym_entities: dict of acronyms and their referents
+    """
+    match text, doc:
+        case None, None:
+            raise ValueError("Either text or doc must be provided.")
+        case str(), None:
+            if nlp is None:
+                raise ValueError("nlp object must be provided if doc is not provided.")
+            doc = nlp(text)
+        case _, Doc():
+            pass
+
+    acronym_entities = {"U.N.": "United Nations", "UN": "United Nations"}
+    for ent in doc.ents:    # type: ignore
+        # skip cardinals
+        if ent.label_ in ["CARDINAL", "DATE", "TIME", "ORDINAL", "QUANTITY"]:
+            continue
+        # only take non-acronyms
+        if len(ent) > 1 and not ent.text.isupper():
+            # strip out leading prepositions and articles
+            ent_text = ''.join([i.text_with_ws for i in ent if i.pos_ != "DET" and i.pos_ != "ADP"]).strip()
+            # only take title case names
+            # The title case doesn't always work with some edge cases. E.g. "Ta'ang National Liberation Army".
+            # Instead, we can check if the first letter of each word is uppercase.
+            first_letters = [True if word[0].isupper() else False for word in ent_text.split()]
+            if ent_text.istitle():
+                acronym = ''.join([word[0].upper() for word in ent_text.split()])
+                acronym_entities[acronym] = ent_text
+            elif all(first_letters):
+                # If the first letter of each word is uppercase, consider it as a potential acronym
+                acronym = ''.join([word[0].upper() for word in ent_text.split()])
+                acronym_entities[acronym] = ent_text
+    return acronym_entities
+    

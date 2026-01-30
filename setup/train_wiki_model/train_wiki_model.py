@@ -9,9 +9,9 @@ import os
 import random
 import pickle
 
-from NGEC.actor_resolution import WikiMatcher, WikiClient
-from NGEC.actor_resolution import TextPreProcessor, CountryDetector
-
+from ngec.actors.wiki_matcher import WikiMatcher,
+from ngec.actors.common import TextPreProcessor, CountryDetector, ModelManager
+from ngec.es_client import setup_es_client
 
 import spacy
 nlp = spacy.load("en_core_web_lg")
@@ -24,13 +24,317 @@ for log_name in logging.root.manager.loggerDict:
     log = logging.getLogger(log_name)
     log.setLevel(logging.INFO)
 
+# Change config as needed
+es_client = setup_es_client(hosts=["localhost"], port=9200)
+
 # Initialize WikiMatcher after logger setup
-wiki_client = WikiClient()
-wiki_matcher = WikiMatcher(device='cuda:0', # cuda:0
-                           nlp=nlp)
+device = None
+if device is None:
+    print("Manually set the correct device, e.g. 'cuda' or 'mps'")
+
+model_manager = ModelManager(device=device)
+
+wiki_matcher = WikiMatcher(device=device,
+                           es_client=es_client,
+                           model_manager=model_manager)
+
 # Initialize TextPreProcessor
 text_preprocessor = TextPreProcessor()
 country_detector = CountryDetector()
+
+
+def extract_entity_components(self, 
+                                span_text, 
+                                nlp=None, 
+                                doc=None,
+                                job_titles=None, 
+                                job_title_embeddings=None, 
+                                get_embedding_func=None):
+    """
+    Extracts core entity, role, and geographic information from a text span.
+
+    Args:
+        span_text: String containing the entity span
+        job_titles: List of known job titles/roles (optional)
+        job_title_embeddings: Dict mapping job titles to embeddings (optional)
+        get_embedding_func: Function to get embedding for a new text (optional)
+
+    Returns:
+        Dict with core_entity, role, and geographic_info
+    """
+    if doc is None:
+        if nlp is None:
+            raise ValueError("nlp object must be provided if pre-processed doc is not given.")
+        doc = nlp(span_text)
+
+    # Initialize results
+    results = {
+        'core_entity': None,
+        'role': None,
+        'geographic_info': None
+    }
+
+    # Step 1: Extract entities by type
+    person_entities = []
+    org_entities = []
+    geo_entities = []
+
+    for ent in doc.ents:
+        if ent.label_ == 'PERSON':
+            person_entities.append({
+                'text': ent.text,
+                'start': ent.start_char,
+                'end': ent.end_char
+            })
+        elif ent.label_ == 'ORG':
+            org_entities.append({
+                'text': ent.text,
+                'start': ent.start_char,
+                'end': ent.end_char
+            })
+        elif ent.label_ in ['GPE', 'LOC', 'FAC', 'NORP']:
+            geo_entities.append({
+                'text': ent.text,
+                'start': ent.start_char,
+                'end': ent.end_char
+            })
+
+    # Step 1.5: Custom entity detection for abbreviations and special cases
+    # Look for uppercase words that could be organization acronyms
+    acronym_pattern = re.compile(r'\b([A-Z]{2,})\b')
+    for match in acronym_pattern.finditer(span_text):
+        acronym = match.group(1)
+        # Check if it's not already detected
+        already_detected = False
+        for org in org_entities:
+            if org['text'] == acronym:
+                already_detected = True
+                break
+            
+        if not already_detected:
+            org_entities.append({
+                'text': acronym,
+                'start': match.start(),
+                'end': match.end()
+            })
+
+    # Step 2: Set geographic information
+    if geo_entities:
+        results['geographic_info'] = geo_entities[0]['text']
+
+    # Step 3: Set core entity (prioritize PERSON over ORG)
+    if person_entities:
+        results['core_entity'] = person_entities[0]['text']
+    elif org_entities:
+        results['core_entity'] = org_entities[0]['text']
+
+    # Step 4: Handle possessive patterns specially
+    possessive_pattern = re.compile(r"([A-Za-z']+)['']s\s+([A-Za-z]+)")
+    possessive_match = possessive_pattern.search(span_text)
+
+    if possessive_match:
+        possessor = possessive_match.group(1)
+        possessed = possessive_match.group(2)
+
+        # Check if possessor is a geo entity
+        if results['geographic_info'] and possessor == results['geographic_info']:
+            # Check if possessed is an org (or potential acronym)
+            matches_org = False
+            for org in org_entities:
+                if possessed in org['text']:
+                    results['core_entity'] = org['text']
+                    matches_org = True
+                    break
+                
+            # If not matched, check for acronyms
+            if not matches_org and re.match(r'^[A-Z]{2,}$', possessed):
+                results['core_entity'] = possessed
+
+    # Step 5: Extract role candidates
+    role_candidates = []
+
+    # 5.1: Look for appositives
+    for token in doc:
+        if token.dep_ == 'appos':
+            appos_span = doc[token.left_edge.i:token.right_edge.i+1]
+
+            # Check if this contains our core entity
+            contains_core = False
+            if results['core_entity'] and results['core_entity'] in appos_span.text:
+                contains_core = True
+
+            if not contains_core:
+                role_candidates.append(appos_span.text)
+
+    # 5.2: Extract parts not covered by core entity or geo info
+    # Mark positions covered by entities
+    covered = [False] * len(span_text)
+
+    # Mark core entity
+    if results['core_entity']:
+        pattern = re.compile(r'\b' + re.escape(results['core_entity']) + r'\b')
+        for match in pattern.finditer(span_text):
+            start, end = match.span()
+            for i in range(start, min(end, len(covered))):
+                covered[i] = True
+
+    # Mark geographic info
+    if results['geographic_info']:
+        pattern = re.compile(r'\b' + re.escape(results['geographic_info']) + r'\b')
+        for match in pattern.finditer(span_text):
+            start, end = match.span()
+            for i in range(start, min(end, len(covered))):
+                covered[i] = True
+
+    # Extract uncovered segments
+    uncovered_segments = []
+    current = []
+
+    for i, char in enumerate(span_text):
+        if not covered[i]:
+            current.append(char)
+        elif current:
+            segment = ''.join(current).strip(' ,')
+            if segment and len(segment) > 1:
+                uncovered_segments.append(segment)
+            current = []
+
+    # Don't forget the last segment
+    if current:
+        segment = ''.join(current).strip(' ,')
+        if segment and len(segment) > 1:
+            uncovered_segments.append(segment)
+
+    # Add these segments to role candidates
+    role_candidates.extend(uncovered_segments)
+
+    # 5.3: Special case for words before person entity
+    if results['core_entity'] and person_entities:
+        # Find the entity start position
+        person_start = None
+        for ent in person_entities:
+            if ent['text'] == results['core_entity']:
+                person_start = ent['start']
+                break
+            
+        if person_start is not None and person_start > 0:
+            # Check for text before person
+            before_person = span_text[:person_start].strip()
+            if before_person:
+                role_candidates.append(before_person)
+
+    # 5.4: Special case for words after organization
+    if results['core_entity'] and org_entities:
+        # Find the entity end position
+        org_end = None
+        for ent in org_entities:
+            if ent['text'] == results['core_entity']:
+                org_end = ent['end']
+                break
+            
+        if org_end is not None and org_end < len(span_text):
+            # Get text after org entity
+            after_org = span_text[org_end:].strip()
+            if after_org:
+                # Clean up possessives in the after text
+                after_org = re.sub(r"^'s\s+", "", after_org)
+                if after_org:
+                    role_candidates.append(after_org)
+
+    # Step 6: Choose the best role candidate
+    if role_candidates:
+        # Clean up candidates
+        cleaned_candidates = []
+        for candidate in role_candidates:
+            # Remove geographic entities from role description
+            if results['geographic_info']:
+                candidate = re.sub(r'\b' + re.escape(results['geographic_info']) + r'\b', '', candidate)
+
+            # Clean up whitespace, possessives and punctuation
+            candidate = re.sub(r"['’]s\s+", " ", candidate)  # Remove possessives
+            candidate = re.sub(r'[,.:;]+$', '', candidate)  # Remove trailing punctuation
+            candidate = re.sub(r'\s+', ' ', candidate).strip()  # Clean whitespace
+            # remove initial "'" or "’"
+            candidate = re.sub(r"^[‘’]", '', candidate).strip()
+
+            # Remove "of" without context
+            candidate = re.sub(r'\bof\b\s*$', '', candidate).strip()
+
+            if candidate:
+                cleaned_candidates.append(candidate)
+
+        role_candidates = cleaned_candidates
+
+        # Use embedding similarity if available
+        if job_title_embeddings and get_embedding_func and role_candidates:
+            best_match = None
+            best_score = 0
+
+            for candidate in role_candidates:
+                try:
+                    candidate_emb = get_embedding_func(candidate)
+
+                    for title, title_emb in job_title_embeddings.items():
+                        sim = cos_sim([candidate_emb], [title_emb])[0][0]
+                        if sim > best_score:
+                            best_score = sim
+                            best_match = candidate
+                except:
+                    continue
+                
+            if best_score > 0.5:
+                results['role'] = best_match
+                return results
+
+        # Fallback heuristics if embedding matching doesn't work
+        scored_candidates = []
+        for candidate in role_candidates:
+            score = 0
+
+            # Check for role keywords
+            role_keywords = ['official', 'president', 'mayor', 'secretary', 'minister', 
+                            'member', 'council', 'general', 'party', 'service', 
+                            'airport', 'police', 'attacker', 'right-wing', 'wing']
+
+            for keyword in role_keywords:
+                if keyword in candidate.lower():
+                    score += 5
+                    break
+                
+            # Favor multi-word candidates
+            word_count = len(candidate.split())
+            score += min(word_count, 3)
+
+            # Favor candidates that appear at the beginning of the span
+            if span_text.lower().startswith(candidate.lower()):
+                score += 2
+
+            # Penalize very short candidates (less than 3 characters)
+            if len(candidate) < 3:
+                score -= 2
+
+            scored_candidates.append((candidate, score))
+
+        if scored_candidates:
+            results['role'] = max(scored_candidates, key=lambda x: x[1])[0]
+
+    # Step 7: Final cleanup
+    if results['role']:
+        # Ensure descriptors like "right-wing party" are fully captured
+        if 'party' in span_text.lower() and 'wing' in results['role'].lower() and 'party' not in results['role'].lower():
+            results['role'] += ' party'
+
+        # Ensure airport, service, etc. are included in role when appropriate
+        for suffix in ['airport', 'service', 'council']:
+            if suffix in span_text.lower() and suffix not in results['role'].lower():
+                if results['role'].strip() and suffix not in results['role'].lower():
+                    results['role'] += f' {suffix}'
+    if results['role']:
+        logger.debug(f"Converted '{span_text}' to '{results['core_entity']} ({results['role']})'")
+    else:
+        logger.debug(f"Converted '{span_text}' to '{results['core_entity']}' (no role found)")
+    return results
+
 
 results = wiki_client.run_wiki_search("Bill Clinton", use_importance=True)
 results = wiki_client.run_wiki_search("Islamic State", use_importance=False)
@@ -192,7 +496,7 @@ for index, row in tqdm(wiki_df.iterrows(), total=wiki_df.shape[0]):
     orig = actor_text_for_wiki
     if PREPROCESS:
         # Preprocess the text input
-        parsed_input = text_preprocessor.extract_entity_components(actor_text_for_wiki, nlp)
+        parsed_input = extract_entity_components(actor_text_for_wiki, nlp)
         parsed_input['orig'] = actor_text_for_wiki
         orig = actor_text_for_wiki
         #parsed_input_list.append(parsed_input)
