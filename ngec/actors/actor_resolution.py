@@ -396,7 +396,7 @@ class WikiParser:
             list: List of ELI codes if applicable
         """
         # Get codes from past offices
-        old_codes_raw = [self.agent_matcher.trf_agent_match(self.text_processor.clean_query(o['office'])) for o in offices]
+        old_codes_raw = [self.agent_matcher.trf_agent_match(clean_query(o['office'])) for o in offices]
         old_codes = []
         for code in old_codes_raw:
             if not code or 'code_1' not in code:
