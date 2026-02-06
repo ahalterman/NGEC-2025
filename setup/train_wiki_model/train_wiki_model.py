@@ -10,7 +10,7 @@ import random
 import pickle
 
 from ngec.actors.wiki_matcher import WikiMatcher,
-from ngec.actors.common import TextPreProcessor, CountryDetector, ModelManager
+from ngec.actors.common import CountryDetector, ModelManager
 from ngec.es_client import setup_es_client
 
 import spacy
@@ -38,8 +38,7 @@ wiki_matcher = WikiMatcher(device=device,
                            es_client=es_client,
                            model_manager=model_manager)
 
-# Initialize TextPreProcessor
-text_preprocessor = TextPreProcessor()
+# Initialize CountryDetector
 country_detector = CountryDetector()
 
 

@@ -133,74 +133,24 @@ def clean_query(qt):
     return qt
 
 
-class TextPreProcessor:
+def strip_ents(doc) -> str:
     """
-    Utilities for cleaning and normalizing text.
+    Strip out named entities from text, leaving only non-entity tokens.
     
-    This class provides methods for text cleaning, entity extraction,
-    and noun phrase identification.
-    
-    Example:
-        processor = TextPreProcessor()
-        clean_text = processor.clean_query("The United States Government")
-        # Returns: "united states government"
+    Args:
+        doc: spaCy Doc object to process
+        
+    Returns:
+        str: Text with named entities removed
     """
-
-    # TODO: i think only strip_ents is used? Other methods can be deleted.
-
-    def strip_ents(self, doc):
-        """
-        Strip out named entities from text, leaving only non-entity tokens.
-        
-        Args:
-            doc: spaCy Doc object to process
-            
-        Returns:
-            str: Text with named entities removed
-        """
-        skip_list = ['a', 'and', 'the', "'s", "'", "s"]
-        non_ent_tokens = [
-            token.text_with_ws for token in doc 
-            if token.ent_type_ == "" and token.text.lower() not in skip_list
-        ]
-        return ''.join(non_ent_tokens).strip()
+    skip_list = ['a', 'and', 'the', "'s", "'", "s"]
+    non_ent_tokens = [
+        token.text_with_ws for token in doc 
+        if token.ent_type_ == "" and token.text.lower() not in skip_list
+    ]
+    return ''.join(non_ent_tokens).strip()
     
-    def get_noun_phrases(self, doc):
-        """
-        Extract non-entity noun phrases from a document.
-        
-        Args:
-            doc: spaCy Doc object to process
-            
-        Returns:
-            str: Space-joined noun phrases
-        """
-        skip_list = ['a', 'and', 'the']
-        skip_ent_types = ['CARDINAL', 'DATE', 'ORDINAL']
-        
-        # Get noun chunks that don't end with an entity
-        noun_phrases = [chunk for chunk in doc.noun_chunks if chunk[-1].ent_type_ == ""]
-        
-        # Collect tokens from those chunks, skipping certain words and entity types
-        phrase_tokens = []
-        for chunk in noun_phrases:
-            for token in chunk:
-                if token.text not in skip_list and token.ent_type_ not in skip_ent_types:
-                    phrase_tokens.append(token.text_with_ws.lower())
-                    
-        return ''.join(phrase_tokens).strip()
 
-    def get_noun_phrases_list(self, doc):
-        """
-        Get a list of non-entity noun phrases from a document.
-        
-        Args:
-            doc: spaCy Doc object to process
-            
-        Returns:
-            list: List of noun phrases
-        """
-        return [chunk for chunk in doc.noun_chunks if chunk[-1].ent_type_ == ""]
 
 
 

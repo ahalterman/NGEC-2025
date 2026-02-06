@@ -1,8 +1,6 @@
 from collections import Counter
 from copy import deepcopy
-from importlib import resources
 import logging
-import os
 import re
 import time
 
@@ -11,7 +9,7 @@ from elasticsearch import Elasticsearch
 import jsonlines
 from rich.progress import track
 
-from .common import ModelManager, TextPreProcessor, clean_query, CountryDetector
+from .common import ModelManager, clean_query, CountryDetector, strip_ents
 from .agent_matcher import AgentMatcher
 from .wiki_matcher import WikiMatcher
 
@@ -111,7 +109,6 @@ class WikiParser:
     
     def __init__(self, 
                  country_detector=None, 
-                 text_processor=None, 
                  agent_matcher=None,
                 device=None):
         """
@@ -119,7 +116,6 @@ class WikiParser:
         
         Args:
             country_detector: CountryDetector instance
-            text_processor: TextPreProcessor instance
             agent_matcher: AgentMatcher instance
             device: Device to use for inference ('cuda' or None)
         """
@@ -129,17 +125,11 @@ class WikiParser:
         else:
             self.country_detector = country_detector
             
-        if text_processor is None:
-            self.text_processor = TextPreProcessor()
-        else:
-            self.text_processor = text_processor
-            
         if agent_matcher is None:
             model_manager = ModelManager(device)
             trf_model = model_manager.load_trf_model()
             self.agent_matcher = AgentMatcher(trf_model, 
-                                              device=device, 
-                                              text_processor=self.text_processor)
+                                              device=device)
         else:
             self.agent_matcher = agent_matcher
     
@@ -854,7 +844,6 @@ class ActorResolver:
         self.device = 'cuda' if gpu else None
         
         # Initialize utility classes
-        self.text_processor = TextPreProcessor()
         self.cache_manager = CacheManager()
         self.country_detector = CountryDetector()
         
@@ -867,7 +856,6 @@ class ActorResolver:
         self.agent_matcher = AgentMatcher(
             self.trf, 
             device=self.device, 
-            text_processor=self.text_processor
         )
         
         # Initialize Wikipedia components
@@ -879,7 +867,6 @@ class ActorResolver:
         )
         self.wiki_parser = WikiParser(
             self.country_detector,
-            self.text_processor,
             self.agent_matcher,
             self.device
         )
@@ -939,7 +926,7 @@ class ActorResolver:
         # TODO: all of this probably goes away with the new entity splitter
         try:
             doc = self.nlp(trimmed_text)
-            non_ent_text = self.text_processor.strip_ents(doc)
+            non_ent_text = strip_ents(doc)
             ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
             token_level_ents = [i.ent_type_ for i in doc]
             ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ != ""])
@@ -1191,7 +1178,6 @@ if __name__ == "__main__":
         AgentMatcher,
         CountryDetector,
         ModelManager,
-        TextPreProcessor,
         WikiMatcher,
         WikiParser,
     )

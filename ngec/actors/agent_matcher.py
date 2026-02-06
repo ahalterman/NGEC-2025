@@ -9,7 +9,7 @@ import numpy as np
 import platformdirs
 from scipy.spatial.distance import cdist
 
-from .common import ModelManager, TextPreProcessor, clean_query, CountryDetector
+from .common import ModelManager, clean_query, CountryDetector
 
 
 logger = logging.getLogger(__name__)
@@ -61,9 +61,6 @@ class AgentMatcher:
         Path to cache directory for computed embeddings (default: platform cache dir)
     device : str, optional
         Device to use for model inference ('cuda' or None for CPU).
-    text_processor : TextPreProcessor, optional
-        TextPreProcessor instance for text cleaning. If None, 
-        a new instance will be created.
 
 
     Attributes
@@ -74,8 +71,6 @@ class AgentMatcher:
         Loaded and cleaned agent patterns.
     trf : SentenceTransformer
         Transformer model for encoding text.
-    text_processor : TextPreProcessor
-        Text preprocessing utilities.
     trf_matrix : numpy.ndarray
         Pre-computed embeddings for agent patterns.
     
@@ -93,7 +88,6 @@ class AgentMatcher:
                  agents_file: None | str | Path = None,
                  cache_path=None,
                  device=None,
-                 text_processor=None,
                  ):
 
         self.device = device
@@ -111,11 +105,6 @@ class AgentMatcher:
             self.trf = model_manager.load_trf_model()
         else:
             self.trf = trf_model
-
-        if text_processor is None:
-            self.text_processor = TextPreProcessor()
-        else:
-            self.text_processor = text_processor
 
         # Load agent data
         self.agents = self._load_and_clean_agents()
@@ -325,9 +314,10 @@ class AgentMatcher:
         # Optionally strip entities
         if strip_ents:
             try:
+                from .common import strip_ents
                 model_manager = ModelManager(self.device)
                 doc = model_manager.load_spacy_lg()(text)
-                trimmed_text = self.text_processor.strip_ents(doc)
+                trimmed_text = strip_ents(doc)
             except IndexError:
                 # If NLP fails, continue with trimmed_text as-is
                 pass

@@ -216,12 +216,15 @@ class WikiSearcher:
         
         Args:
             wiki_client: WikiClient instance
-            text_processor: TextPreProcessor instance
+            es_client: Elasticsearch client (used if wiki_client not provided)
         """
-        if wiki_client is None:
-            self.wiki_client = WikiClient(es_client=es_client)
-        else:
-            self.wiki_client = wiki_client
+        match wiki_client, es_client:
+            case None, None:
+                raise ValueError("Must provide either wiki_client or es_client")
+            case None, _:
+                self.wiki_client = WikiClient(es_client=es_client)
+            case _, _:
+                self.wiki_client = wiki_client
     
     def search_wiki(self, query_term, limit_term="", max_results=200):
         """
