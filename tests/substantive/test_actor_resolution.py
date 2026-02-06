@@ -1,5 +1,6 @@
 import pytest
 
+pytestmark = pytest.mark.substantive
 
 def test_nat1(ag):
     cc, text = ag.country_detector.search_nat("Great Britain")
