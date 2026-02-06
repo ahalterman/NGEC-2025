@@ -8,6 +8,7 @@ import time
 
 import dateparser
 from elasticsearch import Elasticsearch
+import jsonlines
 from rich.progress import track
 
 from .common import ModelManager, TextPreProcessor, clean_query, CountryDetector
@@ -19,21 +20,6 @@ logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-def get_base_path():
-    """Get the base path for assets, whether running from source or installed package."""
-    try:
-        # Try to find assets in the current directory (development)
-        if os.path.exists('./ngec/assets'):
-            return './ngec/assets'
-        # Fall back to package resources (installed)
-        return resources.files('ngec') / 'assets'
-    except:
-        # Final fallback
-        return './ngec/assets'
-
-
-
-DEFAULT_BASE_PATH = get_base_path()
 
 # Threshold constants
 THRESHOLD_HIGH_CONFIDENCE = 0.90
@@ -127,7 +113,6 @@ class WikiParser:
                  country_detector=None, 
                  text_processor=None, 
                  agent_matcher=None,
-                base_path=DEFAULT_BASE_PATH, 
                 device=None):
         """
         Initialize the Wikipedia parser.
@@ -136,12 +121,11 @@ class WikiParser:
             country_detector: CountryDetector instance
             text_processor: TextPreProcessor instance
             agent_matcher: AgentMatcher instance
-            base_path: Path to directory containing assets
             device: Device to use for inference ('cuda' or None)
         """
         # Initialize components or use provided ones
         if country_detector is None:
-            self.country_detector = CountryDetector(base_path)
+            self.country_detector = CountryDetector()
         else:
             self.country_detector = country_detector
             
@@ -972,7 +956,6 @@ class ActorResolver:
     
     def __init__(self, 
                 spacy_model=None,
-                base_path=DEFAULT_BASE_PATH,
                 save_intermediate=False,
                 wiki_sort_method="neural",
                 gpu=False,
@@ -983,7 +966,6 @@ class ActorResolver:
         
         Args:
             spacy_model: Pre-loaded spaCy model to use
-            base_path: Path to the directory containing assets
             save_intermediate: Whether to save intermediate results
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
@@ -1022,7 +1004,6 @@ class ActorResolver:
             self.country_detector,
             self.text_processor,
             self.agent_matcher,
-            base_path,
             self.device
         )
         
@@ -1033,7 +1014,6 @@ class ActorResolver:
         self.event_processor = EventProcessor(self)
         
         # Store configuration
-        self.base_path = base_path
         self.save_intermediate = save_intermediate
         self.wiki_sort_method = wiki_sort_method
 
@@ -1204,7 +1184,6 @@ def main():
     parser = argparse.ArgumentParser(description="Resolve actors in events to PLOVER codes")
     parser.add_argument("input_file", help="Input JSONL file of events")
     parser.add_argument("output_file", help="Output JSONL file with actor resolution")
-    parser.add_argument("--base-path", default=DEFAULT_BASE_PATH, help="Path to assets directory")
     parser.add_argument("--gpu", action="store_true", help="Use GPU for inference")
     parser.add_argument("--save-intermediate", action="store_true", help="Save intermediate results")
     args = parser.parse_args()
@@ -1217,7 +1196,6 @@ def main():
 
     # Create actor resolver
     resolver = ActorResolver(
-        base_path=args.base_path,
         save_intermediate=args.save_intermediate,
         gpu=args.gpu,
         es_client=es_client,
