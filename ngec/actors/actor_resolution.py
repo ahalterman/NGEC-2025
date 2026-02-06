@@ -11,9 +11,9 @@ import numpy as np
 import pandas as pd
 
 
-from .actors.common import ModelManager, TextPreProcessor, clean_query, CountryDetector
-from .actors.agent_matcher import AgentMatcher
-from .actors.wiki_matcher import WikiMatcher
+from .common import ModelManager, TextPreProcessor, clean_query, CountryDetector
+from .agent_matcher import AgentMatcher
+from .wiki_matcher import WikiMatcher
 
 
 logger = logging.getLogger(__name__)
