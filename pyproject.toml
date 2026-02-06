@@ -26,6 +26,7 @@ dependencies = [
     'mordecai3>=3.4.0',
     'numpy>=2.0.0,<3.0',
     'pandas>=2.2.0,<3.0',
+    'platformdirs>=4.0.0,<5.0',
     'pylcs>=0.1.1,<1.0',
     'rich>=14.0.0,<15.0',
     "scikit-learn<=1.7.2",  # see #24
@@ -95,4 +96,9 @@ filterwarnings = [
 ]
 markers = [
     'external: run tests with external Elasticsearch server (requires config in .env)',
+    'substantive: substantive correctness tests that may fail for non-coding correctness errors, e.g. "Macron" is wrongly resolved as an actor',
+]
+addopts = [
+    "-m not substantive",  # By default, skip substantive tests since some fraction fail 
+                           # To run: uv runpytest -m substantive  OR uv run pytest -m "" to run all tests
 ]
