@@ -39,6 +39,7 @@ def get_cache_path():
     embeddings_cache.mkdir(parents=True, exist_ok=True)
     return embeddings_cache
 
+
 #######################################################
 # Agent Matching
 #######################################################
@@ -55,8 +56,6 @@ class AgentMatcher:
     trf_model : SentenceTransformer, optional
         Sentence transformer model for encoding text. If None, will be 
         loaded from ModelManager.
-    base_path : str, default "ngec/assets"
-        Path to directory containing agent files and embeddings.
     agents_file : None | str | Path, default None
         Path to a PLOVER/CAMEO agents file containing agent patterns. The
         default None will use the PLOVER agents file included in the package.
@@ -71,8 +70,6 @@ class AgentMatcher:
 
     Attributes
     ----------
-    base_path : str
-        Path to directory containing agent files and embeddings.
     device : str
         Device used for model inference.
     agents : list of dict
@@ -97,13 +94,17 @@ class AgentMatcher:
                  trf_model=None,
                  agents_file: None | str | Path = None,
                  cache_path=None,
-                 
                  device=None,
                  text_processor=None,
                  ):
 
         self.device = device
-        self.agents_file = agents_file
+
+        if agents_file is None:
+            self.agents_file = str(resources.files("ngec.assets") / "PLOVER_agents.txt")
+        else:
+            self.agents_file = agents_file
+        
         self.cache_path = cache_path if cache_path is not None else get_cache_path()
 
         # Initialize resources
@@ -123,7 +124,7 @@ class AgentMatcher:
         self.trf_matrix = self._load_embeddings()
 
     
-    def _load_and_clean_agents(self, agents_file: None | Path | str = None):
+    def _load_and_clean_agents(self):
         """
         Load the PLOVER/CAMEO agents file and clean the data.
         
@@ -131,10 +132,7 @@ class AgentMatcher:
             list: Cleaned list of agent pattern dictionaries
         """
 
-        if agents_file is None:
-            agents_file = str(resources.files("ngec.assets") / "PLOVER_agents.txt")
-
-        with open(agents_file, "r", encoding="utf-8") as f:
+        with open(self.agents_file, "r", encoding="utf-8") as f:
             data = f.read()
 
         # Remove curly braces content
@@ -211,8 +209,7 @@ class AgentMatcher:
             numpy.ndarray: Matrix of agent pattern embeddings
         """
         # Read agents file and compute hash for cache key
-        agent_file = os.path.join(self.base_path, self.agents_file)
-        with open(agent_file, "r", encoding="utf-8") as f:
+        with open(self.agents_file, "r", encoding="utf-8") as f:
             data = f.read()
         current_hash = hash(data)
 
@@ -230,7 +227,7 @@ class AgentMatcher:
 
         # Cache miss - compute embeddings
         logger.info(f"Computing embeddings for {len(self.agents)} agent patterns from {self.agents_file}")
-        logger.info(f"This is a one-time computation that will be cached for future use")
+        logger.info("This is a one-time computation that will be cached for future use")
         patterns = [agent['pattern'] for agent in self.agents]
         trf_matrix = self.trf.encode(patterns, show_progress_bar=False, device=self.device)
 

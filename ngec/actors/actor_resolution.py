@@ -6,10 +6,9 @@ import os
 import re
 import time
 
-
-import numpy as np
-import pandas as pd
-
+import dateparser
+from elasticsearch import Elasticsearch
+from rich.progress import track
 
 from .common import ModelManager, TextPreProcessor, clean_query, CountryDetector
 from .agent_matcher import AgentMatcher
@@ -31,8 +30,6 @@ def get_base_path():
     except:
         # Final fallback
         return './ngec/assets'
-
-
 
 
 
@@ -157,7 +154,6 @@ class WikiParser:
             model_manager = ModelManager(device)
             trf_model = model_manager.load_trf_model()
             self.agent_matcher = AgentMatcher(trf_model, 
-                                              base_path=base_path, 
                                               device=device, 
                                               text_processor=self.text_processor)
         else:
@@ -1011,7 +1007,6 @@ class ActorResolver:
         # Initialize agent matcher
         self.agent_matcher = AgentMatcher(
             self.trf, 
-            base_path, 
             device=self.device, 
             text_processor=self.text_processor
         )
