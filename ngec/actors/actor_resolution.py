@@ -811,129 +811,6 @@ class CodeSelector:
         return best
 
 
-#######################################################
-# Event Processing
-#######################################################
-
-class EventProcessor:
-    """
-    Process event data with actor resolution.
-    
-    This class provides methods for processing event data and adding
-    actor resolution information.
-    
-    Example:
-        resolver = ActorResolver()
-        processor = EventProcessor(resolver)
-        processed_events = processor.process(events)
-    """
-    
-    def __init__(self, actor_resolver):
-        """
-        Initialize the event processor.
-        
-        Args:
-            actor_resolver: ActorResolver instance to use for resolution
-        """
-        self.actor_resolver = actor_resolver
-    
-    def process(self, event_list, save_intermediate=False):
-        """
-        Process a list of events to resolve actor attributes.
-        
-        For each event, adds actor resolution information to the ACTOR and RECIP attributes.
-        
-        Args:
-            event_list: List of event dictionaries
-            save_intermediate: Whether to save intermediate results
-            
-        Returns:
-            list: The same event list with actor resolution information added
-
-        Examples:
-            >>> input = [
-                {"pub_date": "2007-07-01",
-                 # attribute model output, but only minimal subset needed here
-                 "attributes": {
-                    'actor': ['President Macron', 'Chancellor Angel Merkel'], 
-	                'recipient': ['N/A']
-                }},
-            ]
-            >>> ar.process(input)
-
-
-        """
-        # Don't modify the input list
-        event_list = deepcopy(event_list)
-
-        for event in track(event_list, description="Resolving actors..."):
-            
-            # Get the date from the event
-            query_date = event.get('pub_date', "today")
-
-            # We need to go through both 'actor' and 'recipient'
-            for attribute_key in ["actor", "recipient"]:
-                actor_list = event["attributes"][attribute_key]
-
-                # We are going to put the resolved actor info back in the event,
-                # under the relevant key ('actor' or 'recipient'); so basically
-                # moving one up from event["attributes"]
-                event[attribute_key] = []
-
-                # Resolve each actor
-                for actor in actor_list:
-                    # Malformed LLM output
-                    exclude = ["N/A"]
-                    if actor in exclude:
-                        continue
-                    
-                    res = self.actor_resolver.actor_to_code(actor, query_date=query_date)
-                    # actor_to_code can return None, this will break the code below
-                    if res is None:
-                        res = {}
-
-                    # Normalize results
-                    # TODO: not sure what the agent matcher outputs but need
-                    # to sync it up with wiki matcher output
-                    this_actor = {}
-
-                    this_actor['wiki'] = res.get('wiki', "")
-                    this_actor['actor_wiki_job'] = res.get('actor_wiki_job', "")
-                    
-                    # Add code lists
-                    this_actor['all_code1s'] = res.get('all_code1s', [])
-                    this_actor['all_code2s'] = res.get('all_code2s', [])
-                    
-                    # Add country and codes
-                    this_actor['country'] = res.get('country', "")
-                    this_actor['code_1'] = res.get('code_1', "")
-                    this_actor['code_2'] = res.get('code_2', "")
-                    
-                    # Add query and pattern information
-                    this_actor['actor_role_query'] = res.get('query', "")
-                    this_actor['actor_resolved_pattern'] = res.get('description', "")
-                    
-                    # Add confidence and reason
-                    this_actor['actor_pattern_conf'] = float(res.get('conf', 0))
-                    this_actor['actor_resolution_reason'] = res.get('best_reason', "")
-                
-                    # Other stuff
-                    this_actor['description'] = res.get('description', "")
-                    this_actor['source'] = res.get('source', "")
-                    this_actor['best_reason'] = res.get('best_reason', "")
-
-                    # END normalize, now add it to the event actor/recipient list
-                    event[attribute_key].append(this_actor)
-
-
-        # Save intermediate results if requested
-        if save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H") + "_actor_resolution_output.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(event_list)
-                
-        return event_list
-
 
 #######################################################
 # Main Actor Resolver Class
@@ -1009,9 +886,6 @@ class ActorResolver:
         
         # Initialize code selector
         self.code_selector = CodeSelector()
-        
-        # Initialize event processor
-        self.event_processor = EventProcessor(self)
         
         # Store configuration
         self.save_intermediate = save_intermediate
@@ -1151,7 +1025,7 @@ class ActorResolver:
         self.cache_manager.set(cache_key, best)
         return best
 
-    def process(self, event_list):
+    def process(self, event_list, save_intermediate=False):
         """
         Process a list of events to resolve actor attributes.
         
@@ -1159,11 +1033,94 @@ class ActorResolver:
         
         Args:
             event_list: List of event dictionaries
+            save_intermediate: Whether to save intermediate results
             
         Returns:
             list: The same event list with actor resolution information added
+
+        Examples:
+            >>> input = [
+                {"pub_date": "2007-07-01",
+                 # attribute model output, but only minimal subset needed here
+                 "attributes": {
+                    'actor': ['President Macron', 'Chancellor Angel Merkel'], 
+	                'recipient': ['N/A']
+                }},
+            ]
+            >>> ar.process(input)
+
+
         """
-        return self.event_processor.process(event_list, self.save_intermediate)
+        # Don't modify the input list
+        event_list = deepcopy(event_list)
+
+        for event in track(event_list, description="Resolving actors..."):
+            
+            # Get the date from the event
+            query_date = event.get('pub_date', "today")
+
+            # We need to go through both 'actor' and 'recipient'
+            for attribute_key in ["actor", "recipient"]:
+                actor_list = event["attributes"][attribute_key]
+
+                # We are going to put the resolved actor info back in the event,
+                # under the relevant key ('actor' or 'recipient'); so basically
+                # moving one up from event["attributes"]
+                event[attribute_key] = []
+
+                # Resolve each actor
+                for actor in actor_list:
+                    # Malformed LLM output
+                    exclude = ["N/A"]
+                    if actor in exclude:
+                        continue
+                    
+                    res = self.actor_to_code(actor, query_date=query_date)
+                    # actor_to_code can return None, this will break the code below
+                    if res is None:
+                        res = {}
+
+                    # Normalize results
+                    # TODO: not sure what the agent matcher outputs but need
+                    # to sync it up with wiki matcher output
+                    this_actor = {}
+
+                    this_actor['wiki'] = res.get('wiki', "")
+                    this_actor['actor_wiki_job'] = res.get('actor_wiki_job', "")
+                    
+                    # Add code lists
+                    this_actor['all_code1s'] = res.get('all_code1s', [])
+                    this_actor['all_code2s'] = res.get('all_code2s', [])
+                    
+                    # Add country and codes
+                    this_actor['country'] = res.get('country', "")
+                    this_actor['code_1'] = res.get('code_1', "")
+                    this_actor['code_2'] = res.get('code_2', "")
+                    
+                    # Add query and pattern information
+                    this_actor['actor_role_query'] = res.get('query', "")
+                    this_actor['actor_resolved_pattern'] = res.get('description', "")
+                    
+                    # Add confidence and reason
+                    this_actor['actor_pattern_conf'] = float(res.get('conf', 0))
+                    this_actor['actor_resolution_reason'] = res.get('best_reason', "")
+                
+                    # Other stuff
+                    this_actor['description'] = res.get('description', "")
+                    this_actor['source'] = res.get('source', "")
+                    this_actor['best_reason'] = res.get('best_reason', "")
+
+                    # END normalize, now add it to the event actor/recipient list
+                    event[attribute_key].append(this_actor)
+
+
+        # Save intermediate results if requested
+        if save_intermediate:
+            fn = time.strftime("%Y_%m_%d-%H") + "_actor_resolution_output.jsonl"
+            with jsonlines.open(fn, "w") as f:
+                f.write_all(event_list)
+                
+        return event_list
 
 
 #######################################################
