@@ -22,8 +22,6 @@ THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
 THRESHOLD_CONTEXT_MATCH = 0.6 # 0.7
 
 # TODO #26: allow overriding assets/models
-# TODO not sure if strip_ents works correctly, and where the nlp model should be loaded if needed
-# TODO get rid of base_path
 
 
 def get_cache_path():
@@ -303,7 +301,7 @@ class AgentMatcher:
         return match
 
     def short_text_to_agent(self, text, strip_ents=False, threshold=THRESHOLD_COSINE_SIMILARITY, 
-                           country_detector=None):
+                           country_detector=None) -> dict | None:
         """
         Convert short text to an agent code, optionally stripping entities first.
         
@@ -328,7 +326,7 @@ class AgentMatcher:
         if strip_ents:
             try:
                 model_manager = ModelManager(self.device)
-                doc = self.nlp(text)
+                doc = model_manager.load_spacy_lg()(text)
                 trimmed_text = self.text_processor.strip_ents(doc)
             except IndexError:
                 # If NLP fails, continue with trimmed_text as-is
