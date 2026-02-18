@@ -20,6 +20,9 @@ def setup_es_client(hosts: str | list[str] | None | Any = "localhost",
     more details on the different ways setup and connect to ES: 
     
     https://www.elastic.co/docs/reference/elasticsearch/clients/python/connecting
+
+    Note: to pass username and password for authentication, use the http_auth argument, e.g.
+    `http_auth=(ES_USER, ES_PASSWORD)`
     """
     es = Elasticsearch(hosts=hosts, port=port, **kwargs)
     return es
