@@ -43,6 +43,9 @@ If you are not using `uv` to install `ngec`, the `mordecai3` install will not wo
 1. Manually install `mordecai3` from GitHub into whatever virtual environment you are using.
 2. Install `ngec`. 
 
+### Uninstalling - cache
+
+`ngec` caches agent embeddings to improve speed. Those can be easily regenerated if needed. In any case, uninstalling the package will not delete those. They are located at OS-specific cache locations, determing using the [`platformdirs`](https://pypi.org/project/platformdirs/) package. See their documentation for [OS-specific cache folders](https://platformdirs.readthedocs.io/en/latest/platforms.html).
 
 
 ## Misc. notes

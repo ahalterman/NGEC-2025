@@ -3,7 +3,6 @@ import warnings
 
 from huggingface_hub import snapshot_download
 
-from .event_class import EventClass
 from .actors.actor_resolution import ActorResolver
 from .geolocation import GeolocationModel
 from .attribute_model import AttributeModel

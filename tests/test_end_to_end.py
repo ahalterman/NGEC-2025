@@ -6,7 +6,6 @@ Requires ES with wiki and geonames data
 
 import pytest
 
-from ngec import EventClass
 from ngec import AttributeModel
 from ngec import ActorResolver
 from ngec import GeolocationModel
