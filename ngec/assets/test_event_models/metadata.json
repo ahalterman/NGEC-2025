@@ -1,0 +1,203 @@
+{
+  "event_types": [
+    "ACCUSE",
+    "AGREE",
+    "AID",
+    "ASSAULT",
+    "COERCE",
+    "CONCEDE",
+    "CONSULT",
+    "COOPERATE",
+    "MOBILIZE",
+    "PROTEST",
+    "REJECT",
+    "REQUEST",
+    "RETREAT",
+    "SANCTION",
+    "SUPPORT",
+    "THREATEN"
+  ],
+  "embedding_model": "sentence-transformers/all-mpnet-base-v2",
+  "classifier_type": "logistic_regression",
+  "backend": "vllm",
+  "model_name": "Qwen/Qwen3-4B-Thinking-2507-FP8",
+  "timestamp": "2026-01-22T13:58:38.032989",
+  "metrics": {
+    "ACCUSE": {
+      "f1": 0.9122807017543859,
+      "precision": 0.9541284403669725,
+      "recall": 0.8739495798319328,
+      "accuracy": 0.8581560283687943,
+      "n_train": 562,
+      "n_test": 141,
+      "n_positive_train": 475,
+      "n_positive_test": 119,
+      "model_file": "ACCUSE.skops"
+    },
+    "AGREE": {
+      "f1": 0.8382352941176471,
+      "precision": 0.8636363636363636,
+      "recall": 0.8142857142857143,
+      "accuracy": 0.8267716535433071,
+      "n_train": 504,
+      "n_test": 127,
+      "n_positive_train": 279,
+      "n_positive_test": 70,
+      "model_file": "AGREE.skops"
+    },
+    "AID": {
+      "f1": 0.75,
+      "precision": 0.7358490566037735,
+      "recall": 0.7647058823529411,
+      "accuracy": 0.8194444444444444,
+      "n_train": 575,
+      "n_test": 144,
+      "n_positive_train": 205,
+      "n_positive_test": 51,
+      "model_file": "AID.skops"
+    },
+    "ASSAULT": {
+      "f1": 0.8448275862068966,
+      "precision": 0.8032786885245902,
+      "recall": 0.8909090909090909,
+      "accuracy": 0.875,
+      "n_train": 573,
+      "n_test": 144,
+      "n_positive_train": 217,
+      "n_positive_test": 55,
+      "model_file": "ASSAULT.skops"
+    },
+    "COERCE": {
+      "f1": 0.8064516129032258,
+      "precision": 0.7692307692307693,
+      "recall": 0.847457627118644,
+      "accuracy": 0.813953488372093,
+      "n_train": 515,
+      "n_test": 129,
+      "n_positive_train": 235,
+      "n_positive_test": 59,
+      "model_file": "COERCE.skops"
+    },
+    "CONCEDE": {
+      "f1": 0.7927927927927928,
+      "precision": 0.7586206896551724,
+      "recall": 0.8301886792452831,
+      "accuracy": 0.8333333333333334,
+      "n_train": 552,
+      "n_test": 138,
+      "n_positive_train": 211,
+      "n_positive_test": 53,
+      "model_file": "CONCEDE.skops"
+    },
+    "CONSULT": {
+      "f1": 0.7808219178082192,
+      "precision": 0.8028169014084507,
+      "recall": 0.76,
+      "accuracy": 0.751937984496124,
+      "n_train": 513,
+      "n_test": 129,
+      "n_positive_train": 298,
+      "n_positive_test": 75,
+      "model_file": "CONSULT.skops"
+    },
+    "COOPERATE": {
+      "f1": 0.7796610169491526,
+      "precision": 0.7796610169491526,
+      "recall": 0.7796610169491526,
+      "accuracy": 0.8,
+      "n_train": 518,
+      "n_test": 130,
+      "n_positive_train": 235,
+      "n_positive_test": 59,
+      "model_file": "COOPERATE.skops"
+    },
+    "MOBILIZE": {
+      "f1": 0.8709677419354839,
+      "precision": 0.84375,
+      "recall": 0.9,
+      "accuracy": 0.8848920863309353,
+      "n_train": 553,
+      "n_test": 139,
+      "n_positive_train": 239,
+      "n_positive_test": 60,
+      "model_file": "MOBILIZE.skops"
+    },
+    "PROTEST": {
+      "f1": 0.8299319727891157,
+      "precision": 0.8472222222222222,
+      "recall": 0.8133333333333334,
+      "accuracy": 0.8134328358208955,
+      "n_train": 535,
+      "n_test": 134,
+      "n_positive_train": 297,
+      "n_positive_test": 75,
+      "model_file": "PROTEST.skops"
+    },
+    "REJECT": {
+      "f1": 0.65,
+      "precision": 0.582089552238806,
+      "recall": 0.7358490566037735,
+      "accuracy": 0.671875,
+      "n_train": 509,
+      "n_test": 128,
+      "n_positive_train": 213,
+      "n_positive_test": 53,
+      "model_file": "REJECT.skops"
+    },
+    "REQUEST": {
+      "f1": 0.8395061728395061,
+      "precision": 0.8292682926829268,
+      "recall": 0.85,
+      "accuracy": 0.7886178861788617,
+      "n_train": 491,
+      "n_test": 123,
+      "n_positive_train": 321,
+      "n_positive_test": 80,
+      "model_file": "REQUEST.skops"
+    },
+    "RETREAT": {
+      "f1": 0.6779661016949152,
+      "precision": 0.6153846153846154,
+      "recall": 0.7547169811320755,
+      "accuracy": 0.7361111111111112,
+      "n_train": 575,
+      "n_test": 144,
+      "n_positive_train": 211,
+      "n_positive_test": 53,
+      "model_file": "RETREAT.skops"
+    },
+    "SANCTION": {
+      "f1": 0.6902654867256637,
+      "precision": 0.6610169491525424,
+      "recall": 0.7222222222222222,
+      "accuracy": 0.7445255474452555,
+      "n_train": 548,
+      "n_test": 137,
+      "n_positive_train": 215,
+      "n_positive_test": 54,
+      "model_file": "SANCTION.skops"
+    },
+    "SUPPORT": {
+      "f1": 0.7769784172661871,
+      "precision": 0.7714285714285715,
+      "recall": 0.782608695652174,
+      "accuracy": 0.7753623188405797,
+      "n_train": 550,
+      "n_test": 138,
+      "n_positive_train": 274,
+      "n_positive_test": 69,
+      "model_file": "SUPPORT.skops"
+    },
+    "THREATEN": {
+      "f1": 0.6909090909090909,
+      "precision": 0.6440677966101694,
+      "recall": 0.7450980392156863,
+      "accuracy": 0.75,
+      "n_train": 543,
+      "n_test": 136,
+      "n_positive_train": 206,
+      "n_positive_test": 51,
+      "model_file": "THREATEN.skops"
+    }
+  }
+}
