@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from ngec.actor_resolution import AgentMatcher, get_cache_path
+from ngec.actors.agent_matcher import AgentMatcher, get_cache_path
 
 
 def test_cache_path_creation():

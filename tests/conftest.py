@@ -26,6 +26,10 @@ def es_client_external():
         ES_USER = os.getenv("ES_USER", None)
         ES_PASSWORD = os.getenv("ES_PASSWORD", None)
         client = setup_es_client(hosts=[ES_HOST], port=ES_PORT, http_auth=(ES_USER, ES_PASSWORD))
+
+        # Forece actual (non-lazy) connection so we catch if ES is not running at all
+        client.info()
+
         return client
     except Exception as e:
         logger.error(f"Failed to set up external ES client: {e}")
@@ -36,6 +40,11 @@ def es_client_external():
 def es_client_local():
     try:
         client = setup_es_client(hosts=["localhost"], port=9200)
+
+        # Force actual (non-lazy) connection so we catch if ES is not running at all
+        # TODO: this should be more robust, i need a utility to also check data availability
+        client.info()
+
         return client
     except Exception as e:
         logger.error(f"Failed to set up local ES client: {e}")

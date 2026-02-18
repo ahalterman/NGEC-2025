@@ -1,7 +1,7 @@
 
 
 from .attribute_model import AttributeModel
-from .actor_resolution import ActorResolver
+from .actors.actor_resolution import ActorResolver
 from .geolocation import GeolocationModel
 from .formatter import Formatter
 from .utilities import load_nlp, stories_to_events
