@@ -29,6 +29,17 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 BackendType = Literal["vllm", "transformers", "mlx"]
 
+class Attributes(TypedDict):
+    """
+    Dictionary representing extracted attributes for an event.
+    """
+    event_type: str
+    anchor_quote: str
+    actor: list[str]
+    recipient: list[str]
+    date: list[str]
+    location: list[str]
+
 class AttributeModelInput(TypedDict):
     """
     Dictionary representing minimal input for AttributeModel processing.
@@ -45,19 +56,12 @@ class AttributeModelInput(TypedDict):
     event_text: str  # Required
     event_type: str  # Required
     event_mode: NotRequired[str]  # Optional
+    attributes: NotRequired[Attributes]  # Right now the code writes to the input list
     # Any other keys are allowed
 
-class Attributes(TypedDict):
-    """
-    Dictionary representing extracted attributes for an event.
-    """
-    event_type: str
-    anchor_quote: str
-    actor: list[str]
-    recipient: list[str]
-    date: list[str]
-    location: list[str]
 
+# The AM output writes attributes to the input list, so there is no distinction
+# between what is returned and what is input; maybe in the future it changes
 class AttributeModelOutput(AttributeModelInput):
     """
     Dictionary representing output from AttributeModel processing.
@@ -66,8 +70,7 @@ class AttributeModelOutput(AttributeModelInput):
     event.
     
     """
-    attributes: Attributes  
-
+    pass
 
 
 def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
@@ -91,9 +94,9 @@ def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
         event_definitions = pd.read_csv(file_path)
 
     if 'event' not in event_definitions.columns:
-        raise ValueError(f"During loading of the event definitions file, 'event' column was not found.")
+        raise ValueError("During loading of the event definitions file, 'event' column was not found.")
     if 'event_def' not in event_definitions.columns:
-        raise ValueError(f"During loading of the event definitions file, 'event_def' column was not found.")
+        raise ValueError("During loading of the event definitions file, 'event_def' column was not found.")
     if 'extraction_notes' not in event_definitions.columns:
         # raise a warning instead of an error
         logger.warning(f"No 'extraction_notes' column was found in {def_file}. Are you sure you don't want to add it?")
@@ -125,6 +128,11 @@ def _load_vllm_sampling_params():
     """
     Load the sampling parameters for the vLLM model.
     """
+    try: 
+        from vllm import SamplingParams
+    except ImportError:
+        raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
+    
     sampling_params = SamplingParams(
         temperature=0.5,       # Greedy decoding breaks Qwen
         top_p=0.8,             # Qwen3 non-thinking recommendation
@@ -189,12 +197,14 @@ class AttributeModel:
         # Load model based on backend
         if self.backend == "vllm":
             try:
-                from vllm import LLM, SamplingParams
+                from vllm import LLM
             except ImportError:
-                if not self.silent: logger.error("vLLM not available. Use another backend.")
+                if not self.silent: 
+                    logger.error("vLLM not available. Use another backend.")
                 raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
             
-            if not self.silent: logger.debug("Loading vLLM model")
+            if not self.silent: 
+                logger.debug("Loading vLLM model")
             if vllm_model:
                 self.model = vllm_model
             else:
@@ -205,7 +215,8 @@ class AttributeModel:
             self.sampling_params = _load_vllm_sampling_params()
             self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
         elif self.backend == "transformers":
-            if not self.silent: logger.debug("Loading transformers model")
+            if not self.silent: 
+                logger.debug("Loading transformers model")
             # Use transformers pipeline
             device_id = 0 if self.device == "cuda" else -1
             self.model = pipeline(
@@ -222,7 +233,8 @@ class AttributeModel:
             except ImportError:
                 raise ImportError("mlx_lm is not installed. Please install it or use another backend.")
             
-            if not self.silent: logger.debug("Loading MLX model")
+            if not self.silent: 
+                logger.debug("Loading MLX model")
             # MLX doesn't use device parameter the same way as PyTorch
             self.model, self.tokenizer = load("ahalt/event-attribute-extractor")
             # Store the generate function and create sampler
@@ -406,7 +418,8 @@ class AttributeModel:
         logger.debug("Starting attribute process")
 
         # Create a list of prompts
-        if not self.silent: print("Making prompts...")
+        if not self.silent: 
+            print("Making prompts...")
         prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
         final_attributes = self.call_llm_batch(prompts)
 
