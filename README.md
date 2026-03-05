@@ -48,28 +48,131 @@ If you are not using `uv` to install `ngec`, the `mordecai3` install will not wo
 `ngec` caches agent embeddings to improve speed. Those can be easily regenerated if needed. In any case, uninstalling the package will not delete those. They are located at OS-specific cache locations, determing using the [`platformdirs`](https://pypi.org/project/platformdirs/) package. See their documentation for [OS-specific cache folders](https://platformdirs.readthedocs.io/en/latest/platforms.html).
 
 
-## Misc. notes
+## Usage
 
-To setup a local environment for package development with `uv`, this command 
-should work:
+NGEC includes a functioning demo PLOVER coder (it does require ES though):
 
-```bash
-uv venv --python 3.13  # or another version >=3.10
-uv sync --extra models --group dev
+```python
+import logging
+from pprint import pprint
+
+from ngec.plover_coder import PloverCoder
+from ngec.es_client import setup_es_client
+from ngec.logging import setup_logging
+
+# Quiet third-party logging
+setup_logging(
+    level=logging.DEBUG,
+    format_string="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    quiet_third_party=True
+)
+
+# Connect to ES
+es_client = setup_es_client(hosts=["localhost"], port=9200)
+
+pc = PloverCoder(es_client=es_client)
+
+story_list = [
+        {"id": "story1", "event_text": "Protesters were in the streets in Paris again today to protest against the government's austerity measures.", "pub_date": "2016-05-01"}
+    ]
+    
+event_list = pc.process(story_list)
+
+pprint(event_list, sort_dicts=False, width=100)
 ```
 
-To verify, find the `ngec` entry in `uv.lock`, it should include this key:
-
 ```
-source = { editable = "." }
+[{'id': 'story1_PROTEST_',
+  'event_text': 'Protesters were in the streets in Paris again today to protest against the '
+                "government's austerity measures.",
+  'pub_date': '2016-05-01',
+  'event_type': 'PROTEST',
+  'event_type_confidence': {'PROTEST': 0.9315939265193662},
+  'event_mode': '',
+  'geolocated_ents': [{'feature_code': 'PPLC',
+                       'feature_class': 'P',
+                       'country_code3': 'FRA',
+                       'lat': 48.85341,
+                       'lon': 2.3488,
+                       'admin1_code': '11',
+                       'admin1_name': 'Île-de-France',
+                       'admin2_code': '75',
+                       'admin2_name': 'Paris',
+                       'geonameid': '2988507',
+                       'score': 1.0,
+                       'search_name': 'Paris',
+                       'start_char': 34,
+                       'end_char': 39,
+                       'city_id': '2988507',
+                       'city_name': 'Paris',
+                       'country_name': 'France',
+                       'resolved_placename': 'Paris'}],
+  'story_people': [],
+  'story_organizations': [],
+  'story_places': ['Paris'],
+  '_doc_position': 0,
+  'orig_id': 'story1',
+  'attributes': {'event_type': 'PROTEST',
+                 'anchor_quote': 'Protesters were in the streets in Paris again today to protest '
+                                 'against the government’s austerity measures.',
+                 'actor': ['Protesters'],
+                 'recipient': ['the government'],
+                 'date': ['today'],
+                 'location': ['Paris']},
+  'actor': [{'wiki': '',
+             'actor_wiki_job': '',
+             'all_code1s': [],
+             'all_code2s': [],
+             'country': '',
+             'code_1': 'CVL',
+             'code_2': 'OPP',
+             'actor_role_query': 'Protesters',
+             'actor_resolved_pattern': 'protesters',
+             'actor_pattern_conf': 0.9811088938288606,
+             'actor_resolution_reason': '',
+             'description': 'protesters',
+             'source': 'BERT matching full text',
+             'best_reason': ''}],
+  'recipient': [{'wiki': '',
+                 'actor_wiki_job': '',
+                 'all_code1s': [],
+                 'all_code2s': [],
+                 'country': '',
+                 'code_1': 'GOV',
+                 'code_2': '',
+                 'actor_role_query': 'government',
+                 'actor_resolved_pattern': 'government',
+                 'actor_pattern_conf': 0.9999999999992808,
+                 'actor_resolution_reason': '',
+                 'description': 'government',
+                 'source': 'BERT matching full text',
+                 'best_reason': ''}],
+  'event_location': {'event_loc': {'feature_code': 'PPLC',
+                                   'feature_class': 'P',
+                                   'country_code3': 'FRA',
+                                   'lat': 48.85341,
+                                   'lon': 2.3488,
+                                   'admin1_code': '11',
+                                   'admin1_name': 'Île-de-France',
+                                   'admin2_code': '75',
+                                   'admin2_name': 'Paris',
+                                   'geonameid': '2988507',
+                                   'score': 1.0,
+                                   'search_name': 'Paris',
+                                   'start_char': 34,
+                                   'end_char': 39,
+                                   'city_id': '2988507',
+                                   'city_name': 'Paris',
+                                   'country_name': 'France',
+                                   'resolved_placename': 'Paris'},
+                     'reason': 'success'},
+  'date_resolved': {'resolved_date': datetime.datetime(2016, 5, 1, 0, 0),
+                    'granularity': 'day',
+                    'reason': '<Resolved relative date with past reference>'}}]
 ```
 
-### Tests against external ES instance
 
-Create a `.env` file with the ES credentials. 
-
-
-## Logging
+### Logging
 
 Some of the third-party dependencies have very verbose loggers by default. To quiet those:
 

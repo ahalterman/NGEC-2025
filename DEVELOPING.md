@@ -27,3 +27,8 @@ uv run pytest -m substantive
 # run ALL tests, including substantive
 uv run pytest -m ""            
 ```
+
+
+## Tests against external ES instance
+
+Create a `.env` file with the ES credentials. 
