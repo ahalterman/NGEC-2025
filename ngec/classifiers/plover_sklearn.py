@@ -16,13 +16,19 @@ See the NGEC documentation for detailed guidance.
 import csv
 import warnings
 from pathlib import Path
+from importlib import resources
+
 
 import skops.io as sio
 from sentence_transformers import SentenceTransformer
 
 
+class DemoModelWarning(UserWarning):
+    """Warning for non-production/demo model usage."""
 
-def load_ontology(codebook_path):
+
+
+def load_ontology(codebook_path: str | None = None) -> dict:
     """
     Load event type ontology from a codebook CSV file.
 
@@ -31,10 +37,12 @@ def load_ontology(codebook_path):
 
     Parameters
     ----------
-    codebook_path : str
+    codebook_path : str | None
         Path to the codebook CSV file. Expected to have columns:
         - 'event': event type names (e.g., AGREE, PROTEST, ASSAULT)
         - 'mode': mode names (may be empty for types without modes)
+
+        The default will use the PLOVER codebook included in NGEC. 
 
     Returns
     -------
@@ -50,6 +58,9 @@ def load_ontology(codebook_path):
     ontology['PROTEST']
     # ['demo', 'riot', 'strike', 'hunger', 'boycott', 'obstruct']
     """
+    if codebook_path is None:
+        codebook_path = str(resources.files("ngec").joinpath("assets/PLOVER_structured_codebook_updated.csv"))
+    
     ontology = {}
     
     with open(codebook_path, 'r', encoding='utf-8') as f:
@@ -110,15 +121,17 @@ class PloverSklearnClassifier:
 
     def __init__(
         self,
-        codebook_path,
-        type_model_dir,
-        mode_model_dir=None,
-        threshold=0.6,
-        encoder_name='paraphrase-mpnet-base-v2',
-        progress_bar=False
+        threshold: float = 0.6,
+        encoder_name: str = 'paraphrase-mpnet-base-v2',
+        progress_bar: bool = False,
+        codebook_path: str | None = None,
+        type_model_dir: str | None = None,
+        mode_model_dir: str | None = None,
     ):
-        self.codebook_path = codebook_path
-        self.type_model_dir = Path(type_model_dir)
+        if type_model_dir is None:
+            type_model_dir = str(resources.files("ngec").joinpath("assets/test_event_models/"))
+        self.type_model_dir = Path(type_model_dir) 
+        
         self.mode_model_dir = Path(mode_model_dir) if mode_model_dir else None
         self.threshold = threshold
         self.progress_bar = progress_bar
@@ -135,13 +148,15 @@ class PloverSklearnClassifier:
         # Load mode classifiers (optional)
         self.mode_models = self._load_mode_models() if mode_model_dir else {}
 
-        print(
+        warnings.warn(
             "Event classification models loaded. NOTE: these models are not the "
             "production models used to produce the POLECAT dataset. Instead, these "
             "are demonstration models for the PLOVER ontology trained on synthetic "
             "text. If you are making custom event data, you'll need to train your "
             "own models. See the `setup` directory in the NGEC repo "
-            "(github.com/ahalterman/NGEC)."
+            "(github.com/ahalterman/NGEC).",
+            DemoModelWarning,
+            stacklevel=2
         )
 
     # -------------------------------------------------------------------------
