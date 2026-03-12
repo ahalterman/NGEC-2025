@@ -78,6 +78,9 @@ en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/do
 mordecai3 = { git = "https://github.com/ahalterman/mordecai3" }
 
 [dependency-groups]
+demo-app = [
+    "streamlit>=1.55.0",
+]
 dev = [
     "dotenv>=0.9.9",
     "ipython>=8.37.0",
