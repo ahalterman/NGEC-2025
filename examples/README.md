@@ -8,3 +8,13 @@ Currently, it includes:
 - `demo_mordecai.py`: a simple demo showing the functionality of the geoparser
 
 For information on training your own event, mode, and context models, see the `setup` directory.
+
+## Demo apps
+
+### Attribute Model
+
+![Screenshot of the attribute model demo app](assets/attribute-model-app-screenshot.png)
+
+### PLOVER Coder
+
+![Screenshot of the end-to-end NGEC PLOVER coder demo app](assets/plover-coder-app-screenshot.png)

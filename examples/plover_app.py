@@ -3,7 +3,7 @@
 #
 #   To run:
 #   
-#   uv run --group demo-app streamlit run examples/ngec_app.py
+#   uv run --group demo-app streamlit run examples/plover_app.py
 #
 
 import logging
@@ -34,7 +34,7 @@ import pandas as pd
 setup_logging(level=logging.WARNING, quiet_third_party=True)
 logger = logging.getLogger(__name__)
 
-st.markdown("## NGEC test interface")
+st.markdown("## NGEC PLOVER Coder Demo")
 
 st.markdown("Put in some story text to see what NGEC produces.")
 st.markdown("The event classifier step uses the open source models that are trained on synthetic documents. The accuracy is not as good as the proprietary models used to produce the POLECAT dataset. To manually override the event classification, set the event type (and mode) on the sidebar.")
