@@ -47,12 +47,10 @@ am = load_attribute_model()
 
 st.markdown("## Attribute Model Demo")
 
-st.markdown("Put in some story text to see what NGEC produces.")
-st.markdown("The event classifier step uses the open source models that are trained on synthetic documents. The accuracy is not as good as the proprietary models used to produce the POLECAT dataset. To manually override the event classification, set the event type (and mode) on the sidebar.")
-st.markdown("Intermediate output is also returned but hidden by default.")
+st.markdown("The attribute model extracts key attributes from an event text and given event type. Sometimes this will be an expact span from the input text, but since the underlying model is generative, it can also rephrase or infer information that is not explicitly stated in the text.")
 
 text = st.text_area("Text", "Protesters were in the streets in Paris again today to protest against the government's austerity measures.")
-event_type = st.selectbox("Event type", PLOVER_EVENT_TYPES)
+event_type = st.selectbox("Event type", PLOVER_EVENT_TYPES, index=9)
 
 
 
