@@ -8,6 +8,7 @@ This test verifies that:
 4. Cache is stored in user cache directory (not package assets)
 """
 
+import re
 import tempfile
 from pathlib import Path
 
@@ -54,6 +55,31 @@ def test_agent_matcher_uses_cache():
         # Cache file should not have been modified
         second_mtime = cache_file.stat().st_mtime
         assert first_mtime == second_mtime, "Cache should be reused, not recomputed"
+
+
+def test_cache_key_is_deterministic_hex():
+    """The cache directory name must be a stable hex digest, not a per-process
+    randomized Python hash() value.
+
+    Python's built-in hash() on strings is randomized via PYTHONHASHSEED, so it
+    produces a different value in every process and breaks cross-process cache
+    reuse. The cache key must be a deterministic content hash instead. A randomized
+    hash() would yield a signed integer (often negative) prefix, which this regex
+    rejects.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cache_path = Path(tmpdir) / "test_cache"
+
+        AgentMatcher(cache_path=cache_path)
+
+        cache_subdirs = list(cache_path.glob("*_PLOVER_agents"))
+        assert len(cache_subdirs) == 1, "Should have exactly one cache directory"
+
+        name = cache_subdirs[0].name
+        assert re.fullmatch(r"[0-9a-f]{16}_PLOVER_agents", name), (
+            f"Cache key {name!r} is not a deterministic 16-char hex digest; "
+            "this indicates a non-deterministic hash is being used"
+        )
 
 
 def test_agent_matcher_custom_agents_file():

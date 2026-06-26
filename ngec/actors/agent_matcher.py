@@ -1,3 +1,4 @@
+import hashlib
 from importlib import resources
 import logging
 import os
@@ -198,7 +199,7 @@ class AgentMatcher:
         # Read agents file and compute hash for cache key
         with open(self.agents_file, "r", encoding="utf-8") as f:
             data = f.read()
-        current_hash = hash(data)
+        current_hash = hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
 
         # Create cache directory based on hash and filename
         # This allows different agent files to have separate caches
