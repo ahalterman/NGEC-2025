@@ -108,31 +108,27 @@ class WikiClient:
             # Exact matches (highest priority)
             {"term": {"title": {"value": query_term, "boost": title_exact_boost}}},
             {"match": {"title": {"query": query_term, "boost": title_fuzzy_boost}}},
+            # Folded (ASCII-normalized + stemmed) title match
+            {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
             {"term": {"redirects": {"value": query_term, "boost": redirects_exact_boost}}},
             {"match": {"redirects": {"query": query_term, "boost": redirects_fuzzy_boost}}},
+            # Folded redirects match (handles diacritics + plurals)
+            {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
             {"term": {"alternative_names": {"value": query_term, "boost": alternative_names_boost}}},
             {"match": {"alternative_names": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
+            {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
             {"match": {"intro_para": {"query": query_term, "boost": intro_para_boost}}},
             {"match": {"short_desc": {"query": query_term, "boost": short_desc_boost}}}
         ]
 
         if use_importance:
-            # Add importance signals as range queries
+            # Boost articles by redirect count (proxy for Wikipedia importance)
             importance_clauses = [
-                # Boost articles with many redirects (indicates importance)
-                {"range": {"redirects": {"gte": ["5"], "boost": 5}}},
-                {"range": {"redirects": {"gte": ["10"], "boost": 30}}},
-                {"range": {"redirects": {"gte": ["20"], "boost": 100}}},
+                {"range": {"redirect_count": {"gte": 5, "boost": 5}}},
+                {"range": {"redirect_count": {"gte": 10, "boost": 30}}},
+                {"range": {"redirect_count": {"gte": 20, "boost": 100}}},
 
-                # Boost articles with many categories
-                {"range": {"categories": {"gte": ["5"], "boost": 3}}},
-                {"range": {"categories": {"gte": ["10"], "boost": 50}}},
-
-                # Boost articles with alternative names
-                {"range": {"alternative_names": {"gte": ["2"], "boost": 2}}},
-                {"range": {"alternative_names": {"gte": ["5"], "boost": 10}}},
-
-                # Boost articles with infoboxes (if you have this field)
+                # Boost articles with infoboxes
                 {"exists": {"field": "infobox", "boost": 3}},
 
                 # Boost articles with short descriptions
@@ -328,9 +324,6 @@ class WikiSearcher:
                 good_res = [r for r in good_res if not re.search(pattern, field_getter(r))]
             else:
                 good_res = [r for r in good_res if field_getter not in r or not re.search(pattern, r[field_getter])]
-        
-        # Filter out articles with short intro paragraphs
-        good_res = [r for r in good_res if len(r['intro_para']) > 50 and r['intro_para'].strip()]
         
         return good_res
 
@@ -640,6 +633,29 @@ class WikiMatcher:
             # Intro paragraph length
             intro_length = len(article.get('intro_para', ''))
 
+            # Name coverage: fraction of query words that appear in the title
+            # (+ redirects + alt names). Low coverage signals a false positive.
+            query_words = set(query_term.lower().split())
+            title_words = set(title.lower().split())
+            all_name_words = title_words.copy()
+            for r in article.get('redirects', []):
+                all_name_words.update(r.lower().split())
+            for a in article.get('alternative_names', []):
+                all_name_words.update(a.lower().split())
+            if query_words:
+                name_coverage = len(query_words & all_name_words) / len(query_words)
+            else:
+                name_coverage = 0
+
+            # Category overlap: how many category words appear in the document context
+            cat_overlap = 0
+            if context:
+                context_lower = context.lower()
+                for cat in article.get('categories', []):
+                    cat_words = cat.lower().split()
+                    if any(w in context_lower for w in cat_words if len(w) > 3):
+                        cat_overlap += 1
+
             data.append({
                 'index': i,
                 'title': title,
@@ -656,6 +672,10 @@ class WikiMatcher:
                 'num_es_results': results_count,
                 'intro_length': intro_length,
                 'country_match': country_match,
+                'name_coverage': name_coverage,
+                'cat_overlap': cat_overlap,
+                'raw_es_score': article.get('raw_es_score', 0),
+                'log_es_score': np.log1p(article.get('raw_es_score', 0)),
 
                 'title_sim': 0,  # Will be filled in later
                 'context_sim_intro': 0,  # Will be filled in later
@@ -694,7 +714,7 @@ class WikiMatcher:
 
         # Batch compute context similarity
         if context or actor_desc:
-            intros = [article['intro_para'][0:300] for article in articles]
+            intros = [article['intro_para'][0:600] for article in articles]
             short_descs = [article['short_desc'] for article in articles]
             # Encode context once
             intro_embeddings = self.trf.encode(intros, show_progress_bar=False)
@@ -718,6 +738,11 @@ class WikiMatcher:
             # Add to dataframe
             df['actor_desc_sim_intro'] = desc_sims_intro[0].tolist()
             df['actor_desc_sim_short'] = desc_sims_short[0].tolist()
+
+        # Normalize ES score within this candidate set
+        es_max = df['raw_es_score'].max()
+        es_min = df['raw_es_score'].min()
+        df['es_score_norm'] = (df['raw_es_score'] - es_min) / (es_max - es_min) if es_max > es_min else 0
 
         # Normalize scores
         for col in ['title_sim', 'context_sim_intro', 'context_sim_short',
@@ -942,7 +967,7 @@ class WikiMatcher:
             y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
         score_df['ranker_score'] = y_proba
         score_df['is_max_for_task'] = (score_df['ranker_score'] == score_df['ranker_score'].max()).astype(int)
-        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > 0.5)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > 0.1)
         pick = score_df[score_df['is_predicted_match'] == True]
         if not pick.empty:
             pick = pick.iloc[0].to_dict()
@@ -1053,13 +1078,26 @@ class WikiMatcher:
 
         if context_doc:
             logger.debug(f"Expanding query term '{query_term}' using NER and acronyms")
-            expanded_query = [i.text for i in context_doc.ents if query_term in i.text]
-            if expanded_query:
-                # take the first one
-                expanded_query = expanded_query[0]
-                if len(expanded_query) > len(query_term):
-                    query_term = expanded_query
-                    logger.debug(f"Used NER to expand context: {expanded_query}")
+            # Find entities containing the query term, preferring:
+            # 1. Word-boundary matches (query is a full word in the entity, not a substring)
+            # 2. Entities that start with the query term
+            # 3. The longest match (most informative)
+            candidates = [i.text for i in context_doc.ents if query_term in i.text and len(i.text) > len(query_term)]
+            if candidates:
+                # Prefer word-boundary matches (e.g. "Xi" should match "Xi Jinping" not "Bo Xilai")
+                boundary_pattern = r'(?:^|\s)' + re.escape(query_term) + r'(?:\s|$)'
+                boundary_matches = [c for c in candidates if re.search(boundary_pattern, c)]
+                if boundary_matches:
+                    # Among boundary matches, prefer those starting with the query
+                    starts_with = [c for c in boundary_matches if c.startswith(query_term)]
+                    if starts_with:
+                        expanded_query = max(starts_with, key=len)
+                    else:
+                        expanded_query = max(boundary_matches, key=len)
+                else:
+                    expanded_query = max(candidates, key=len)
+                query_term = expanded_query
+                logger.debug(f"Used NER to expand context: {expanded_query}")
         
             acronym_dict = make_acronym_dicts(doc=context_doc)
             # Check if query term is an acronym
@@ -1072,17 +1110,18 @@ class WikiMatcher:
                 logger.debug(f"Using acronym expansion: {query_term}")
         return query_term
 
-    def query_wiki(self, 
-                   query_term, 
-                   limit_term="", 
-                   country="", 
-                   context="", 
+    def query_wiki(self,
+                   query_term,
+                   limit_term="",
+                   country="",
+                   context="",
                    actor_desc="",
                    method="neural",
-                   max_results=200):
+                   max_results=200,
+                   skip_expansion=False):
         """
         Search Wikipedia and return the best matching article.
-        
+
         Args:
             query_term: Term to search for
             limit_term: Term to limit results by
@@ -1090,14 +1129,18 @@ class WikiMatcher:
             context: Context text to help with disambiguation
             actor_desc: Actor description (automatically parsed)
             max_results: Maximum results to return from search
-            
+            skip_expansion: If True, skip NER-based query expansion (use when
+                the caller already extracted the core entity via NER)
+
         Returns:
             dict or None: Best matching Wikipedia article or None if no good match
         """
         if method not in ["neural", "rules"]:
             raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
-        # Do NER expansion by default
-        if context:
+        # Strip possessive suffix before searching
+        query_term = re.sub(r"[''']s\s*$", "", query_term).strip()
+        # Do NER expansion unless caller already extracted a specific (multi-word) entity
+        if context and not skip_expansion:
             logger.debug("Context present, so attempting NER expansion")
             query_term = self._expand_query(query_term, context)
 
