@@ -1069,13 +1069,14 @@ class ActorResolver:
         Examples:
             >>> input = [
                 {"pub_date": "2007-07-01",
-                 # attribute model output, but only minimal subset needed here
+                 # attribute model output: one event per record, 'attributes' is a dict
                  "attributes": {
-                    'actor': ['President Macron', 'Chancellor Angel Merkel'], 
-	                'recipient': ['N/A']
-                }},
+                    'actor': ['President Macron', 'Chancellor Angel Merkel'],
+                    'recipient': ['N/A']
+                 }},
             ]
             >>> ar.process(input)
+            # each event gains top-level 'actor' and 'recipient' (coded)
 
 
         """
@@ -1083,15 +1084,20 @@ class ActorResolver:
         event_list = deepcopy(event_list)
 
         for event in track(event_list, description="Resolving actors..."):
-            
+
             # Get the date from the event
             query_date = event.get('pub_date', "today")
 
+            # 'attributes' is a single dict (one event per record). .get() guards
+            # against a record with no attributes.
+            attributes = event.get("attributes", {})
+
             # We need to go through both 'actor' and 'recipient'
             for attribute_key in ["actor", "recipient"]:
-                actor_list = event["attributes"][attribute_key]
+                # .get(): the model may omit a key entirely
+                actor_list = attributes.get(attribute_key, [])
 
-                # We are going to put the resolved actor info back in the event,
+                # We put the resolved actor info at the top level of the event,
                 # under the relevant key ('actor' or 'recipient'); so basically
                 # moving one up from event["attributes"]
                 event[attribute_key] = []
@@ -1102,7 +1108,7 @@ class ActorResolver:
                     exclude = ["N/A"]
                     if actor in exclude:
                         continue
-                    
+
                     res = self.actor_to_code(actor, query_date=query_date)
                     # actor_to_code can return None, this will break the code below
                     if res is None:
@@ -1115,24 +1121,24 @@ class ActorResolver:
 
                     this_actor['wiki'] = res.get('wiki', "")
                     this_actor['actor_wiki_job'] = res.get('actor_wiki_job', "")
-                    
+
                     # Add code lists
                     this_actor['all_code1s'] = res.get('all_code1s', [])
                     this_actor['all_code2s'] = res.get('all_code2s', [])
-                    
+
                     # Add country and codes
                     this_actor['country'] = res.get('country', "")
                     this_actor['code_1'] = res.get('code_1', "")
                     this_actor['code_2'] = res.get('code_2', "")
-                    
+
                     # Add query and pattern information
                     this_actor['actor_role_query'] = res.get('query', "")
                     this_actor['actor_resolved_pattern'] = res.get('description', "")
-                    
+
                     # Add confidence and reason
                     this_actor['actor_pattern_conf'] = float(res.get('conf', 0))
                     this_actor['actor_resolution_reason'] = res.get('best_reason', "")
-                
+
                     # Other stuff
                     this_actor['description'] = res.get('description', "")
                     this_actor['source'] = res.get('source', "")
@@ -1226,7 +1232,7 @@ if __name__ == "__main__":
 
     es_client = setup_es_client()
 
-    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': [{'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}]}
+    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': '789_0', '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': {'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}}
     agent_matcher = AgentMatcher()
     actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
     #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}

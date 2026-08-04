@@ -6,10 +6,13 @@ import re
 import json
 import logging
 
+from collections import Counter
 from importlib import resources
 from tqdm import tqdm
 from transformers import AutoTokenizer, pipeline
 from typing import Any, cast, Literal, TypedDict, NotRequired
+
+from .utilities import explode_events
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +34,11 @@ BackendType = Literal["vllm", "transformers", "mlx"]
 
 class Attributes(TypedDict):
     """
-    Dictionary representing extracted attributes for an event.
+    Dictionary representing the extracted attributes of a single event.
+
+    The model may extract more than one event from a document; each becomes its
+    own event record (via ``explode_events``) with one of these as its
+    ``attributes`` value.
     """
     event_type: str
     anchor_quote: str
@@ -56,19 +63,19 @@ class AttributeModelInput(TypedDict):
     event_text: str  # Required
     event_type: str  # Required
     event_mode: NotRequired[str]  # Optional
-    attributes: NotRequired[Attributes]  # Right now the code writes to the input list
+    attributes: NotRequired[Attributes]  # A single extracted event (after exploding)
     # Any other keys are allowed
 
 
-# The AM output writes attributes to the input list, so there is no distinction
-# between what is returned and what is input; maybe in the future it changes
+# Each output record carries a single 'attributes' dict. Note the output list is
+# NOT the same object as the input list: process() explodes multi-event records
+# and drops empty ones, so callers must use the returned list.
 class AttributeModelOutput(AttributeModelInput):
     """
     Dictionary representing output from AttributeModel processing.
 
-    The input list of dicts is augmented with an 'attributes' key for each
-    event.
-    
+    Each record has an 'attributes' key holding a single extracted event.
+
     """
     pass
 
@@ -408,10 +415,21 @@ class AttributeModel:
 
         Returns
         -----
-        event_list: list of dicts
-          Adds 'attributes', which looks like: {'ACTOR': [{'text': 'Mario Abdo Benítez', 'score': 0.19762}], 
-                                                'RECIP': [{'text': 'Fernando Lugo', 'score': 0.10433}], 
-                                                'LOC': [{'text': 'Paraguay', 'score': 0.24138}]}
+        event_list: list of dicts (a NEW list, not the input)
+          The model may extract zero, one, or several events from a single
+          document. Each extracted event becomes its own record (via
+          ``explode_events``) with a single 'attributes' dict:
+            {'event_type': 'PROTEST',
+             'anchor_quote': '...',
+             'actor': ['a group of Hindu nationalists'],
+             'recipient': ['Muslim shops'],
+             'date': ['last week'],
+             'location': ['Dehli']}
+          Records for which the model extracted no event are dropped from the
+          returned list (reported via a warning and written to a separate file),
+          so the output never contains empty-attribute junk. Because records are
+          exploded and dropped, the returned list is not the input list -- use
+          the return value.
         """
         # Step 1: further lengthen the data to generate separate elements
         # for each attribute/question, so we have unique (ID, event_cat, attribute) 
@@ -438,8 +456,8 @@ class AttributeModel:
             #      'location': 'Dehli',
             #      'recipient': 'Muslim shops'}]
             #i['attributes'] = final_attributes[n]
-            for event in attributes:
-                for key, value in event.items():
+            for sub_event in attributes:
+                for key, value in sub_event.items():
                     if key in ['actor', 'date', 'recipient', 'location']:
                         # If the value is a string, split it by semicolon and strip whitespace
                         if isinstance(value, str):
@@ -449,22 +467,44 @@ class AttributeModel:
                             value = [v.strip() for v in value]
                         else:
                             continue
-                        # Update the event with the cleaned value
-                        event[key] = value
-            event_list[n]['attributes'] = attributes[0]
+                        # Update the sub-event with the cleaned value
+                        sub_event[key] = value
+            # Temporarily store the full list of extracted sub-events; explode_events
+            # (below) turns each into its own record with a single 'attributes' dict.
+            event_list[n]['attributes'] = attributes
+
+        # Lengthen the data so each extracted event is its own record, and set
+        # aside records where the model found no event (attributes == []).
+        event_list, dropped = explode_events(event_list)
+        if dropped:
+            self._report_dropped(dropped)
 
         if self.save_intermediate:
             fn = time.strftime("%Y_%m_%d-%H") + "_attribute_output.jsonl"
             with jsonlines.open(fn, "w") as f:
                 f.write_all(event_list)
 
-        # The way this works currently, process() mutates the input lists and 
-        # dicts, so technically there isn't really a need to return anything. 
-        # An alternative would be to explicitly copy the input and return a new
-        # list. Pros: probably more intuitive. Cons: more memory usage.
-        # Or, just return a list of attributes, but add a shared key to both
-        # the input list and output list to link them. 
         return cast(list[AttributeModelOutput], event_list)
+
+    def _report_dropped(self, dropped):
+        """
+        Report events the model produced no extraction for. These are kept OUT of
+        the main output (people are bad at filtering downstream, so we don't emit
+        empty-attribute junk), but we warn loudly about how many were dropped and
+        their event-type distribution, and write them to a separate file so they
+        remain inspectable.
+        """
+        distribution = Counter(event.get('event_type') for event in dropped)
+        dist_str = ", ".join(f"{event_type}: {count}"
+                             for event_type, count in distribution.most_common())
+        fn = time.strftime("%Y_%m_%d-%H%M%S") + "_dropped_events.jsonl"
+        with jsonlines.open(fn, "w") as f:
+            f.write_all(dropped)
+        logger.warning(
+            f"Dropped {len(dropped)} event(s) with no extracted attributes and "
+            f"excluded them from the main output. By event type: {dist_str}. "
+            f"The dropped events were written to {os.path.abspath(fn)}."
+        )
 
 
 if __name__ == "__main__":
@@ -510,15 +550,16 @@ if __name__ == "__main__":
     gc.collect()
 
 
-    #event_list[0]
-    #{'event_text': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
-    # 'id': 123, 
-    # '_doc_position': 0, 
-    # 'event_type': 'PROTEST', 
-    # 'event_mode': 'riot', 
-    # 'attributes': [{'event_type': 'PROTEST: Violent riot', 
-    #               'anchor_quote': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
-    #               'actor': ['a group of Hindu nationalists'], 
-    #               'recipient': ['Muslim shops'], 
-    #               'date': ['last week'], 
-    #               'location': ['Dehli']}]}
+    # all_outputs[0]  (one record per extracted event; 'attributes' is a dict,
+    # and the id has an appended sub-event index)
+    #{'event_text': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.',
+    # 'id': '123_0',
+    # '_doc_position': 0,
+    # 'event_type': 'PROTEST',
+    # 'event_mode': 'riot',
+    # 'attributes': {'event_type': 'PROTEST: Violent riot',
+    #                'anchor_quote': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.',
+    #                'actor': ['a group of Hindu nationalists'],
+    #                'recipient': ['Muslim shops'],
+    #                'date': ['last week'],
+    #                'location': ['Dehli']}}

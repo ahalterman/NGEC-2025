@@ -69,6 +69,8 @@ def es_client_external():
 es_client = es_client_external()
 
 def format_output(cleaned_events):
+    # One record per extracted event, with resolved actors/recipients/location/
+    # date at the top level.
     for event in cleaned_events:
         actors = recipients = actor_codes = recipient_codes = actor_wikis = recip_wikis = ""
 
@@ -82,7 +84,7 @@ def format_output(cleaned_events):
             recipient_codes = '; '.join([f"{i['country']} {i['code_1']}" for i in event['recipient']])
             recip_wikis = '; '.join([i['wiki'] for i in event['recipient']])
 
-        geo = event.get('event_location', {}).get('event_loc') or {}
+        geo = (event.get('event_location') or {}).get('event_loc') or {}
         resolved_placename = geo.get('resolved_placename', '')
         adm1 = geo.get('admin1_name', '')
         country = geo.get('country_name', '')

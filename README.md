@@ -82,7 +82,7 @@ pprint(event_list, sort_dicts=False, width=100)
 ```
 
 ```
-[{'id': 'story1_PROTEST_',
+[{'id': 'story1_PROTEST__0',
   'event_text': 'Protesters were in the streets in Paris again today to protest against the '
                 "government's austerity measures.",
   'pub_date': '2016-05-01',
@@ -112,6 +112,8 @@ pprint(event_list, sort_dicts=False, width=100)
   'story_places': ['Paris'],
   '_doc_position': 0,
   'orig_id': 'story1',
+  # Each extracted event is its own record. 'attributes' is a single dict; the
+  # resolved actors/recipients, event_location, and date_resolved are top-level.
   'attributes': {'event_type': 'PROTEST',
                  'anchor_quote': 'Protesters were in the streets in Paris again today to protest '
                                  'against the government’s austerity measures.',

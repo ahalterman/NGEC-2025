@@ -38,13 +38,16 @@ def country_name_dict(file_path: str | None=None) -> dict:
 
 def resolve_date(event: dict) -> dict:
     """
-    Create a new 'date_resolved' key with a date in YYYY-MM-DD format
+    Add a top-level 'date_resolved' key to an event, resolved from its
+    attributes' 'date' value and the event's publication date.
+
     >>> DateDataParser().get_date_data('March 2015')
     DateData(date_obj=datetime.datetime(2015, 3, 16, 0, 0), period='month', locale='en')
     """
-    date_string = event.get('attributes', {}).get('date', [{}])[0]
-    pub_date = event.get('pub_date', None)
-    res = _resolve_date(date_string=date_string, ref_date=pub_date)
+    attributes = event.get('attributes') or {}
+    date_list = attributes.get('date') or []
+    date_string = date_list[0] if date_list else None
+    res = _resolve_date(date_string=date_string, ref_date=event.get('pub_date'))
     event['date_resolved'] = asdict(res)
     return event
 
@@ -503,20 +506,20 @@ class Formatter:
           debugging. Defaults to False.
         """
         for n, event in enumerate(event_list):
-            #if n == 0:
-            #    print(e)
-            #event = self.find_event_loc(event)
-            #event = self.add_meta(event)
+            # 'attributes' is a single dict (one event per record).
+            attributes = event.get('attributes') or {}
+            location_list = attributes.get('location') or []
+            search_term = location_list[0] if location_list else None
             event["event_location"] = pick_event_loc(
-                event.get('attributes', ["N/A"]).get('location', ["N/A"])[0],
+                search_term,
                 event.get('geolocated_ents', []),
                 geo_confidence_threshold=self.geo_threshold
             )
             try:
-                event = resolve_date(event)
+                resolve_date(event)
             except Exception as exception:
                 logger.warning(f"{exception} parsing date for event number {n}")
-        
+
         if return_raw:
             return event_list
         else:

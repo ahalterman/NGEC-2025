@@ -143,3 +143,54 @@ def stories_to_events(story_list, doc_list=None):
                     event_list.append(d)
     return event_list
 
+
+def explode_events(event_list):
+    """
+    Expand each event's list of extracted sub-events into separate event records.
+
+    The attribute model may extract zero, one, or several distinct events of the
+    same type from a single document. This function "lengthens" the event list so
+    that each extracted sub-event becomes its own event record with a single
+    ``attributes`` dict -- mirroring the way ``stories_to_events`` lengthens a
+    story into one record per event type.
+
+    Events whose attribute extraction was empty (``attributes == []``, i.e. the
+    model found no event) are dropped from the returned ``exploded`` list and
+    returned separately in ``dropped`` so the caller can report and inspect them
+    rather than emitting empty records into the main output.
+
+    Each exploded event gets a unique id of the form ``<base id>_<index>`` (e.g.
+    ``story1_PROTEST__0``), where ``index`` counts the sub-events within the
+    record. ``orig_id`` (set by ``stories_to_events``) still links back to the
+    original story.
+
+    Parameters
+    ----------
+    event_list : list of dict
+        Events whose ``attributes`` key holds a list of extracted sub-events
+        (the intermediate output of the attribute model, before exploding).
+
+    Returns
+    -------
+    exploded : list of dict
+        One record per extracted sub-event, each with ``attributes`` as a single
+        dict and a unique ``id``.
+    dropped : list of dict
+        Records that had no extracted sub-events, left unmodified.
+    """
+    exploded = []
+    dropped = []
+    for event in event_list:
+        sub_events = event.get('attributes', [])
+        if not sub_events:
+            dropped.append(event)
+            continue
+        for idx, sub_event in enumerate(sub_events):
+            # shallow copy, like stories_to_events; each record gets its own
+            # single-dict `attributes` and a unique id.
+            new_event = event.copy()
+            new_event['attributes'] = sub_event
+            new_event['id'] = f"{event['id']}_{idx}"
+            exploded.append(new_event)
+    return exploded, dropped
+
