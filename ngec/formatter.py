@@ -1,6 +1,6 @@
 
-from dataclasses import asdict, dataclass
-from datetime import date, datetime
+from dataclasses import asdict, dataclass, replace
+from datetime import date, datetime, timedelta
 from importlib import resources
 import logging
 import os
@@ -36,17 +36,32 @@ def country_name_dict(file_path: str | None=None) -> dict:
     return country_name_dict
 
 
+def _first_attribute_value(value):
+    """
+    Pull the leading span out of an attribute value. The attribute model is
+    supposed to emit lists (``['last week']``), but it sometimes emits a bare
+    string and sometimes omits the key entirely, so accept all three. Returns
+    ``None`` when there's nothing there.
+    """
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value  # str or None
+
+
 def resolve_date(event: dict) -> dict:
     """
     Add a top-level 'date_resolved' key to an event, resolved from its
     attributes' 'date' value and the event's publication date.
 
+    One record is one event, so 'attributes' is a single dict and there is a
+    single date to resolve. The value stored is ``asdict()`` of a
+    :class:`ResolvedDate`.
+
     >>> DateDataParser().get_date_data('March 2015')
     DateData(date_obj=datetime.datetime(2015, 3, 16, 0, 0), period='month', locale='en')
     """
     attributes = event.get('attributes') or {}
-    date_list = attributes.get('date') or []
-    date_string = date_list[0] if date_list else None
+    date_string = _first_attribute_value(attributes.get('date'))
     res = _resolve_date(date_string=date_string, ref_date=event.get('pub_date'))
     event['date_resolved'] = asdict(res)
     return event
@@ -54,11 +69,46 @@ def resolve_date(event: dict) -> dict:
 
 @dataclass
 class ResolvedDate:
-    resolved_date: datetime | str | None
-    granularity: str | None
-    reason: str | None
+    """
+    The outcome of resolving a date expression.
 
-    def _post_init__(self):
+    The three pieces of resolution information are deliberately kept separate,
+    because they answer different questions a data user will ask.
+
+    Attributes
+    ----------
+    resolved_date : datetime | str | None
+        The single resolved date, or the *start* of a range.
+    date_end : datetime | None
+        The *end* of a genuine, source-stated range (e.g. "Tuesday to
+        Thursday"). ``None`` for a single point or an open-ended range.
+    granularity : str | None
+        The precision *unit* of the resolution: ``day``, ``week``, ``month``,
+        ``quarter``, or ``year``. ``None`` when nothing could be resolved.
+        This says how coarsely the date is known -- it does NOT say whether the
+        event spanned multiple days (that's ``date_end``) or whether the
+        resolution is fuzzy (that's ``date_type``).
+    date_type : str | None
+        How to interpret the resolution:
+
+        - ``"exact"``       -- a point the source states plainly (to its
+          granularity): "May 3 2021", "last Tuesday", "March 2015".
+        - ``"approximate"`` -- a point we resolved but the source is vague, so
+          the exact value shouldn't be over-trusted: "over the weekend",
+          "a few days ago", "early May", "the 1990s".
+        - ``"range"``       -- a genuine multi-period event. ``date_end`` holds
+          the end (or is ``None`` for an open-ended range like "since 2015").
+        - ``"unresolved"``  -- nothing resolved; fell back to the pub date/None.
+    reason : str | None
+        Human-readable trail describing how the value was reached.
+    """
+    resolved_date: datetime | str | None
+    date_end: datetime | None = None
+    granularity: str | None = None
+    date_type: str | None = None
+    reason: str | None = None
+
+    def __post_init__(self):
         if isinstance(self.resolved_date, str):
             try:
                 self.resolved_date = datetime.strptime(self.resolved_date, "%Y-%m-%d")
@@ -66,18 +116,575 @@ class ResolvedDate:
                 raise ValueError(f"resolved_date string not in YYYY-MM-DD format: {self.resolved_date}")
 
 
-def _resolve_date(date_string: str | None=None, 
+def _try_get_date(date_string: str,
+                  base_date: datetime,
+                  prefer: str) -> tuple[datetime, str] | None:
+    """
+    Run dateparser's ``DateDataParser`` and return ``(date_obj, period)`` if it
+    succeeds, otherwise ``None``.
+
+    Unlike ``dateparser.parse``, ``get_date_data`` exposes the ``period``
+    (granularity) of the match, which is the date-resolution information we want
+    to preserve all the way through the cascade below.
+
+    Parameters
+    ----------
+    date_string : str
+        Text to parse.
+    base_date : datetime
+        Reference date for relative expressions (RELATIVE_BASE).
+    prefer : str
+        ``"past"`` or ``"future"`` (PREFER_DATES_FROM).
+    """
+    parser = dateparser.DateDataParser(
+        languages=['en'],
+        settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': prefer},
+    )
+    res = parser.get_date_data(date_string)
+    if res.date_obj is not None:
+        return res.date_obj, res.period
+    return None
+
+
+# Phrases that carry no usable date information; short-circuit to a failure so
+# the caller falls back to the publication date.
+_NOISE_PHRASES = {
+    "", "not specified", "unspecified", "ongoing", "unknown", "n/a", "na",
+    "tba", "recently", "recent", "no date", "none",
+}
+
+_MONTHS = (r"January|February|March|April|May|June|July|August|September|"
+           r"October|November|December")
+
+_WEEKDAYS = (r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+             r"mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun")
+
+# Qualifiers that turn a stated date into a bound or an estimate ("up to three
+# weeks ago", "nearly a month ago"). The date still resolves, but the source is
+# hedging, so the result is approximate rather than exact.
+_HEDGES = (r"up to|at least|as many as|as much as|nearly|almost|roughly|"
+           r"approximately|about|around|sometime|on or about")
+
+# First month of each quarter, used to resolve quarter references to a date.
+_QUARTER_TO_MONTH = {
+    "first": 1, "1st": 1, "q1": 1,
+    "second": 4, "2nd": 4, "q2": 4,
+    "third": 7, "3rd": 7, "q3": 7,
+    "fourth": 10, "4th": 10, "q4": 10,
+}
+
+_NUMBER_WORDS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
+                 "five": 5, "couple": 2, "few": 3, "a few": 3, "several": 3}
+
+_UNIT_TO_DAYS = {"day": 1, "week": 7, "month": 30}
+
+
+def _phrase_to_days(phrase: str) -> int | None:
+    """Turn an amount phrase ("a week", "two days", "3 months") into a day count."""
+    phrase = phrase.lower().strip()
+    m = re.search(r"(\d+)\s*(day|week|month)s?", phrase)
+    if m:
+        return int(m.group(1)) * _UNIT_TO_DAYS[m.group(2)]
+    m = re.search(r"(a few|couple|few|several|an|a|one|two|three|four|five)\s*(day|week|month)s?", phrase)
+    if m:
+        return _NUMBER_WORDS.get(m.group(1), 1) * _UNIT_TO_DAYS[m.group(2)]
+    return None
+
+
+def _is_hedged(raw: str) -> bool:
+    """Does the span hedge the date it states ("up to two weeks ago")?"""
+    return re.search(rf"\b(?:{_HEDGES})\b", raw, re.IGNORECASE) is not None
+
+
+def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> ResolvedDate | None:
+    """
+    Resolve a within-period modifier applied to a *bare* period word
+    ("beginning of the year", "end of the year", "mid-year", "beginning of the
+    month"). Without an explicit month/year, dateparser resolves the leftover
+    "the year" to *today*, so we anchor to the current period derived from
+    ``base_date`` instead. Returns ``None`` for periods we don't anchor (safe:
+    the caller falls through rather than emitting today).
+    """
+    modifier = modifier.lower()
+    if "early" in modifier or "begin" in modifier:
+        pos = "start"
+    elif "mid" in modifier:
+        pos = "mid"
+    else:  # "late", "end of"
+        pos = "end"
+
+    if period == "year":
+        month = {"start": 1, "mid": 7, "end": 12}[pos]
+        day = 31 if pos == "end" else 1
+        return ResolvedDate(resolved_date=datetime(base_date.year, month, day),
+                            granularity="year", date_type="approximate",
+                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the pub-date year>")
+    if period == "month":
+        if pos == "end":
+            nxt = datetime(base_date.year + 1, 1, 1) if base_date.month == 12 \
+                else datetime(base_date.year, base_date.month + 1, 1)
+            anchored = nxt - timedelta(days=1)
+        else:
+            anchored = datetime(base_date.year, base_date.month, 15 if pos == "mid" else 1)
+        return ResolvedDate(resolved_date=anchored,
+                            granularity="month", date_type="approximate",
+                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the pub-date month>")
+    return None
+
+
+def _align_range(res: ResolvedDate, second: str, base_date: datetime) -> ResolvedDate:
+    """
+    Make a bounded range internally consistent, i.e. ensure ``date_end`` is not
+    *before* ``resolved_date``.
+
+    The two endpoints are resolved independently, so an inverted range can come
+    out in two ways:
+
+    - Only the second endpoint carries a year ("March to April 2024"). The first
+      then defaults to the publication year and lands a year late.
+    - Both endpoints are relative and the past preference pushes the end behind
+      the start ("Thursday through Tuesday": the Tuesday before publication is
+      earlier than the Thursday before it).
+
+    We repair the first by pulling the end's year onto the start, and the second
+    by re-resolving the end *forward* from the start. If neither repair works,
+    we drop ``date_end``: an open-ended range is honest, an inverted one is not.
+    """
+    if res.resolved_date is None or res.date_end is None or res.date_end >= res.resolved_date:
+        return res
+
+    # The second endpoint states a year the first one lacks: adopt it.
+    if re.search(r"\b\d{4}\b", second):
+        try:
+            pulled = res.resolved_date.replace(year=res.date_end.year)
+        except ValueError:   # Feb 29 in a non-leap year
+            pulled = None
+        if pulled is not None and pulled <= res.date_end:
+            return replace(res, resolved_date=pulled,
+                           reason=f"{res.reason.rstrip('>')}, start pinned to the end's year>")
+
+    # Both endpoints relative: re-resolve the end going forward from the start.
+    hit = _try_get_date(second.strip(" -,."), res.resolved_date, "future")
+    if hit is not None and hit[0] >= res.resolved_date:
+        return replace(res, date_end=hit[0],
+                       reason=f"{res.reason.rstrip('>')}, end re-resolved forward from the start>")
+
+    return replace(res, date_end=None,
+                   reason=f"{res.reason.rstrip('>')}, end dropped (resolved before the start)>")
+
+
+def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
+    """
+    Resolve a single date expression relative to ``base_date``.
+
+    Returns a :class:`ResolvedDate` on success or ``None`` if the expression
+    can't be resolved (the caller decides on a fallback). Structural handlers
+    (parentheses, ranges, "before/after", "since/from", ...) recurse back into
+    this function on the *sub-expression* they extract, so nested relatives such
+    as "last Tuesday to Thursday" or "since last March" resolve correctly.
+    Recursion always runs on a strictly shorter substring, which guarantees
+    termination.
+
+    The steps are tried in order and each one bails out rather than guessing, so
+    an unrecognized span ends up unresolved instead of confidently wrong.
+    """
+    raw = raw.strip()
+    low = raw.lower()
+
+    if low in _NOISE_PHRASES or re.match(r"^not specified\b", low):
+        return None
+
+    def recurse(sub: str, prefix: str, granularity: str | None = None,
+                date_type: str | None = None, date_end="inherit") -> ResolvedDate | None:
+        """
+        Resolve a shorter sub-expression and re-wrap its result. ``prefix`` is
+        plain text describing this layer; it's chained onto the inner reason with
+        ``←`` so nested resolutions read as a single legible trail. ``granularity``,
+        ``date_type``, and ``date_end`` override the inner result when given;
+        otherwise they're inherited (``date_end`` inherits on the sentinel
+        ``"inherit"`` so ``None`` can be passed to force an open-ended range).
+        """
+        sub = sub.strip(" -,.")
+        if not sub or len(sub) >= len(raw):
+            return None
+        inner = _resolve_core(sub, base_date)
+        if inner is None or inner.resolved_date is None:
+            return None
+        return ResolvedDate(
+            resolved_date=inner.resolved_date,
+            date_end=inner.date_end if date_end == "inherit" else date_end,
+            granularity=granularity if granularity is not None else inner.granularity,
+            date_type=date_type if date_type is not None else inner.date_type,
+            reason=f"<{prefix} ← {inner.reason.strip('<>')}>",
+        )
+
+    # 0. Decade references ("the 1990s", "2010s"). dateparser misreads the
+    #    trailing 's' (it returns a near-today date), so intercept before the
+    #    direct parse and resolve to the first year of the decade. Treated as
+    #    approximate -- "in the 1990s" means "sometime in the 90s", not a
+    #    10-year event. (Judgment call; flip to date_type="range" if you'd
+    #    rather model a decade as a span.)
+    decade = re.search(r"\b(?:the\s+)?((?:1[89]|20)\d0)s\b", raw, re.IGNORECASE)
+    if decade:
+        return ResolvedDate(resolved_date=datetime(int(decade.group(1)), 1, 1),
+                            granularity="year", date_type="approximate",
+                            reason=f"<Resolved decade reference '{decade.group(0).strip()}' to start of decade>")
+
+    # 0b. Day-of-month hyphen ranges ("March 15-20", "12-14 May",
+    #     "May 15-20, 2025"). Caught before the direct parse, which otherwise
+    #     misreads "March 15-20" as March 15, 2020. We deliberately do NOT add a
+    #     bare "-" to the general range separator (step 7): that would wreck
+    #     "mid-March", "Covid-19", and ISO dates "2025-05-13". Instead we match
+    #     only a digit-hyphen-digit *flanked by a month name*, reconstruct both
+    #     endpoints, and resolve each. The end endpoint is resolved with the
+    #     start's year pinned, so "May 15-20" (where May 20 is after the pub
+    #     date) doesn't flip the end to the prior year under the past preference.
+    hy = re.search(rf"\b({_MONTHS})\s+(\d{{1,2}})\s*-\s*(\d{{1,2}})(?:,?\s+(\d{{4}}))?\b", raw, re.IGNORECASE)
+    hy_order = "MD" if hy else None
+    if not hy:
+        hy = re.search(rf"\b(\d{{1,2}})\s*-\s*(\d{{1,2}})\s+({_MONTHS})(?:,?\s+(\d{{4}}))?\b", raw, re.IGNORECASE)
+        hy_order = "DM" if hy else None
+    if hy:
+        if hy_order == "MD":
+            month, d1, d2, year = hy.group(1), hy.group(2), hy.group(3), hy.group(4)
+            start_str = f"{month} {d1}" + (f" {year}" if year else "")
+        else:
+            d1, d2, month, year = hy.group(1), hy.group(2), hy.group(3), hy.group(4)
+            start_str = f"{d1} {month}" + (f" {year}" if year else "")
+        start_res = _resolve_core(start_str, base_date)
+        if start_res is not None and start_res.resolved_date is not None:
+            pinned_year = year if year else start_res.resolved_date.year
+            end_str = (f"{month} {d2} {pinned_year}" if hy_order == "MD"
+                       else f"{d2} {month} {pinned_year}")
+            end_res = _resolve_core(end_str, base_date)
+            end_date = end_res.resolved_date if (end_res is not None and end_res.resolved_date is not None) else None
+            return ResolvedDate(resolved_date=start_res.resolved_date, date_end=end_date,
+                                granularity=start_res.granularity, date_type="range",
+                                reason=f"<Resolved day-of-month hyphen range '{hy.group(0).strip()}'>")
+
+    # 0c. Duration phrase ("three days of clashes", "5 months of fighting"). A
+    #     bare "N units of <noun>" is a *duration*, not an offset, but the direct
+    #     parse would read "three days" as "three days ago". Refuse to resolve it
+    #     (safe: the caller falls back to the pub date, flagged unresolved) rather
+    #     than emit a confidently-wrong date.
+    if re.search(r"\b(?:\d+|a|an|one|two|three|four|five|few|several|couple)\s+"
+                 r"(?:day|week|month|year)s?\s+of\s+[a-z]", low):
+        return None
+
+    # 0d. Common day idioms ("this morning" -> pub day, "last night"/"overnight"
+    #     -> day before). dateparser doesn't resolve these. Fires ONLY when no
+    #     weekday, month, or digit is present, so more specific dated spans
+    #     ("Thursday evening", "yesterday (Friday)") keep their own resolution.
+    if not re.search(rf"\b(?:{_WEEKDAYS})\b", low) \
+            and not re.search(rf"\b(?:{_MONTHS})\b", raw, re.IGNORECASE) \
+            and not re.search(r"\d", raw):
+        if re.search(r"\b(?:this (?:morning|afternoon|evening)|today|tonight)\b", low):
+            return ResolvedDate(resolved_date=base_date, granularity="day", date_type="exact",
+                                reason="<Resolved day idiom to the publication day>")
+        if re.search(r"\b(?:last night|last evening|overnight|yesterday)\b", low):
+            return ResolvedDate(resolved_date=base_date - timedelta(days=1),
+                                granularity="day", date_type="exact",
+                                reason="<Resolved day idiom to the day before publication>")
+
+    # 0e. Recency window ("in the past few days", "the last several weeks"). Like
+    #     "N units ago" but the window is vague, so it's approximate at a coarser
+    #     unit. Bare "last week"/"last month" (no count) are NOT matched -- they
+    #     are exact and handled by the direct parse / past-modifier steps.
+    recency = re.search(r"\b(?:in\s+)?(?:the\s+)?(?:past|last)\s+"
+                        r"(few|several|couple|a few|one|two|three|four|five|\d+)\s+"
+                        r"(day|week|month)s?\b", low)
+    if recency:
+        days = _phrase_to_days(f"{recency.group(1)} {recency.group(2)}")
+        if days is not None:
+            coarser = {"day": "week", "week": "month", "month": "year"}[recency.group(2)]
+            return ResolvedDate(resolved_date=base_date - timedelta(days=days),
+                                granularity=coarser, date_type="approximate",
+                                reason=f"<Approximate recency window '{recency.group(0).strip()}' relative to pub date>")
+
+    # 0f. "Nth week of <month>" ("first week of June", "third week of April").
+    #     Approximate to the start of that week. The month's year is pinned to the
+    #     pub-date year (not dateparser's past preference) so sibling references
+    #     like "first week of June" / "third week of April" stay in the same year.
+    weekof = re.search(r"\b(first|second|third|fourth|last|1st|2nd|3rd|4th)\s+week\s+(?:of|in)\s+(.+)",
+                       raw, re.IGNORECASE)
+    if weekof:
+        ord_map = {"first": 0, "1st": 0, "second": 1, "2nd": 1, "third": 2,
+                   "3rd": 2, "fourth": 3, "4th": 3, "last": 3}
+        month_res = _resolve_core(weekof.group(2).strip(), base_date)
+        if month_res is not None and month_res.resolved_date is not None:
+            # Pin to the pub-date year only when the source gave no explicit year
+            # ("first week of June"); an explicit "... June 2023" is kept as-is.
+            has_explicit_year = re.search(r"\b\d{4}\b", weekof.group(2)) is not None
+            year = month_res.resolved_date.year if has_explicit_year else base_date.year
+            first_of_month = month_res.resolved_date.replace(year=year, day=1)
+            offset = ord_map.get(weekof.group(1).lower(), 0) * 7
+            return ResolvedDate(resolved_date=first_of_month + timedelta(days=offset),
+                                granularity="week", date_type="approximate",
+                                reason=f"<Resolved '{weekof.group(0).strip()}' to that week of the pub-date-year month>")
+
+    # 0g. Leading recency/filler prefixes ("back in March", "as recently as
+    #     Monday"). Strip the prefix and resolve the remainder. "as recently as"
+    #     states an upper bound (not a plain date), so its result is approximate.
+    prefix = re.search(r"^(back in|as recently as)\s+(.+)", raw, re.IGNORECASE)
+    if prefix:
+        approximate = prefix.group(1).lower() == "as recently as"
+        res = recurse(prefix.group(2), f"stripped leading prefix '{prefix.group(1).strip()}'",
+                      date_type="approximate" if approximate else None)
+        if res is not None:
+            return res
+
+    # 0h. Clock-time prefix ("around 6:30 a.m. on Tuesday"). Gated on an
+    #     am/pm/o'clock marker -- a bare colon would wrongly fire on ISO datetimes
+    #     ("2019-08-01T14:30:00"), and the am/pm gate is also what keeps the
+    #     connector strip from touching "on 8 July". Strip the clock time and its
+    #     leading connectors, then resolve the remaining date.
+    if re.search(r"\b(?:a\.?m\.?|p\.?m\.?|o'?clock)\b", low):
+        stripped = re.sub(r"\b(?:around|about|at|approximately)\b", "", raw, flags=re.IGNORECASE)
+        stripped = re.sub(r"\b\d{1,2}(?::\d{2})?\s*(?:a\.?m\.?|p\.?m\.?|o'?clock)\b", "", stripped, flags=re.IGNORECASE)
+        stripped = re.sub(r"^\s*(?:on|at)\s+", "", stripped.strip(" -,"), flags=re.IGNORECASE)
+        stripped = re.sub(r"\s+", " ", stripped).strip(" -,")
+        if stripped and stripped.lower() != low:
+            res = recurse(stripped, "stripped clock time")
+            if res is not None:
+                return res
+
+    # 1. Direct parse (past preference). Handles absolute dates and the simple
+    #    relative forms dateparser already knows, preserving its granularity.
+    #    A hedged span ("about two weeks ago") resolves the same way but is
+    #    reported as approximate.
+    hit = _try_get_date(raw, base_date, "past")
+    if hit is not None:
+        return ResolvedDate(resolved_date=hit[0], granularity=hit[1],
+                            date_type="approximate" if _is_hedged(raw) else "exact",
+                            reason="<Resolved relative date with past reference>")
+
+    # 2. Parentheses often hold the actual date ("yesterday (Friday)"). Skip
+    #    parentheses that just contain explanatory prose.
+    paren = re.search(r"\(([^)]+)\)", raw)
+    if paren:
+        content = paren.group(1).strip()
+        if not re.search(r"\b(when|specific|exact|not provided|context|implies|but|described)\b", content, re.IGNORECASE):
+            res = recurse(content, "date from parentheses")
+            if res is not None:
+                return res
+
+    # 3. Number-word "ago" ("a few days ago", "two weeks ago"). Vague counts
+    #    ("a few", "several") are approximate and resolved one unit coarser;
+    #    definite counts ("two", digits) are exact unless the span hedges them
+    #    ("up to three weeks ago"). Classification is by the matched word, not by
+    #    which branch happens to catch it.
+    ago = re.search(r"\b(a few|few|couple|several|one|two|three|four|five)\s+(day|week|month)s?\s+ago", raw, re.IGNORECASE)
+    if ago:
+        word, unit = ago.group(1).lower(), ago.group(2).lower()
+        days = _phrase_to_days(f"{word} {unit}")
+        if days is not None:
+            coarser = {"day": "week", "week": "month", "month": "year"}[unit]
+            if word in {"a few", "few", "couple", "several"}:
+                return ResolvedDate(resolved_date=base_date - timedelta(days=days),
+                                    granularity=coarser, date_type="approximate",
+                                    reason=f"<Approximate '{word} {unit}s ago' relative to pub date>")
+            if _is_hedged(raw):
+                return ResolvedDate(resolved_date=base_date - timedelta(days=days),
+                                    granularity=unit, date_type="approximate",
+                                    reason=f"<Hedged '{word} {unit}s ago' relative to pub date>")
+            return ResolvedDate(resolved_date=base_date - timedelta(days=days),
+                                granularity=unit, date_type="exact",
+                                reason=f"<Resolved '{word} {unit}s ago' relative to pub date>")
+
+    # 4. "N-day-old" / "N-week-old" / "N-month-old": count back from pub date.
+    age = re.search(r"(\d+)[\s-]*(day|week|month)s?[\s-]*old", low)
+    if age:
+        num, unit = int(age.group(1)), age.group(2)
+        return ResolvedDate(resolved_date=base_date - timedelta(days=num * _UNIT_TO_DAYS[unit]),
+                            granularity=unit, date_type="exact",
+                            reason=f"<Resolved '{age.group(0)}' counting back from pub date>")
+
+    # 5. "X before/after Y": resolve Y (recursively, it may be relative) and
+    #    shift by the offset. The result is a specific day.
+    rel = re.search(r"((?:a few|a|an|one|two|three|four|five|\d+)?\s*(?:days?|weeks?|months?))\s+(before|after)\s+(.+)", raw, re.IGNORECASE)
+    if rel:
+        days = _phrase_to_days(rel.group(1))
+        if days is not None:
+            anchor = _resolve_core(rel.group(3).strip(), base_date)
+            if anchor is not None and anchor.resolved_date is not None:
+                direction = rel.group(2).lower()
+                shifted = (anchor.resolved_date - timedelta(days=days)) if direction == "before" \
+                    else (anchor.resolved_date + timedelta(days=days))
+                return ResolvedDate(resolved_date=shifted, granularity="day", date_type="exact",
+                                    reason=f"<'{rel.group(1).strip()} {direction}' offset ← {anchor.reason.strip('<>')}>")
+
+    # 6. Open-ended range ending at the present ("March 2024 onwards",
+    #    "since June to present"). Resolve to the start; it's a range with no end.
+    onwards = re.search(r"^(.+?)\s+(?:onwards?|to present|to date|to the present|till date)\b", raw, re.IGNORECASE)
+    if onwards:
+        res = recurse(onwards.group(1), f"open-ended range '{raw}', resolved to start (ongoing)",
+                      date_type="range", date_end=None)
+        if res is not None:
+            return res
+
+    # 7. Bounded range ("between X and Y", "March 15 to March 20",
+    #    "Monday through Wednesday", "January 2020 - March 2021"). Resolve to the
+    #    first endpoint and capture the second as date_end; granularity is
+    #    inherited from the start.
+    #
+    #    Two guards keep this branch from over-firing on prose. First, the
+    #    separators are words plus an *spaced* dash -- a bare "-" would wreck
+    #    "mid-March" and ISO dates, but " - " with whitespace on both sides is
+    #    safe. Second, we only call it a range if the right-hand side actually
+    #    resolves to a date: "Monday to discuss the deal" should give us Monday,
+    #    not a bogus one-ended range.
+    between = re.search(r"\bbetween\s+(.+?)\s+and\s+(.+)", raw, re.IGNORECASE)
+    if between:
+        first, second = between.group(1), between.group(2)
+    else:
+        sep = re.search(r"^(.+?)\s+(?:through|thru|to|till|until|and)\s+(.+)$", raw, re.IGNORECASE) \
+            or re.search(r"^(.+?)\s*[–—]\s*(.+)$", raw) \
+            or re.search(r"^(.+?)\s+-\s+(.+)$", raw)
+        first, second = (sep.group(1), sep.group(2)) if sep else (None, None)
+    if first is not None:
+        # Drop leading open-ended words so "from January to March" -> "January".
+        first_clean = re.sub(r"^(from|since|starting|beginning)\s+", "", first, flags=re.IGNORECASE)
+        end_res = _resolve_core(second.strip(), base_date) if second else None
+        end_date = end_res.resolved_date if (end_res is not None and end_res.resolved_date is not None) else None
+        if end_date is not None:
+            res = recurse(first_clean, f"range '{first.strip()}'–'{second.strip()}', resolved to start",
+                          date_type="range", date_end=end_date)
+            if res is not None:
+                return _align_range(res, second, base_date)
+        else:
+            # Right-hand side isn't a date, so this isn't a range: keep whatever
+            # the left-hand side resolves to and leave its type alone.
+            res = recurse(first_clean, f"resolved '{first.strip()}'; '{second.strip()}' is not a date")
+            if res is not None:
+                return res
+
+    # 8. Open-ended range starting at a date ("since March 2024",
+    #    "starting in April", "from January 2020"). Resolve to the start.
+    #     The negative lookahead keeps "beginning of <period>" out of this branch
+    #     (that's a within-period reference handled at step 13, not an open-ended
+    #     range); "beginning in April" still reads as "starting in April".
+    since = re.search(r"^(?:starting|beginning(?!\s+of\b)|since|from)\s+(.+)", raw, re.IGNORECASE)
+    if since:
+        date_part = re.sub(r"^(in|on|the)\s+", "", since.group(1).strip(), flags=re.IGNORECASE)
+        res = recurse(date_part, f"open-ended range, resolved to start ('{date_part}')",
+                      date_type="range", date_end=None)
+        if res is not None:
+            return res
+
+    # 9. Quarter references ("Q2 2023", "first quarter of 2024"). Resolve to the
+    #    first day of the quarter, with a quarter-level granularity.
+    quarter = re.search(r"\b(first|second|third|fourth|1st|2nd|3rd|4th|q[1-4])\s+quarter\s+(?:of\s+)?(\d{4})", raw, re.IGNORECASE) \
+        or re.search(r"\b(q[1-4])\s+(\d{4})", raw, re.IGNORECASE)
+    if quarter:
+        month = _QUARTER_TO_MONTH.get(quarter.group(1).lower())
+        if month is not None:
+            return ResolvedDate(resolved_date=datetime(int(quarter.group(2)), month, 1),
+                                granularity="quarter", date_type="exact",
+                                reason=f"<Resolved quarter reference '{quarter.group(0)}' to start of quarter>")
+
+    # 10. Future references ("next Tuesday", "later this week", "coming Monday").
+    #     "later" is a vague within-period qualifier we can't honor (like
+    #     "early"/"mid"), so a "later ..." resolution is approximate; "next" /
+    #     "coming" / "upcoming" point at a specific occurrence and are exact.
+    if re.search(r"\b(next|later|coming|upcoming)\b", raw, re.IGNORECASE):
+        cleaned = re.sub(r"\b(next|later|coming|upcoming)\b", "", raw, flags=re.IGNORECASE).strip(" -")
+        hit = _try_get_date(cleaned, base_date, "future")
+        if hit is not None:
+            vague = re.search(r"\blater\b", raw, re.IGNORECASE) is not None
+            return ResolvedDate(resolved_date=hit[0], granularity=hit[1],
+                                date_type="approximate" if vague else "exact",
+                                reason="<Resolved relative date with future reference>")
+
+    # 11. Past-tense modifiers. dateparser handles "last year/month/week/decade"
+    #     natively but not the synonyms ("previous year") nor "last <weekday>".
+    #     First normalize the synonyms to "last" and retry the raw parse; if that
+    #     fails, strip the modifier for weekday-style references ("last Tuesday").
+    #     Bare period words are skipped because dateparser resolves them to
+    #     *today*, which would be a garbage result ("previous year" -> "year").
+    if re.search(r"\b(last|previous|prior|past|earlier)\b", raw, re.IGNORECASE):
+        normalized = re.sub(r"\b(previous|prior|past|earlier)\b", "last", raw, flags=re.IGNORECASE)
+        if normalized.lower() != raw.lower():
+            hit = _try_get_date(normalized, base_date, "past")
+            if hit is not None:
+                return ResolvedDate(resolved_date=hit[0], granularity=hit[1], date_type="exact",
+                                    reason="<Resolved after normalizing past-tense modifier to 'last'>")
+        cleaned = re.sub(r"\b(last|previous|prior|past|earlier)\b", "", raw, flags=re.IGNORECASE).strip(" -,")
+        if cleaned.lower() not in {"year", "month", "week", "day", "decade", "quarter", "weekend"}:
+            res = recurse(cleaned, "removed past-tense modifier")
+            if res is not None:
+                return res
+
+    # 12. Weekend references ("over the weekend"). Approximate to the preceding
+    #     Saturday; we only know it happened within that week, so the
+    #     granularity is week-level and the type is approximate.
+    if re.search(r"\bweekend\b", raw, re.IGNORECASE):
+        hit = _try_get_date("Saturday", base_date, "past")
+        if hit is not None:
+            return ResolvedDate(resolved_date=hit[0], granularity="week", date_type="approximate",
+                                reason="<Resolved weekend reference, approximated to the preceding Saturday>")
+
+    # 13. Approximate within-period modifiers ("early May", "mid-March"). These
+    #     usually resolve at month granularity, so the day component is filler;
+    #     the source is vague, so the type is approximate.
+    mod = re.search(r"\b(early|mid|late|beginning of|end of)\b", raw, re.IGNORECASE)
+    if mod:
+        cleaned = re.sub(r"\b(early|mid|late|beginning of|end of)\b", "", raw, flags=re.IGNORECASE)
+        # A bare period word ("the year", "year", "the month") left after
+        # stripping the modifier would parse to *today*; anchor it to the
+        # pub-date period instead. Other bare periods (week/quarter/decade) are
+        # left unanchored -- returning None is safer than emitting today.
+        period = re.sub(r"\b(of|the|this|current|in)\b", "", cleaned, flags=re.IGNORECASE).strip(" -,")
+        if period.lower() in {"year", "month", "week", "quarter", "decade"}:
+            return _anchor_bare_period(mod.group(1), period.lower(), base_date)
+        res = recurse(cleaned, "approximate within-period reference (early/mid/late), day is filler",
+                      date_type="approximate")
+        if res is not None:
+            return res
+
+    # 14. Explicit date embedded in noise ("violence started March 5",
+    #     "8 July"). Extract and resolve it.
+    explicit = re.search(rf"\b(?:{_MONTHS})\s+\d{{1,2}}(?:,?\s+\d{{4}})?\b", raw, re.IGNORECASE) \
+        or re.search(rf"\b\d{{1,2}}\s+(?:{_MONTHS})(?:,?\s+\d{{4}})?\b", raw, re.IGNORECASE)
+    if explicit:
+        res = recurse(explicit.group(0), "extracted explicit date")
+        if res is not None:
+            return res
+
+    # 15. Last resort: strip time-of-day and event-onset noise, then re-resolve.
+    cleaned = re.sub(r"\b(night|morning|afternoon|evening)\b|early hours of", "", raw, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(the\s+)?(violence|trouble|conflict|unrest|fighting|clashes?|protests?|war)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(broke out|started|began|erupted|happened|occurred)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" -,")
+    res = recurse(cleaned, "stripped noise words")
+    if res is not None:
+        return res
+
+    return None
+
+
+def _resolve_date(date_string: str | None=None,
                   ref_date: str | datetime | date | None=None
                   ) -> ResolvedDate:
     """
-    Resolve Q&A string date to a specific date
+    Resolve Q&A string date to a specific date.
+
+    The resolver hands the string to :func:`_resolve_core`, which tries a
+    cascade of strategies (direct dateparser parse, parentheses, "N units ago",
+    "N-day-old", "before/after", ranges, "since/from", quarters, future/past
+    modifiers, weekend, "early/mid/late", embedded explicit dates, noise
+    stripping). The result carries three orthogonal pieces of resolution
+    information -- see :class:`ResolvedDate`:
+
+    - ``granularity``: the precision *unit* (day/week/month/quarter/year).
+    - ``date_type``: exact / approximate / range / unresolved.
+    - ``date_end``: the end of a genuine range, else ``None``.
 
     Parameters
     ----------
     date_string : str | None
         Text that contains a date, possibly a relative date reference.
     ref_date : str | datetime | date | None
-        Date to use as reference date, e.g. article publication date. 
+        Date to use as reference date, e.g. article publication date.
 
     Returns
     -------
@@ -86,73 +693,59 @@ def _resolve_date(date_string: str | None=None,
 
     Examples
     --------
-    >>> _resolve_date("yesterday", "2021-01-01")
-    ResolvedDate(resolved_date=datetime(2021, 1, 1), granularity="day", reason="Resolved relative date with past reference")
+    >>> _resolve_date("yesterday", "2021-01-02")
+    ResolvedDate(resolved_date=datetime(2021, 1, 1), date_end=None, granularity="day", date_type="exact", reason="...")
     """
     na = set([None, ""])
 
     # Either or both of the inputs might be missing, however, before we handle
     # those possibilities, we need make sure we don't end up with a missing
-    # pub date due to failure to parse a non-missing string. 
+    # pub date due to failure to parse a non-missing string.
     if ref_date not in na:
         orig = ref_date
         ref_date = dateparser.parse(str(ref_date))
         if ref_date is None:
-            logger.warning(f"<Failed to parse reference date: {orig}>") 
+            logger.warning(f"<Failed to parse reference date: {orig}>")
+        else:
+            # Normalize to a naive midnight. Publication dates sometimes arrive
+            # with a time and a timezone ("2019-08-01T14:30:00+00:00"), and if we
+            # keep those, some branches below return tz-aware datetimes (day
+            # arithmetic off the reference) while others return naive ones
+            # (dates we construct outright). A column holding both is painful to
+            # work with in pandas, and the time-of-day is noise for event dates.
+            ref_date = ref_date.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
 
     # Handle cases were inputs are incomplete
     match (date_string in na, ref_date is None or ref_date in na):
         case (True, True):
-            return ResolvedDate(resolved_date=None, 
-                                granularity=None,
+            return ResolvedDate(resolved_date=None,
+                                date_type="unresolved",
                                 reason=f"<No date string or publication date, date_string={date_string}, ref_date={ref_date}>")
         case (True, False):
-            return ResolvedDate(resolved_date=ref_date, 
-                                granularity="uncertain", 
+            return ResolvedDate(resolved_date=ref_date,
+                                date_type="unresolved",
                                 reason="<No date string, using pub date>")
         case (False, True):
             # Don't fall back to 'today' as backup date, but maybe in the future
             # make that a configurable option
-            return ResolvedDate(resolved_date=None, 
-                                granularity=None, 
+            return ResolvedDate(resolved_date=None,
+                                date_type="unresolved",
                                 reason="<No publication date>")
         case (False, False):
             # We have both inputs and can proceed
             base_date = ref_date
 
-    DateParser = dateparser.DateDataParser(languages=['en'], settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': "past"})
-    res = DateParser.get_date_data(date_string)
+    res = _resolve_core(str(date_string).strip(), base_date)
+    if res is not None:
+        return res
 
-    # Did we succeed?
-    if res.date_obj is not None:
-        res = ResolvedDate(resolved_date=res.date_obj, 
-                           granularity=res.period, 
-                           reason="<Resolved relative date with past reference>")
-    else:
-        # Check whether we have a future reference
-        future_pattern = r"next|later"
-        if re.search(future_pattern, date_string):
-            date_string = re.sub(future_pattern, "", date_string).strip()
-            DateParser = dateparser.DateDataParser(languages=['en'], settings={'RELATIVE_BASE': base_date, 'PREFER_DATES_FROM': "future"})
-            res = DateParser.get_date_data(date_string)
+    # Nothing worked (e.g. non-Gregorian calendars like "last Ramadan" or
+    # references needing world knowledge like "the anniversary of the
+    # uprising"). Fall back to the publication date, flagged unresolved.
+    return ResolvedDate(resolved_date=ref_date,
+                        date_type="unresolved",
+                        reason="<dateparser failed to convert relative date, using pub date>")
 
-            if res.date_obj is not None:
-                res = ResolvedDate(resolved_date=res.date_obj, 
-                                   granularity=res.period,
-                                   reason="<Resolved relative date with future reference>")
-            else:
-                # If still not resolved, use publication date
-                res = ResolvedDate(resolved_date=ref_date, 
-                                   granularity="uncertain",
-                                   reason="<dateparser failed to convert future relative date, using pub date>")
-        # Nope, no future reference so dateparser just failed
-        else:
-            res = ResolvedDate(resolved_date=ref_date, 
-                               granularity= "uncertain", 
-                               reason="<dateparser failed to convert relative date, using pub date>")
-    
-    return res
-    
 
 
 
@@ -508,10 +1101,8 @@ class Formatter:
         for n, event in enumerate(event_list):
             # 'attributes' is a single dict (one event per record).
             attributes = event.get('attributes') or {}
-            location_list = attributes.get('location') or []
-            search_term = location_list[0] if location_list else None
             event["event_location"] = pick_event_loc(
-                search_term,
+                _first_attribute_value(attributes.get('location')),
                 event.get('geolocated_ents', []),
                 geo_confidence_threshold=self.geo_threshold
             )

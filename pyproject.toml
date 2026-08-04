@@ -17,7 +17,10 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    'dateparser>=1.2.0,<2.0',
+    # Pinned to the tested minor series: the date-resolution cascade in
+    # formatter.py depends on dateparser's parse behavior, not just its API, so a
+    # minor bump can change resolved dates. Widen only with the test suite green.
+    'dateparser>=1.4.0,<1.5',
     'einops>=0.8.1', # Required for HF model download, but not installed if vllm is not installed
     'elasticsearch==7.17.9',
     'elasticsearch-dsl==7.4.1',

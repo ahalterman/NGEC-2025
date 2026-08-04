@@ -168,8 +168,13 @@ pprint(event_list, sort_dicts=False, width=100)
                                    'country_name': 'France',
                                    'resolved_placename': 'Paris'},
                      'reason': 'success'},
+  # 'granularity' is the precision unit (day/week/month/quarter/year);
+  # 'date_type' is exact / approximate / range / unresolved; 'date_end' is set
+  # only for a genuine range ("Tuesday to Thursday").
   'date_resolved': {'resolved_date': datetime.datetime(2016, 5, 1, 0, 0),
+                    'date_end': None,
                     'granularity': 'day',
+                    'date_type': 'exact',
                     'reason': '<Resolved relative date with past reference>'}}]
 ```
 
