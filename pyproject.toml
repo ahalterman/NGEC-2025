@@ -17,14 +17,12 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    # Pinned to the tested minor series: the date-resolution cascade in
-    # formatter.py depends on dateparser's parse behavior, not just its API, so a
-    # minor bump can change resolved dates. Widen only with the test suite green.
+    'click>=8.0,<9',
     'dateparser>=1.4.0,<1.5',
-    'einops>=0.8.1', # Required for HF model download, but not installed if vllm is not installed
+    'einops>=0.8.1,<1.0', # Required for HF model download, but not installed if vllm is not installed
     'elasticsearch==7.17.9',
     'elasticsearch-dsl==7.4.1',
-    'hf-xet>=1.2.0',
+    'hf-xet>=1.2.0,<2.0',
     'jsonlines>=4.0.0,<5.0',
     'mordecai3>=3.4.0',
     'numpy>=2.0.0,<3.0',
@@ -41,7 +39,9 @@ dependencies = [
     'torch>=2.6.0,<3.0',
     'transformers>=4.53.3,<5.0',
     'Unidecode>=1.4.0,<2.0',
-    "xgboost>=3.1.1",
+    # The wiki ranker in assets/ is a saved xgboost model, so a major bump risks
+    # a load failure or changed predictions.
+    "xgboost>=3.1.1,<4.0",
 ]
 
 [project.optional-dependencies]
@@ -53,6 +53,11 @@ models = [
 # vLLM backend (probably needs to be manually installed on macOS)
 vllm = [
     'vllm>=0.10.0,<1.0',
+    # vLLM only asks for xgrammar>=0.2.0, and uv locks the newest match. But
+    # xgrammar 0.2.4 dropped Python 3.13 wheels and 0.2.5 ships 3.10 only, so
+    # the unconstrained lock can't be installed. 0.2.3 has wheels for every
+    # Python we support. Revisit when xgrammar publishes wheels again.
+    'xgrammar<0.2.4',
 ]
 
 # MLX backend (macOS only)
@@ -78,7 +83,11 @@ ngec = [
 [tool.uv.sources]
 en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
 en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
-mordecai3 = { git = "https://github.com/ahalterman/mordecai3" }
+# Pinned to a specific commit, not to the default branch. mordecai3 is installed
+# from git and its Geoparser signature has changed under us before (which breaks
+# ngec/geolocation.py); since uv.lock is not committed, this rev is the only
+# thing recording which version the pipeline was run and tested against.
+mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "bc62487930793c059f34b92f0426a68dbd6ef5ff" }
 
 [dependency-groups]
 demo-app = [
