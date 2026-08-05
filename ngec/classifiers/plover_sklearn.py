@@ -11,16 +11,44 @@ Your classifier must have:
 3. Optionally: classify_one(text) for testing single documents
 
 See the NGEC documentation for detailed guidance.
+
+The model directory
+-------------------------------
+A directory of models should contain the following:
+
+    {EVENT_TYPE}.skops        one binary classifier per event type
+    modes/{EVENT_TYPE}/{mode}.skops   one per mode, conditional on its type
+    tfidf_vectorizer.skops    the fitted vectorizer, if word features were used
+    metadata.json             encoder name, per-class thresholds, training metrics
+
+`metadata.json` includes things like the sentence transformer encoder name 
+to avoid problems (that definitely never happened!) like using a different encoder
+during inference from the one used during training.
+
+This metadata.json also specifies per-event F1-maximizing thresholds.
+This can be overridden by passing `threshold=` to override every
+class at once.
+
+Features are built by `features.py` and are shared with the training script:
+documents are chunked into overlapping windows and mean-pooled rather than
+truncated at the encoder's limit, optionally concatenated with TF-IDF word
+features. 
 """
 
 import csv
+import json
 import warnings
 from pathlib import Path
 from importlib import resources
 
 
+import numpy as np
 import skops.io as sio
 from sentence_transformers import SentenceTransformer
+
+from .features import combine_features, encode_documents
+
+DEFAULT_ENCODER = "all-mpnet-base-v2"
 
 
 class DemoModelWarning(UserWarning):
@@ -99,10 +127,15 @@ class PloverSklearnClassifier:
     mode_model_dir : str, optional
         Directory containing subdirectories for mode classifiers.
         Structure: {mode_model_dir}/{EVENT_TYPE}/{mode}.skops
-    threshold : float
-        Confidence threshold for predictions (default: 0.6).
-    encoder_name : str
-        Name of the SentenceTransformer model to use.
+        Defaults to a `modes/` subdirectory of `type_model_dir` when one exists,
+        so mode models trained alongside the type models are picked up.
+    threshold : float, optional
+        One confidence threshold applied to every class. Leave unset to use the
+        per-class thresholds recorded in metadata.json, which is usually what you
+        want.
+    encoder_name : str, optional
+        SentenceTransformer model to encode with. Leave unset to use the encoder
+        recorded in metadata.json, which is the one the models were trained on.
     progress_bar : bool
         Whether to show progress bar during batch encoding.
 
@@ -121,40 +154,77 @@ class PloverSklearnClassifier:
 
     def __init__(
         self,
-        threshold: float = 0.6,
-        encoder_name: str = 'paraphrase-mpnet-base-v2',
+        threshold: float | None = None,
+        encoder_name: str | None = None,
         progress_bar: bool = False,
         codebook_path: str | None = None,
         type_model_dir: str | None = None,
         mode_model_dir: str | None = None,
     ):
         if type_model_dir is None:
-            type_model_dir = str(resources.files("ngec").joinpath("assets/test_event_models/"))
-        self.type_model_dir = Path(type_model_dir) 
-        
+            type_model_dir = str(resources.files("ngec").joinpath("assets/event_models_v2/"))
+        self.type_model_dir = Path(type_model_dir)
+
+        # Mode models live under the type model directory unless told otherwise,
+        # so a caller who points at a model directory gets the modes that were
+        # trained alongside those types without having to know a second path.
+        if mode_model_dir is None:
+            default_mode_dir = self.type_model_dir / "modes"
+            mode_model_dir = str(default_mode_dir) if default_mode_dir.exists() else None
         self.mode_model_dir = Path(mode_model_dir) if mode_model_dir else None
-        self.threshold = threshold
+
         self.progress_bar = progress_bar
+
+        # metadata.json records how the models in this directory were built.
+        self.metadata = self._load_metadata()
+
+        self.encoder_name = (
+            encoder_name
+            or self.metadata.get("encoder")
+            or DEFAULT_ENCODER
+        )
+
+        # A threshold passed in explicitly applies to every class. Otherwise each
+        # class uses the threshold that maximized its F1 at training time, which
+        # varies a lot between types and is recorded in metadata.json.
+        self.threshold = threshold
+        self.thresholds = {
+            name: entry["threshold"]
+            for name, entry in self.metadata.get("metrics", {}).items()
+            if "threshold" in entry
+        }
+        self.mode_thresholds = {
+            name: entry["threshold"]
+            for name, entry in self.metadata.get("mode_metrics", {}).items()
+            if "threshold" in entry
+        }
 
         # Load ontology (event types and their modes)
         self.ontology = load_ontology(codebook_path)
 
         # Load sentence encoder
-        self.encoder = SentenceTransformer(f'sentence-transformers/{encoder_name}')
+        self.encoder = SentenceTransformer(f'sentence-transformers/{self.encoder_name}')
+
+        # Word features, if these models were trained with them. Without the
+        # exact vocabulary and IDF weights the vectorizer was fit with, the word
+        # part of the feature vector cannot be rebuilt and the model's
+        # coefficients would line up with the wrong terms.
+        self.vectorizer = self._load_vectorizer()
 
         # Load type classifiers
         self.type_models = self._load_type_models()
 
         # Load mode classifiers (optional)
-        self.mode_models = self._load_mode_models() if mode_model_dir else {}
+        self.mode_models = self._load_mode_models() if self.mode_model_dir else {}
 
         warnings.warn(
             "Event classification models loaded. NOTE: these models are not the "
-            "production models used to produce the POLECAT dataset. Instead, these "
-            "are demonstration models for the PLOVER ontology trained on synthetic "
-            "text. If you are making custom event data, you'll need to train your "
-            "own models. See the `setup` directory in the NGEC repo "
-            "(github.com/ahalterman/NGEC).",
+            "production models used to produce the POLECAT dataset. They are "
+            "demonstration models for the PLOVER ontology, trained on Voice of "
+            "America news articles labeled by an LLM applying the PLOVER codebook. "
+            "If you are making custom event data, you'll need to train your own "
+            "models. See `setup/train_classifiers/codebook_llm/` in the NGEC repo "
+            "(github.com/ahalterman/NGEC-2025).",
             DemoModelWarning,
             stacklevel=2
         )
@@ -162,6 +232,22 @@ class PloverSklearnClassifier:
     # -------------------------------------------------------------------------
     # Model Loading
     # -------------------------------------------------------------------------
+
+    def _load_metadata(self):
+        """Read metadata.json from the model directory, if the models ship one."""
+        path = self.type_model_dir / "metadata.json"
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def _load_vectorizer(self):
+        """Load the fitted TfidfVectorizer that goes with these models."""
+        path = self.type_model_dir / "tfidf_vectorizer.skops"
+        if not path.exists():
+            return None
+        untrusted_types = sio.get_untrusted_types(file=path)
+        return sio.load(path, trusted=untrusted_types)
 
     def _load_type_models(self):
         """Load sklearn models for event type classification.
@@ -228,7 +314,15 @@ class PloverSklearnClassifier:
     # -------------------------------------------------------------------------
 
     def _compute_embeddings(self, texts):
-        """Compute sentence embeddings for a batch of texts.
+        """Compute the feature matrix for a batch of texts.
+
+        Documents are split into overlapping windows that fit the encoder and the
+        window embeddings are averaged, rather than the document being truncated
+        at the encoder's 384 word-piece limit. News stories are routinely longer
+        than that and we don't want to truncate them.  
+
+        If the models were trained with word features, the TF-IDF block is
+        appended here in exactly the way `train_classifiers.py` appended it.
 
         Parameters
         ----------
@@ -237,11 +331,27 @@ class PloverSklearnClassifier:
 
         Returns
         -------
-        numpy.ndarray
-            Array of embeddings, shape (n_texts, embedding_dim).
+        numpy.ndarray or scipy.sparse.csr_matrix
+            Feature matrix with one row per text.
         """
         show_progress = self.progress_bar and len(texts) > 100
-        return self.encoder.encode(texts, show_progress_bar=show_progress)
+        embeddings = encode_documents(self.encoder, texts,
+                                      show_progress=show_progress)
+        if self.vectorizer is None:
+            return embeddings
+        return combine_features(embeddings, self.vectorizer.transform(texts))
+
+    def _threshold_for(self, name, is_mode=False):
+        """The decision threshold for one class.
+
+        An explicit `threshold=` argument overrides everything. Otherwise the
+        per-class threshold chosen at training time is used, falling back to 0.5
+        for a class that has no recorded threshold.
+        """
+        if self.threshold is not None:
+            return self.threshold
+        table = self.mode_thresholds if is_mode else self.thresholds
+        return table.get(name, 0.5)
 
     # -------------------------------------------------------------------------
     # Classification Methods
@@ -261,18 +371,21 @@ class PloverSklearnClassifier:
             For each text, a list of dicts with 'event_type' and 'confidence'.
             Example: [[{'event_type': 'PROTEST', 'confidence': 0.87}], ...]
         """
-        results = []
+        n_texts = embeddings.shape[0]
+        results = [[] for _ in range(n_texts)]
 
-        for emb in embeddings:
-            preds = []
-            for event_type, model in self.type_models.items():
-                prob = model.predict_proba([emb])[0][1]
-                if prob >= self.threshold:
-                    preds.append({
+        # Score every document against a model at once. The old loop called
+        # predict_proba once per (document, event type), which is 16 calls per
+        # document on matrices of one row each.
+        for event_type, model in self.type_models.items():
+            probs = model.predict_proba(embeddings)[:, 1]
+            threshold = self._threshold_for(event_type)
+            for i, prob in enumerate(probs):
+                if prob >= threshold:
+                    results[i].append({
                         'event_type': event_type,
                         'confidence': float(prob)
                     })
-            results.append(preds)
 
         return results
 
@@ -294,21 +407,29 @@ class PloverSklearnClassifier:
             For each text, a list of "EVENT-mode" strings.
             Example: [['PROTEST-obstruct', 'PROTEST-demo'], ...]
         """
+        n_texts = embeddings.shape[0]
         if not self.mode_models:
-            return [[] for _ in embeddings]
+            return [[] for _ in range(n_texts)]
 
-        results = [[] for _ in embeddings]
+        results = [[] for _ in range(n_texts)]
 
-        for i, (emb, type_preds) in enumerate(zip(embeddings, type_results)):
+        # Mode models are conditional on their parent type, matching how they were
+        # trained: only documents where the type fired are scored for its modes.
+        rows_by_type = {}
+        for i, type_preds in enumerate(type_results):
             for type_pred in type_preds:
-                event_type = type_pred['event_type']
-                if event_type not in self.mode_models:
-                    continue
+                rows_by_type.setdefault(type_pred['event_type'], []).append(i)
 
-                for mode, model in self.mode_models[event_type].items():
-                    prob = model.predict_proba([emb])[0][1]
-                    if prob >= self.threshold:
-                        results[i].append(f"{event_type}-{mode}")
+        for event_type, rows in rows_by_type.items():
+            if event_type not in self.mode_models:
+                continue
+            subset = embeddings[rows]
+            for mode, model in self.mode_models[event_type].items():
+                probs = model.predict_proba(subset)[:, 1]
+                threshold = self._threshold_for(f"{event_type}-{mode}", is_mode=True)
+                for row, prob in zip(rows, probs):
+                    if prob >= threshold:
+                        results[row].append(f"{event_type}-{mode}")
 
         return results
 
