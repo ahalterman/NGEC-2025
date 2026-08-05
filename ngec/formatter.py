@@ -735,7 +735,17 @@ def _resolve_date(date_string: str | None=None,
             # We have both inputs and can proceed
             base_date = ref_date
 
-    res = _resolve_core(str(date_string).strip(), base_date)
+    date_string = str(date_string).strip()
+
+    # Handle the case where the attribute model return "N/A". Explicitly 
+    # return that, rather than a more generic response that might sound like a parsing
+    # failure.
+    if date_string.lower() in _NOISE_PHRASES:
+        return ResolvedDate(resolved_date=ref_date,
+                            date_type="unresolved",
+                            reason=f"<No date given in the text ('{date_string}'), using pub date>")
+
+    res = _resolve_core(date_string, base_date)
     if res is not None:
         return res
 

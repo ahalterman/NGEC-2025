@@ -190,7 +190,10 @@ def explode_events(event_list):
             # single-dict `attributes` and a unique id.
             new_event = event.copy()
             new_event['attributes'] = sub_event
-            new_event['id'] = f"{event['id']}_{idx}"
+            # In the full pipeline, stories_to_events always sets an id, but the
+            # attribute model can also be used on its own, where ids are optional.
+            if 'id' in event:
+                new_event['id'] = f"{event['id']}_{idx}"
             exploded.append(new_event)
     return exploded, dropped
 

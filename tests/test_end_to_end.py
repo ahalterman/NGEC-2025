@@ -20,7 +20,8 @@ def test_end_to_end_with_one_story(es_client_local):
     nlp = load_nlp()    
 
     # Instantiate components
-    event_model = PloverSklearnClassifier(threshold=0.9)
+    # No threshold: use the per-type thresholds recorded with the models.
+    event_model = PloverSklearnClassifier()
     geolocation_model = GeolocationModel(geo_model=None, geo_path=None)
     attribute_model = AttributeModel(silent=True, gpu=False, backend="transformers")
     actor_resolution_model = ActorResolver(spacy_model=nlp, es_client=es_client_local)
@@ -54,7 +55,8 @@ def test_end_to_end_with_two_stories(es_client_local):
     nlp = load_nlp()    
 
     # Instantiate components
-    event_model = PloverSklearnClassifier(threshold=0.9)
+    # No threshold: use the per-type thresholds recorded with the models.
+    event_model = PloverSklearnClassifier()
     geolocation_model = GeolocationModel(geo_model=None, geo_path=None)
     attribute_model = AttributeModel(silent=True, gpu=False, backend="transformers")
     actor_resolution_model = ActorResolver(spacy_model=nlp, es_client=es_client_local)

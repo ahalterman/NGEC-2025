@@ -739,6 +739,11 @@ class WikiMatcher:
             df['actor_desc_sim_intro'] = desc_sims_intro[0].tolist()
             df['actor_desc_sim_short'] = desc_sims_short[0].tolist()
 
+        # The ranker expects an "empty text" feature, which lets it 
+        # discount the context similarity columns when they're all 0.
+        # Add that feature here
+        df['text_is_empty'] = (context == "")
+
         # Normalize ES score within this candidate set
         es_max = df['raw_es_score'].max()
         es_min = df['raw_es_score'].min()
