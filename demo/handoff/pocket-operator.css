@@ -1,0 +1,217 @@
+/* ============================================================
+   NGEC — "Pocket Operator" theme (option 3B)
+
+   Brutalist / Teenage-Engineering flavour: white paper, black
+   hairlines, grey chips, one orange.
+
+   This file is the design handoff as authored, with one fix: the
+   @import moved above :root. CSS drops an @import that follows any
+   style rule, so in the original order the two webfonts never
+   loaded and everything silently fell back to Helvetica.
+
+   Loaded by ngec_demo/theme.py, which appends the app's own
+   component styles (.ngec-*) on top. Tokens are declared here and
+   mirrored in theme.py's PALETTE so Python never hard-codes a hex.
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap");
+
+:root {
+  --po-paper:  #FFFFFF;   /* page + sidebar background        */
+  --po-chip:   #F2F2F0;   /* grey chip / quote panel fill     */
+  --po-ink:    #111111;   /* headings, borders, hard elements */
+  --po-body:   #2A2A28;   /* body copy                        */
+  --po-body-2: #43433F;   /* copy inside grey chips           */
+  --po-mute:   #6C6C68;   /* secondary / caption copy         */
+  --po-label:  #8E8E8A;   /* mono section labels, meta        */
+  --po-orange: #F0521E;   /* the one accent. Use sparingly.   */
+
+  --po-sans: "Space Grotesk", "Helvetica Neue", Helvetica, sans-serif;
+  --po-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --po-radius: 0px;       /* nothing is rounded, ever         */
+  --po-rule:  1px solid var(--po-ink);
+  --po-hair:  1px solid #E6E6E4;
+}
+
+/* ---- app shell -------------------------------------------- */
+
+html, body, [class*="css"], .stApp {
+  background: var(--po-paper);
+  color: var(--po-body);
+  font-family: var(--po-sans);
+}
+
+.stApp a { color: var(--po-orange); text-decoration: none; }
+.stApp a:hover { color: var(--po-ink); text-decoration: underline; }
+
+/* main column: generous side padding, content-first */
+.block-container { padding: 28px 36px 56px; max-width: 1020px; }
+
+/* ---- type scale ------------------------------------------- */
+
+h1, .po-h1 {
+  font-family: var(--po-sans);
+  font-weight: 700;
+  font-size: 42px;
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+  color: var(--po-ink);
+  margin: 0 0 4px;
+}
+
+h2, .po-h2 {
+  font-weight: 700; font-size: 26px; letter-spacing: -0.03em;
+  color: var(--po-ink); margin: 28px 0 10px;
+}
+
+h3, .po-h3 {
+  font-weight: 700; font-size: 15px; letter-spacing: -0.01em;
+  color: var(--po-ink); margin: 0 0 6px;
+}
+
+p, .stMarkdown p, li {
+  font-size: 19px; line-height: 1.5; color: var(--po-body);
+  text-wrap: pretty;
+}
+
+.po-small, .po-small p { font-size: 14px; line-height: 1.5; color: var(--po-mute); }
+
+/* mono label — the workhorse. Section eyebrows, meta, units. */
+.po-label {
+  font-family: var(--po-mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--po-label);
+}
+.po-label--ink { color: var(--po-ink); }
+.po-label--orange { color: var(--po-orange); }
+
+/* ---- chips, tags, panels ---------------------------------- */
+
+.po-tag {                       /* solid tag, e.g. LIVE       */
+  font-family: var(--po-mono); font-size: 10px; letter-spacing: 0.22em;
+  text-transform: uppercase; color: #FFFFFF; background: var(--po-orange);
+  padding: 3px 7px; display: inline-block;
+}
+.po-tag--ink { background: var(--po-ink); }
+
+.po-num {                       /* boxed numeral 01..05       */
+  font-family: var(--po-mono); font-size: 11px; color: var(--po-ink);
+  border: var(--po-rule); padding: 1px 4px;
+}
+
+.po-panel {                     /* grey quote / callout       */
+  background: var(--po-chip); padding: 14px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.po-panel p { font-size: 15px; line-height: 1.6; color: var(--po-body-2); margin: 0; }
+
+.po-card {                      /* outlined card              */
+  border: var(--po-rule); padding: 13px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.po-card p { font-size: 14px; line-height: 1.5; color: var(--po-mute); margin: 0; }
+
+.po-statusbar {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+/* ---- sidebar ---------------------------------------------- */
+
+section[data-testid="stSidebar"] {
+  background: var(--po-paper);
+  border-right: var(--po-rule);
+}
+section[data-testid="stSidebar"] > div { padding: 20px 16px; }
+section[data-testid="stSidebar"] .po-label { margin: 18px 0 6px; }
+
+/* sidebar nav built from st.button — full-width, square, flat */
+section[data-testid="stSidebar"] .stButton > button {
+  width: 100%;
+  justify-content: flex-start;
+  text-align: left;
+  font-family: var(--po-sans);
+  font-size: 14px;
+  font-weight: 400;
+  color: var(--po-ink);
+  background: var(--po-chip);
+  border: none;
+  border-radius: var(--po-radius);
+  padding: 8px 10px;
+  margin: 0 0 5px;
+  box-shadow: none;
+}
+section[data-testid="stSidebar"] .stButton > button:hover {
+  background: #E8E8E5; color: var(--po-ink);
+}
+
+/* active item: st.button(..., type="primary") */
+section[data-testid="stSidebar"] .stButton > button[kind="primary"],
+.stButton > button[kind="primary"] {
+  background: var(--po-orange); color: #FFFFFF; font-weight: 700; border: none;
+}
+section[data-testid="stSidebar"] .stButton > button[kind="primary"]:hover {
+  background: #D9451A; color: #FFFFFF;
+}
+
+/* ---- controls --------------------------------------------- */
+
+.stButton > button {
+  font-family: var(--po-sans); font-weight: 700; font-size: 14px;
+  color: var(--po-ink); background: var(--po-paper);
+  border: var(--po-rule); border-radius: var(--po-radius);
+  padding: 8px 14px; box-shadow: none;
+}
+.stButton > button:hover { background: var(--po-chip); color: var(--po-ink); }
+
+.stTextInput input, .stTextArea textarea, .stNumberInput input,
+.stSelectbox div[data-baseweb="select"] > div {
+  font-family: var(--po-mono); font-size: 13px; color: var(--po-ink);
+  background: var(--po-paper); border: var(--po-rule) !important;
+  border-radius: var(--po-radius) !important; box-shadow: none !important;
+}
+.stTextInput input:focus, .stTextArea textarea:focus {
+  outline: 2px solid var(--po-orange); outline-offset: -2px;
+}
+
+.stTextInput label, .stTextArea label, .stSelectbox label,
+.stSlider label, .stRadio label > div p {
+  font-family: var(--po-mono) !important; font-size: 10px !important;
+  letter-spacing: 0.2em; text-transform: uppercase; color: var(--po-label) !important;
+}
+
+/* progress / spinners / metrics pick up the accent */
+.stProgress > div > div > div > div { background: var(--po-orange); }
+[data-testid="stMetricValue"] {
+  font-family: var(--po-sans); font-weight: 700; letter-spacing: -0.03em;
+  color: var(--po-ink);
+}
+[data-testid="stMetricLabel"] p {
+  font-family: var(--po-mono); font-size: 10px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--po-label);
+}
+
+/* tabs: square, underlined in orange when active */
+.stTabs [data-baseweb="tab-list"] { gap: 18px; border-bottom: var(--po-rule); }
+.stTabs [data-baseweb="tab"] {
+  font-family: var(--po-mono); font-size: 11px; letter-spacing: 0.18em;
+  text-transform: uppercase; color: var(--po-label);
+  background: transparent; border-radius: 0; padding: 8px 0;
+}
+.stTabs [aria-selected="true"] { color: var(--po-ink); box-shadow: inset 0 -3px 0 var(--po-orange); }
+
+/* dataframes / code: mono, hairline, no rounding */
+.stDataFrame, .stCodeBlock, pre {
+  border: var(--po-hair) !important; border-radius: var(--po-radius) !important;
+  font-family: var(--po-mono) !important;
+}
+code, pre, .stCode { font-family: var(--po-mono) !important; font-size: 13px !important; }
+
+/* dividers are hard rules, not soft grey */
+hr, [data-testid="stDivider"] { border: none; border-top: var(--po-rule); margin: 22px 0; }
+
+/* kill Streamlit chrome that breaks the deadpan look */
+#MainMenu, footer, header [data-testid="stDecoration"] { visibility: hidden; }
