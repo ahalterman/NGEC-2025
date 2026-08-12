@@ -11,7 +11,13 @@ logger = logging.getLogger(__name__)
 
 @pytest.fixture(scope="session")
 def attribute_model():
-    am = AttributeModel(silent=True, gpu=False, backend="transformers")
+    # Seeded: decoding samples rather than being greedy, so the same document
+    # otherwise yields a different span -- or N/A instead of a span -- from one
+    # run to the next, and any test asserting on an extraction is flaky without
+    # this. The seed fixes run-to-run variation on one machine; it does not
+    # promise identical output across machines or torch versions, so assert on
+    # extraction *shape* and keep span-quality claims in the eval harness.
+    am = AttributeModel(silent=True, gpu=False, backend="transformers", seed=0)
     return am
 
 

@@ -6,14 +6,14 @@ import re
 import json
 import logging
 
-import torch
-
 from collections import Counter
 from importlib import resources
 from tqdm import tqdm
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer
 from typing import Any, cast, Literal, TypedDict, NotRequired
 
+from .attributes.schema import parse_response
+from .llm.base import Conversation, GenerationEngine
 from .utilities import explode_events
 
 logger = logging.getLogger(__name__)
@@ -263,7 +263,8 @@ class AttributeModel:
                  backend: BackendType="vllm",
                  llamacpp_url: str | None = None,
                  model_name: str | None = None,
-                 prompt_format: PromptFormat | None = None
+                 prompt_format: PromptFormat | None = None,
+                 seed: int | None = None
                  ):
         """
         Initialize the attribute model
@@ -287,7 +288,7 @@ class AttributeModel:
         vllm_model : vllm.LLM, optional
             Pre-initialized vLLM model to use
         backend: BackendType="vllm"
-            Which backend to use: "vllm", "mlx", or "transformers"
+            Which backend to use: "vllm", "transformers", "mlx", or "llamacpp"
         model_name : str, optional
             A Hugging Face model name or a path to a local model directory.
             Defaults to DEFAULT_MODEL, or to the NGEC_ATTRIBUTE_MODEL
@@ -300,6 +301,13 @@ class AttributeModel:
             `model_name` up in KNOWN_PROMPT_FORMATS. Only pass this for a model
             that is not listed there; a mismatch does not raise, it just makes
             the extractions worse.
+        seed : int, optional
+            Seed the sampler, making a run repeatable on one machine. Decoding
+            samples rather than being greedy (greedy decoding sends Qwen into
+            repetition loops), so an unseeded run can return a different span --
+            or N/A instead of a span -- for the same document. Useful for tests
+            and for reproducing a reported extraction; leave it unset otherwise.
+            Currently honoured only by backends that go through an engine.
         """
         self.silent=silent
         self.backend = backend
@@ -322,6 +330,11 @@ class AttributeModel:
             logger.info(f"Backend: {self.backend}")
             logger.info(f"Model: {self.model_name} (prompt format: {self.prompt_format})")
 
+        # None until a backend has been ported to the engine interface; the
+        # others still generate through call_llm_batch(). process() branches on
+        # this, so it has to be set for every backend, not just the ported ones.
+        self.engine: GenerationEngine | None = None
+
         # Load model based on backend
         if self.backend == "vllm":
             try:
@@ -343,29 +356,19 @@ class AttributeModel:
             self.sampling_params = _load_vllm_sampling_params(self.max_output_tokens)
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         elif self.backend == "transformers":
-            if not self.silent:
-                logger.debug("Loading transformers model")
-            # Use transformers pipeline
-            device_id = 0 if self.device == "cuda" else -1
-            # The checkpoint is bfloat16. On a GPU that is what we want, but on a
-            # CPU without AVX512-BF16 or AMX every bf16 matmul is emulated, which
-            # measured ~25% slower than float32 on an AVX2 machine. Passing None
-            # here (the old behaviour) means "keep the checkpoint dtype", so CPU
-            # runs silently got the emulated path.
-            self.model = pipeline(
-                "text-generation",
-                model=self.model_name,
-                device=device_id,
-                torch_dtype="auto" if self.device == "cuda" else torch.float32,
+            from .llm import GenerationConfig
+            from .llm.transformers import TransformersEngine
+            self.engine = TransformersEngine(
+                model_name=self.model_name,
+                device=self.device,
+                config=GenerationConfig(max_tokens=self.max_output_tokens,
+                                        seed=seed),
+                silent=self.silent,
             )
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            # Batched generation needs left padding and a pad token; the
-            # tokenizer for this model defines neither by default.
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
-            self.tokenizer.padding_side = "left"
-            self.model.tokenizer.pad_token = self.tokenizer.pad_token
-            self.model.tokenizer.padding_side = "left"
+            # Keep the attribute alive for make_prompt() and the demo; delete when
+            # the last backend becomes an engine.
+            self.tokenizer = self.engine.tokenizer
+
         elif self.backend == "mlx":
             try:
                 from mlx_lm import load, generate
@@ -524,24 +527,20 @@ class AttributeModel:
             definition += f" ## Special Instructions: {extraction_notes}"
         return f"## Document: {doc}\n\n## Event Type: {definition}"
 
+    def _build_conversation(self, event) -> Conversation:
+        doc, event_type, event_def, mode_def, notes = self._get_event_info(event)
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": self._make_user_message(
+                doc, event_type, event_def, mode_def, notes)},
+        ]
+
     def make_prompt(self, event):
-        doc, event_type, event_def, mode_def, event_specific_notes = self._get_event_info(event)
-        user_message = self._make_user_message(doc, 
-                                               event_type, 
-                                               event_def,
-                                               mode_def,
-                                               event_specific_notes)
-        messages = [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_message}
-                    ]
-        prompt = self.tokenizer.apply_chat_template(
-                    messages, 
-                    tokenize=False, 
-                    add_generation_prompt=True,
-                    enable_thinking=False
-                )
-        return prompt
+        """Templated prompt string. Legacy backends consume this; engines take
+        _build_conversation() and template internally."""
+        return self.tokenizer.apply_chat_template(
+            self._build_conversation(event),
+            tokenize=False, add_generation_prompt=True, enable_thinking=False)
     
     def call_llm_batch(self, prompts):
         if type(prompts) is not list:
@@ -552,30 +551,15 @@ class AttributeModel:
             outputs = self.model.generate(prompts, sampling_params=self.sampling_params)
             responses = [i.outputs[0].text.strip() for i in outputs]
         elif self.backend == "transformers":
-            # Deliberately one prompt at a time. Batching looks like it should
-            # help -- decode is memory-bandwidth-bound, so a batch reads the
-            # weights once for several sequences -- and on uniform-length
-            # synthetic prompts it measured 1.7x faster. On real documents it
-            # was 1.8x *slower* (50s/doc -> 90s/doc): a batch runs until its
-            # longest member finishes, and these outputs vary from 1 to 345
-            # tokens, so short sequences sit padded while the longest one
-            # decodes. Do not "optimise" this back into a batch without
-            # measuring on real extractions.
-            responses = []
-            for prompt in prompts:
-                output = self.model(
-                    prompt,
-                    max_new_tokens=self.max_output_tokens,
-                    temperature=0.5,
-                    top_p=0.8,
-                    top_k=20,
-                    do_sample=True,
-                    return_full_text=False,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                )
-                # Extract the generated text
-                generated_text = output[0]["generated_text"].strip()
-                responses.append(generated_text)
+            # This backend generates through TransformersEngine now, so there is
+            # no self.model here to call. process() never reaches this branch;
+            # it exists to give a direct caller a real message instead of an
+            # AttributeError on a half-migrated object.
+            raise RuntimeError(
+                "The transformers backend generates through TransformersEngine, "
+                "not call_llm_batch(). Use process(), or "
+                "self.engine.generate([self._build_conversation(event)])."
+            )
         elif self.backend == "llamacpp":
             # One request per prompt to llama-server. `cache_prompt` lets the
             # server reuse the KV cache for the shared document prefix, which is
@@ -690,11 +674,34 @@ class AttributeModel:
         # Create a list of prompts
         if not self.silent: 
             print("Making prompts...")
-        prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
-        final_attributes = self.call_llm_batch(prompts)
+        if self.engine is not None:
+            conversations = [self._build_conversation(e)
+                            for e in tqdm(event_list, desc="Making prompts", disable=self.silent)]
+            raw = self.engine.generate(conversations)
+            final_attributes = []
+            failures = []
+            for text in raw:
+                events, failure = parse_response(text)
+                if failure:
+                    failures.append(failure)
+                    logger.debug(f"Parse failure ({failure}): {text!r}")
+                final_attributes.append(events)
+            # Reported in aggregate at INFO, matching what call_llm_batch logs
+            # below: an unparseable response becomes a dropped event rather than
+            # an error, so the rate is the only sign that anything is wrong.
+            if failures:
+                reasons = ", ".join(f"{reason}: {count}" for reason, count
+                                    in Counter(failures).most_common())
+                logger.info(f"Number of parse failures: {len(failures)} of "
+                            f"{len(raw)} ({reasons})")
+        else:
+            prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
+            final_attributes = self.call_llm_batch(prompts)
 
-        # Post-processing (split the ; separated attributes into lists)
-
+        # Post-processing (split the ; separated attributes into lists).
+        # Redundant on the engine path -- parse_response has already split these
+        # -- but harmless, since the loop below re-strips a list unchanged.
+        # Delete it once the last backend generates through an engine.
 
         # Now, at the very end, put the results back into the event list.
         for n, i in enumerate(event_list):
