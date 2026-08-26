@@ -17,3 +17,7 @@ uv.lock
 
 # Ignore all .skops files
 *.skops
+
+# Local model artifacts: HF checkpoints and GGUF conversions (see DEVELOPING.md)
+models/
+*.gguf

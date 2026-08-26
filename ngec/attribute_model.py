@@ -12,7 +12,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from typing import Any, cast, Literal, TypedDict, NotRequired
 
-from .attributes.schema import parse_response
+from .attributes.schema import ATTRIBUTE_SCHEMA, parse_response
 from .llm.base import Conversation, GenerationEngine
 from .utilities import explode_events
 
@@ -401,12 +401,18 @@ class AttributeModel:
             # Start the server separately, e.g.
             #   llama-server -m attr-q8.gguf --port 8080 -c 8192
             # and point NGEC_LLAMACPP_URL at it. See DEVELOPING.md.
-            self.llamacpp_url = (llamacpp_url
-                                 or os.environ.get("NGEC_LLAMACPP_URL",
-                                                   "http://127.0.0.1:8080"))
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            if not self.silent:
-                logger.info(f"Using llama-server at {self.llamacpp_url}")
+            from .llm import GenerationConfig
+            from .llm.llamacpp import LlamaCppServerEngine
+            self.engine = LlamaCppServerEngine(
+                model_name=self.model_name,
+                url=llamacpp_url,
+                config=GenerationConfig(max_tokens=self.max_output_tokens,
+                                        seed=seed),
+                silent=self.silent,
+            )
+            # Keep the attribute alive for make_prompt() and the demo; delete when
+            # the last backend becomes an engine.
+            self.tokenizer = self.engine.tokenizer
         else:
             raise ValueError(
                 f"Unknown backend: {self.backend}. "
@@ -561,38 +567,15 @@ class AttributeModel:
                 "self.engine.generate([self._build_conversation(event)])."
             )
         elif self.backend == "llamacpp":
-            # One request per prompt to llama-server. `cache_prompt` lets the
-            # server reuse the KV cache for the shared document prefix, which is
-            # most of the prompt when several event types are extracted from the
-            # same document.
-            import urllib.error
-            import urllib.request
-
-            responses = []
-            for prompt in prompts:
-                body = json.dumps({
-                    "prompt": prompt,
-                    "n_predict": self.max_output_tokens,
-                    "temperature": 0.5,
-                    "top_p": 0.8,
-                    "top_k": 20,
-                    "cache_prompt": True,
-                }).encode()
-                request = urllib.request.Request(
-                    f"{self.llamacpp_url}/completion",
-                    data=body,
-                    headers={"Content-Type": "application/json"},
-                )
-                try:
-                    with urllib.request.urlopen(request, timeout=300) as resp:
-                        payload = json.loads(resp.read())
-                    responses.append(payload.get("content", "").strip())
-                except (urllib.error.URLError, OSError, TimeoutError) as e:
-                    logger.error(
-                        f"llama-server at {self.llamacpp_url} did not respond: {e}. "
-                        "Is it running?"
-                    )
-                    responses.append("")
+            # This backend generates through LlamaCppServerEngine now, so there
+            # is no HTTP call here. process() never reaches this branch; it
+            # exists to give a direct caller a real message instead of an
+            # AttributeError on a half-migrated object.
+            raise RuntimeError(
+                "The llamacpp backend generates through LlamaCppServerEngine, "
+                "not call_llm_batch(). Use process(), or "
+                "self.engine.generate([self._build_conversation(event)])."
+            )
         elif self.backend == "mlx":
             # MLX backend
             responses = []
@@ -677,7 +660,8 @@ class AttributeModel:
         if self.engine is not None:
             conversations = [self._build_conversation(e)
                             for e in tqdm(event_list, desc="Making prompts", disable=self.silent)]
-            raw = self.engine.generate(conversations)
+            schema = ATTRIBUTE_SCHEMA if self.engine.capabilities.schema else None
+            raw = self.engine.generate(conversations, schema=schema)
             final_attributes = []
             failures = []
             for text in raw:
