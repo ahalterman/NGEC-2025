@@ -314,6 +314,53 @@ def test_day_idioms():
     assert _resolve_date("yesterday (Friday)", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-09"
 
 
+def test_bare_weekday_naming_the_pub_day():
+    # dateparser's past preference is *strictly* before the reference date, so a
+    # story filed on a Friday that says "Friday" would otherwise resolve to the
+    # Friday a week earlier. A bare weekday naming the filing day means that day.
+    for expr in ["Friday", "friday", "FRIDAY", "on Friday", "this Friday", "Fri", "Fri."]:
+        res = _resolve_date(expr, REF)
+        assert res.resolved_date.strftime("%Y-%m-%d") == "2025-05-16", expr
+        assert res.date_type == "exact" and res.granularity == "day", expr
+        assert "publication day" in res.reason, expr
+
+
+def test_bare_weekday_other_than_the_pub_day():
+    # Every other weekday still resolves to its most recent occurrence *before*
+    # publication, exactly as before.
+    for expr, expected in [("Saturday", "2025-05-10"), ("Sunday", "2025-05-11"),
+                           ("Monday", "2025-05-12"), ("Tuesday", "2025-05-13"),
+                           ("Wednesday", "2025-05-14"), ("Thursday", "2025-05-15")]:
+        res = _resolve_date(expr, REF)
+        assert res.resolved_date.strftime("%Y-%m-%d") == expected, expr
+        assert res.date_type == "exact" and res.granularity == "day", expr
+
+
+def test_same_day_rule_is_narrow():
+    # The rule fires only on a bare weekday. Modified, qualified, and absolute
+    # forms keep their existing resolutions even when the weekday is the pub day.
+    assert _resolve_date("last Friday", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-09"
+    assert _resolve_date("next Friday", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-23"
+    assert _resolve_date("yesterday", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-15"
+    assert _resolve_date("March 15", REF).resolved_date.strftime("%Y-%m-%d") == "2025-03-15"
+    assert _resolve_date("August 15", REF).resolved_date.strftime("%Y-%m-%d") == "2024-08-15"
+    assert _resolve_date("15/8/2004", REF).resolved_date.strftime("%Y-%m-%d") == "2004-08-15"
+    assert _resolve_date("over the weekend", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-10"
+    # A time-of-day qualifier is not a bare weekday, so "Friday evening" on a
+    # Friday still reads as the previous Friday. Left alone deliberately: the
+    # same-day fix is scoped to the bare form.
+    assert _resolve_date("Friday evening", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-09"
+
+    # Empty and missing spans fall back to the pub date, flagged unresolved.
+    for expr in ["", None]:
+        res = _resolve_date(expr, REF)
+        assert res.resolved_date.strftime("%Y-%m-%d") == "2025-05-16", expr
+        assert res.date_type == "unresolved", expr
+
+    # And the same-day rule needs a reference date to compare against.
+    assert _resolve_date("Friday", None).resolved_date is None
+
+
 def test_recency_window_is_approximate():
     res = _resolve_date("in the past few days", REF)
     assert res.date_type == "approximate"

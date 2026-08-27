@@ -159,9 +159,19 @@ _MONTHS = (r"January|February|March|April|May|June|July|August|September|"
 _WEEKDAYS = (r"monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
              r"mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun")
 
-# Qualifiers that turn a stated date into a bound or an estimate ("up to three
-# weeks ago", "nearly a month ago"). The date still resolves, but the source is
-# hedging, so the result is approximate rather than exact.
+# map weekday names to their Python weekday index (Monday = 0), for
+# the same-day rule in _resolve_date.
+_WEEKDAY_INDEX = {
+    "monday": 0, "mon": 0,
+    "tuesday": 1, "tue": 1, "tues": 1,
+    "wednesday": 2, "wed": 2, "weds": 2,
+    "thursday": 3, "thu": 3, "thur": 3, "thurs": 3,
+    "friday": 4, "fri": 4,
+    "saturday": 5, "sat": 5,
+    "sunday": 6, "sun": 6,
+}
+
+# Qualifiers, which reduces our reported confidence 
 _HEDGES = (r"up to|at least|as many as|as much as|nearly|almost|roughly|"
            r"approximately|about|around|sometime|on or about")
 
@@ -194,6 +204,30 @@ def _phrase_to_days(phrase: str) -> int | None:
 def _is_hedged(raw: str) -> bool:
     """Does the span hedge the date it states ("up to two weeks ago")?"""
     return re.search(rf"\b(?:{_HEDGES})\b", raw, re.IGNORECASE) is not None
+
+
+def _same_day_weekday(raw: str, base_date: datetime) -> ResolvedDate | None:
+    """
+    Resolve a bare weekday that names the publication day itself.
+
+    dateparser's ``PREFER_DATES_FROM='past'`` means *strictly* before the
+    reference date, so "Saturday" in a story filed on a Saturday resolves to the
+    Saturday a week earlier. In news copy a bare weekday naming the filing day
+    means that day, so return the base date. Every other weekday is left to the
+    normal past-preference parse and still lands on its most recent occurrence
+    before publication.
+
+    Deliberately narrow: it fires only when the *whole* span is a weekday name
+    (optionally prefixed with "on" or "this"). Anything carrying a modifier
+    ("last Tuesday", "next Tuesday"), a time of day ("Thursday evening"), a
+    month, or a digit goes through the cascade untouched.
+    """
+    m = re.fullmatch(rf"(?:on\s+|this\s+)?({_WEEKDAYS})", raw.strip(" -,."),
+                     re.IGNORECASE)
+    if m is None or _WEEKDAY_INDEX[m.group(1).lower()] != base_date.weekday():
+        return None
+    return ResolvedDate(resolved_date=base_date, granularity="day", date_type="exact",
+                        reason="<Bare weekday naming the publication day, resolved to the pub date>")
 
 
 def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> ResolvedDate | None:
@@ -712,7 +746,7 @@ def _resolve_date(date_string: str | None=None,
             # keep those, some branches below return tz-aware datetimes (day
             # arithmetic off the reference) while others return naive ones
             # (dates we construct outright). A column holding both is painful to
-            # work with in pandas, and the time-of-day is noise for event dates.
+            # work with in pandas, and the time-of-day is below our resolution.
             ref_date = ref_date.replace(tzinfo=None, hour=0, minute=0, second=0, microsecond=0)
 
     # Handle cases were inputs are incomplete
@@ -745,13 +779,19 @@ def _resolve_date(date_string: str | None=None,
                             date_type="unresolved",
                             reason=f"<No date given in the text ('{date_string}'), using pub date>")
 
+    # First check for a bare weekday that's the publication day itself. Check before
+    # starting _resolve_core.
+    same_day = _same_day_weekday(date_string, base_date)
+    if same_day is not None:
+        return same_day
+
     res = _resolve_core(date_string, base_date)
     if res is not None:
         return res
 
-    # Nothing worked (e.g. non-Gregorian calendars like "last Ramadan" or
+    # If we're here, nothing worked (e.g. non-Gregorian calendars like "last Ramadan" or
     # references needing world knowledge like "the anniversary of the
-    # uprising"). Fall back to the publication date, flagged unresolved.
+    # uprising"). Fall back to the publication date and flag as unresolved.
     return ResolvedDate(resolved_date=ref_date,
                         date_type="unresolved",
                         reason="<dateparser failed to convert relative date, using pub date>")
