@@ -18,6 +18,7 @@ class PloverCoder:
                  event_threshold: float | None = None,
                  attribute_backend: str = "transformers",
                  gpu: bool = False,
+                 max_gpu_memory: float = 0.8,
                  save_intermediate: bool = False):
         """
         Run the whole PLOVER coding pipeline over a list of stories.
@@ -39,6 +40,11 @@ class PloverCoder:
         gpu: run the attribute LLM on the GPU. "transformers" runs on CPU by
             default, which is fine for a handful of stories but slow for a
             corpus.
+        max_gpu_memory: only used by the "vllm" backend, which reserves this
+            fraction of the GPU's *total* memory up front. The default of 0.8
+            fails on a GPU that is already partly in use (vLLM reports that free
+            memory is less than the requested utilization); lower it to fit
+            alongside whatever else is running.
         save_intermediate: have each step write its output to a timestamped
             JSONL file, which is useful when debugging a specific step.
         """
@@ -57,6 +63,7 @@ class PloverCoder:
                                                   save_intermediate=save_intermediate)
         self.attribute_model = AttributeModel(silent=True,
                                               gpu=gpu,
+                                              max_gpu_memory=max_gpu_memory,
                                               backend=attribute_backend,
                                               save_intermediate=save_intermediate)
         self.actor_resolution_model = ActorResolver(spacy_model=self.nlp,

@@ -21,3 +21,32 @@ uv.lock
 # Local model artifacts: HF checkpoints and GGUF conversions (see DEVELOPING.md)
 models/
 *.gguf
+
+# Working data for the codebook-LLM training pipeline.
+#
+# Ignore the large regenerable things: the pooled corpus, the cached embeddings,
+# and the rendered prompt files. All of these are reproducible from the scripts
+# plus the VOA corpus.
+setup/train_classifiers/codebook_llm/data/*.jsonl
+setup/train_classifiers/codebook_llm/data/*.npy
+setup/train_classifiers/codebook_llm/data/*.meta.json
+setup/train_classifiers/codebook_llm/data/*.log
+setup/train_classifiers/codebook_llm/data/batches/**/*.txt
+setup/train_classifiers/codebook_llm/data/batches/pilot/
+
+# But KEEP the annotation outputs. Those 469 small JSON files are the LLM's
+# actual judgments -- the one artifact here that cannot be regenerated without
+# re-running the whole labeling effort -- along with the manifests needed to map
+# them back to documents, and the keyword seeds. Together about 3 MB.
+!setup/train_classifiers/codebook_llm/data/batches/**/*.json
+!setup/train_classifiers/codebook_llm/data/codebook.json
+!setup/train_classifiers/codebook_llm/data/seeds_*.json
+!setup/train_classifiers/codebook_llm/data/holdout_metrics.json
+
+# Demo app build artifacts (regenerate with demo/build_corpus_sample.py)
+demo/data/
+demo/*.gguf
+demo/static/paper.pdf
+
+# Attribute-model drop reports land in the working directory
+*_dropped_events.jsonl
