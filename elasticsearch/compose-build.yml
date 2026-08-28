@@ -1,0 +1,61 @@
+# Build-time stack for (re)building the offline Elasticsearch indices.
+#
+# This is NOT how you run Elasticsearch for normal use. It exists only to
+# refresh the geonames and/or wiki indices. The key detail is that `es` mounts
+# the SAME data directory your normal Elasticsearch container uses, which holds
+# BOTH the "geonames" and "wiki" indices.
+#
+# The path comes from NGEC_ES_DATA (set in the repo-root .env), falling back to
+# ./elasticsearch/data/wikigeo_index.
+#
+# Both the variable and that default are resolved relative to the PROJECT
+# DIRECTORY, which compose takes from the compose file's own location unless
+# told otherwise. Hence the `--project-directory .` in every command below:
+# without it the project dir is elasticsearch/, the repo-root .env is never
+# read, and the default resolves one level too deep. Starting this stack
+# against the wrong path silently creates an EMPTY data dir and ES comes up
+# with no indices -- if `_cat/indices` is empty after `up`, stop and check the
+# path before reloading anything.
+#
+# Set NGEC_ES_DATA to an ABSOLUTE path: compose does not expand `~`, it would
+# create a directory literally named "~" instead. To find the path your current
+# container uses:
+#
+#   docker inspect <container> --format '{{json .Mounts}}' | python -m json.tool
+#
+# Because a single Elasticsearch node stores all of its indices in one data
+# directory, you can refresh one index without disturbing the other: bring this
+# stack up against the live data dir, delete ONLY the index you're rebuilding
+# (curl -XDELETE localhost:9200/geonames  or  .../wiki), then reload it. The
+# co-resident index is untouched.
+#
+# The Python loaders run on the host (uv run ...) against the ports published
+# below, so this works identically on Linux, macOS, and Windows. Redis is only
+# needed for the wiki flow; the runtime does not use it.
+#
+# Run these from the repo root:
+#
+#   docker compose --project-directory . -f elasticsearch/compose-build.yml up -d es   # geonames flow
+#   docker compose --project-directory . -f elasticsearch/compose-build.yml up -d      # wiki flow (es + redis)
+#   docker compose --project-directory . -f elasticsearch/compose-build.yml down
+#
+# See es_geonames/README.md and es_wiki/README.md for the full procedures.
+
+services:
+
+  es:
+    image: elasticsearch:7.10.1
+    container_name: ngec-build-es
+    environment:
+      - discovery.type=single-node
+    volumes:
+      # The shared live data dir holding both the geonames and wiki indices.
+      - ${NGEC_ES_DATA:-./elasticsearch/data/wikigeo_index}:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+
+  redis:
+    image: redis
+    container_name: ngec-build-redis
+    ports:
+      - "6379:6379"

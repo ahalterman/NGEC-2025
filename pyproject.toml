@@ -184,6 +184,15 @@ demo-app = [
     # which older clients do not accept.
     "anthropic>=0.120.0",
 ]
+# Building the offline `wiki` and `geonames` Elasticsearch indices from source
+# dumps. Not needed to *use* NGEC -- most users download a prebuilt index.
+# See elasticsearch/README.md.
+es-build = [
+    "lxml>=5.0.0,<7.0",
+    "mwparserfromhell>=0.6.3,<1.0",
+    "plac>=1.4.0,<2.0",
+    "redis>=4.1.0,<7.0",
+]
 dev = [
     "dotenv>=0.9.9",
     "ipython>=8.37.0",
