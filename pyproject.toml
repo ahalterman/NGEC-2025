@@ -46,6 +46,7 @@ dependencies = [
 
 [project.scripts]
 ngec = "ngec.cli:main"
+ngec-doctor = "ngec.doctor:main"
 
 [project.optional-dependencies]
 # --- Which PyTorch build to install -----------------------------------------
