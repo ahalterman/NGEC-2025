@@ -44,6 +44,9 @@ dependencies = [
     "xgboost>=3.1.1,<4.0",
 ]
 
+[project.scripts]
+ngec = "ngec.cli:main"
+
 [project.optional-dependencies]
 # --- Which PyTorch build to install -----------------------------------------
 # Pick exactly one of `cpu`, `cu12` or `cu13`. They all install the same
@@ -69,10 +72,10 @@ cu13 = [
     'torch>=2.6.0,<3.0',
 ]
 
-models = [
-    'en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl',
-    'en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl',
-]
+# The two spaCy models the pipeline needs are deliberately not an extra; they are
+# the `models` dependency group below. An extra can only name them by URL, since
+# they are not on PyPI, and that URL is published in the wheel metadata, where
+# pip refuses to resolve it. See the group for the rest.
 
 # vLLM backend (probably needs to be manually installed on macOS)
 vllm = [
@@ -131,6 +134,13 @@ conflicts = [
     [{ extra = "cpu" }, { extra = "vllm" }],
 ]
 
+# Groups installed by a bare `uv sync`. This replaces uv's default of ["dev"],
+# so dev has to be named again to keep it. `models` is here because a group that
+# is not in the sync target gets *pruned* from the environment by the next sync,
+# which for the spaCy models looks exactly like a code bug: the pipeline starts
+# reporting a missing model that was working an hour ago.
+default-groups = ["dev", "models"]
+
 # The CUDA-specific builds of PyTorch are not on PyPI; they live on PyTorch's
 # own indexes. `explicit = true` means nothing is fetched from these indexes
 # unless a [tool.uv.sources] entry below sends it there.
@@ -166,8 +176,6 @@ torchvision = [
 torchaudio = [
     { index = "pytorch-cu12", extra = "vllm" },
 ]
-en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
-en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
 # Pinned to a specific commit, not to the default branch. mordecai3 is installed
 # from git and its Geoparser signature has changed under us before (which breaks
 # ngec/geolocation.py); since uv.lock is not committed, this rev is the only
@@ -175,6 +183,17 @@ en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/do
 mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "bc62487930793c059f34b92f0426a68dbd6ef5ff" }
 
 [dependency-groups]
+# The spaCy models, as a dependency group rather than an extra, because a group
+# is a property of this source tree and never reaches the published metadata:
+# `pip install "ngec @ git+..."` does not see it and so is never asked to
+# resolve a URL outside PyPI. Working from a checkout, `uv sync` installs the
+# models and (being a default group) never prunes them again. Anyone installing
+# ngec rather than cloning it gets them from `ngec download-models` instead,
+# which is also the way back if they do go missing.
+models = [
+    'en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl',
+    'en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl',
+]
 demo-app = [
     "streamlit>=1.55.0",
     # Only used by the demo's "Against a frontier LLM" page, which runs the same

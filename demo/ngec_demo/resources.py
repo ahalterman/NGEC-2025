@@ -345,11 +345,11 @@ def health() -> dict[str, Health]:
             out[f"spaCy {model}"] = Health(
                 ok, "installed" if ok else "missing",
                 "" if ok else "every step — the pipeline cannot parse documents without it",
-                "" if ok else f"uv run python -m spacy download {model}")
+                "" if ok else "uv run ngec download-models")
     except Exception as exc:  # noqa: BLE001
         out["spaCy"] = Health(False, str(exc)[:80],
                               "every step — the pipeline cannot parse documents",
-                              "uv run python -m spacy download en_core_web_trf")
+                              "uv run ngec download-models")
 
     out["Attribute model"] = Health(True, attribute_model_label())
 
