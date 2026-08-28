@@ -2,64 +2,207 @@
 
 *This is a pre-release version of the code. Expect instablity and errors when running it.*
 
-See [`RUNNING.md`](RUNNING.md) for notes on running the pipeline over a real
-corpus. That doc talks about which Elasticsearch indices you need, time estimates, and common errors.
+See [`docs/RUNNING.md`](docs/RUNNING.md) for notes on running the pipeline over a real corpus. That doc talks about which Elasticsearch indices you need, time estimates, and common errors.
+
+Note that NGEC depends on ElasticSearch indices derived from Wikipedia and GeoNames data for actor resolution and geocoding. The data itself is quite big, 10+GB, and requires running an ElasticSearch instance. See the install instructions below.
 
 ## Installation
 
-The recommended installation is with `uv`. 
+The recommended installation is with `uv`, and also using `uv` for virtual environment/dependency management.
 
-### Install PyTorch
+### (optional) Install PyTorch
 
-`uv sync` installs the default PyTorch build from PyPI, which is compiled
-against a particular CUDA version and may not match your NVIDIA driver. When it
-doesn't, `torch.cuda.is_available()` quietly returns `False` and everything runs
-on the CPU. To install the build that matches your driver:
+Installing ngec if PyTorch is not already installed will install whatever PyTorch version is the default for your platform. For performance reasons, you might want to change that, see https://pytorch.org/get-started/locally/ and [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
+
+If you are on Windows with a NVIDIA GPU, this is something you should probably do, because the default on Windows is for a CPU version that will be slower.
+
+For macOS users, you should be ok with the default.
+
+
+### Install mordecai3
+
+Geocoding depends on [mordecai3](https://github.com/ahalterman/mordecai3). As both mordecai3 and ngec are in active development right now, we recommend installing it from GitHub:
 
 ```shell
-uv pip install torch --torch-backend=auto --reinstall-package torch
+uv add "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
 ```
 
-`--reinstall-package torch` is needed because the CUDA suffix isn't part of the
-version number uv compares, so otherwise it sees a match and does nothing.
-Re-running `uv sync` reverts to the PyPI build, so re-run this afterwards.
+<details>
+<summary>Install with pip</summary>
+
+\`\`\`shell
+pip install "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
+\`\`\`
+
+</details>
+
+### Setup Elasticsearch and the Wiki/GeoNames indices
+
+NGEC needs two Elasticsearch indices: `wiki` (actor resolution) and `geonames` (geocoding). Both live in a single data directory served by one Elasticsearch node. The easiest setup is to download the prebuilt data directory and run Elasticsearch over it in Docker. Expect >10 GB on disk.
+
+**1. Install Docker.** See https://www.docker.com/get-started/.
+
+**2. Download and unpack the prebuilt index.**
+
+```shell
+curl -LO https://andrewhalterman.com/files/geonames_wiki_index_2023-03-02.tar.gz
+tar -xzf geonames_wiki_index_2023-03-02.tar.gz
+```
+
+This unpacks into a directory called `geonames_index`. It actually holds both the wiki and geo indices. Rename it to make clear it holds both indices:
+
+```shell
+mv geonames_index wikigeo_index
+```
+
+> **Note:** This prebuilt index predates a later refactor that added extra metadata fields to the `wiki` index, so it will not have those fields. The pipeline should still run, but anything that depends on the newer metadata will not be populated. If you need the current fields, build the wiki index yourself — see [`elasticsearch/README.md`](elasticsearch/README.md).
+
+Note the **absolute** path of the renamed directory for the next step.
+
+**3. Start Elasticsearch against it.**
+
+```shell
+docker run -d --name ngec-es \
+  -p 9200:9200 \
+  -e discovery.type=single-node \
+  -v /absolute/path/to/wikigeo_index:/usr/share/elasticsearch/data \
+  elasticsearch:7.10.1
+```
+
+**4. Check that both indices are there.**
+
+```shell
+curl -s 'localhost:9200/_cat/indices?v'
+```
+
+You should see `wiki` and `geonames`, both with a non-zero `docs.count`. If the list is empty, the volume path in step 3 is wrong — Elasticsearch silently starts with an empty data directory rather than failing. If health is `yellow`, see [Cluster health is yellow](elasticsearch/README.md#cluster-health-is-yellow).
+
+That is all the setup NGEC needs: it connects to `localhost:9200` by default. To use a different host or port, pass them to `ngec.es_client.setup_es_client`.
+
+If you need to build or refresh the indices yourself — a newer Wikipedia dump, a different gazetteer — see [`elasticsearch/README.md`](elasticsearch/README.md). Building the wiki index takes about a day.
+
+### Install ngec
+
+```shell
+uv add "ngec @ git+https://github.com/ahalterman/ngec-2025"
+```
+
+<details>
+<summary>Install with pip</summary>
+
+\`\`\`shell
+pip install "ngec @ git+https://github.com/ahalterman/ngec-2025"
+\`\`\`
+
+</details>
+
 
 ### spacy models
 
-ngec depends on the spacy `en_core_web_lg` and `en_core_web_trf` models, which are delivered as non-standard Python pacakges. 
+ngec depends on the spacy `en_core_web_lg` and `en_core_web_trf` models, which are delivered as non-standard Python packages: they are hosted on GitHub rather than PyPI, so installing `ngec` cannot bring them in. Download them once, after installing:
 
-To attempt to install them alongside the package, use the `models` extra:
-
-```python3
-uv add ngec[models]
+```shell
+uv run ngec download-models
 ```
+
+That is spaCy's own downloader, so `python -m spacy download en_core_web_lg` (and `en_core_web_trf`) installs exactly the same thing if you would rather do it by hand. Together they are about 900 MB. Nothing complains about a missing model until something tries to load it, at which point the error names the model and the command above.
+
+Working from a clone of this repository rather than an install, you get them already: they are the `models` dependency group, which `uv sync` installs by default. See [`DEVELOPING.md`](DEVELOPING.md).
+
+<details>
+<summary>If you are using a virtual environment without `uv`</summary>
+
+With the venv active:
+
+\`\`\`shell
+ngec download-models
+\`\`\`
+
+</details>
+
 
 ### Inference backend
 
-There are different options for the LLM inference backend. The most basic one, but also slowest is `"transformers"`, which is installed by default. 
+There are different options for the LLM inference backend. The most basic one, but also slowest is `"transformers"`, which is installed by default.
 
 For Windows and Linux users, especially with CUDA, install vLLM, which can be done via an extra:
 
 ```python3
-uv add ngec[models,vllm]
+uv add ngec[vllm]
 ```
 
-Note that the currently pinned vLLM is a CUDA 13 build, so it needs a recent
-NVIDIA driver (roughly 580+). On an older driver, use the `transformers` backend
-with `gpu=True` instead. See [`RUNNING.md`](RUNNING.md).
+Note that the currently pinned vLLM is a CUDA 13 build, so it needs a recent NVIDIA driver (roughly 580+). On an older driver, use the `transformers` backend with `gpu=True` instead. See [`RUNNING.md`](RUNNING.md).
 
 macOS users can try to use `"mlx"` by installing the corresponding extra:
 
 ```python3
-uv add ngec[models,mlx]
+uv add ngec[mlx]
 ```
 
-### Installing with pip
+<details>
+<summary>With pip</summary>
 
-If you are not using `uv` to install `ngec`, the `mordecai3` install will not work correctly. In that case:
+\`\`\`shell
+pip install "ngec[extra] @ git+https://github.com/ahalterman/ngec-2025"
+\`\`\`
 
-1. Manually install `mordecai3` from GitHub into whatever virtual environment you are using.
-2. Install `ngec`. 
+Where `extra` is `vllm`, `mlx`, as needed. 
+
+</details>
+
+### Checking your installation
+
+Installing `ngec` involves enough moving parts -- a PyTorch build, two spaCy models, an inference backend, Elasticsearch -- that several of them can be wrong without anything raising an error. `ngec-doctor` reports what it finds:
+
+```shell
+uv run ngec-doctor
+```
+
+It prints the installed version and commit, every environment variable ngec and its tooling read (with the effective value and which code reads it), and what the PyTorch build can actually see. Anything it flags is repeated at the bottom with what the problem breaks and the command that fixes it. It exits non-zero only on a real failure, so it is safe to run as a smoke test in CI.
+
+Two flags:
+
+```shell
+uv run ngec-doctor --only compute
+```
+
+```shell
+uv run ngec-doctor --json
+```
+
+`--only` takes any comma-separated subset of `install`, `config` and `compute`. `--json` gives the same findings in machine-readable form, which is the more useful thing to paste into a bug report. `python -m ngec.doctor` works too, if you would rather not rely on the console script being on your PATH.
+
+The most common thing it catches is the PyTorch problem described above: on a machine with an NVIDIA GPU, doctor asks the driver directly and compares that against what PyTorch can see, so a torch build that has quietly fallen back to the CPU is reported rather than left to show up as a pipeline that is thirty times slower than expected.
+
+<details>
+<summary>If you are using a virtual environment without `uv`</summary>
+
+With the venv active:
+
+\`\`\`shell
+ngec-doctor
+\`\`\`
+
+Plus any other options as above. 
+
+</details>
+
+
+### Not using `uv`
+
+Here is a summary of differences if you are not using `uv`, for either install or virtual environment running. 
+
+**Installing packages with `pip` instead of `uv add`:**
+
+1. [Install `mordecai3`](#install-mordecai3) with pip.
+2. [Install `ngec`](#install-ngec) with pip.
+3. (optional) [Install a backend extra](#inference-backend) like `vllm` or `mlx` with pip.
+
+**Running commands in a manually-activated virtual environment instead of via `uv run`:**
+
+4. [Download the spacy models](#spacy-models) with the venv active.
+5. [Run `ngec-doctor`](#checking-your-installation) with the venv active.
+
 
 ### Uninstalling the cache
 
