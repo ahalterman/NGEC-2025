@@ -30,9 +30,9 @@ uv add "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
 <details>
 <summary>Install with pip</summary>
 
-\`\`\`shell
+```shell
 pip install "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-\`\`\`
+```
 
 </details>
 
@@ -90,9 +90,9 @@ uv add "ngec @ git+https://github.com/ahalterman/ngec-2025"
 <details>
 <summary>Install with pip</summary>
 
-\`\`\`shell
+```shell
 pip install "ngec @ git+https://github.com/ahalterman/ngec-2025"
-\`\`\`
+```
 
 </details>
 
@@ -114,9 +114,9 @@ Working from a clone of this repository rather than an install, you get them alr
 
 With the venv active:
 
-\`\`\`shell
+```shell
 ngec download-models
-\`\`\`
+```
 
 </details>
 
@@ -142,9 +142,9 @@ uv add ngec[mlx]
 <details>
 <summary>With pip</summary>
 
-\`\`\`shell
+```shell
 pip install "ngec[extra] @ git+https://github.com/ahalterman/ngec-2025"
-\`\`\`
+```
 
 Where `extra` is `vllm`, `mlx`, as needed. 
 
@@ -179,9 +179,9 @@ The most common thing it catches is the PyTorch problem described above: on a ma
 
 With the venv active:
 
-\`\`\`shell
+```shell
 ngec-doctor
-\`\`\`
+```
 
 Plus any other options as above. 
 
