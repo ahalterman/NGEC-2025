@@ -1109,7 +1109,13 @@ class ActorResolver:
                     if actor in exclude:
                         continue
 
-                    res = self.actor_to_code(actor, query_date=query_date)
+                    # Pass the story text as context: it drives NER-based query
+                    # expansion and the context-similarity features the wiki
+                    # ranker was trained with. The demo and the ECAV evaluation
+                    # already pass it; the pipeline path was silently omitting it.
+                    res = self.actor_to_code(actor,
+                                             context=event.get("event_text", ""),
+                                             query_date=query_date)
                     # actor_to_code can return None, this will break the code below
                     if res is None:
                         res = {}
