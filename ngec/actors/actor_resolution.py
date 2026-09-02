@@ -878,6 +878,24 @@ class ActorResolver:
         self.save_intermediate = save_intermediate
         self.wiki_sort_method = wiki_sort_method
 
+    def _country_from_context(self, text, context, window=200):
+        """
+        Return the country *name* mentioned nearest to `text` in `context`.
+
+        Looks at `window` characters on either side of the first occurrence
+        of the mention (or the first 2*window characters if the mention is not
+        found verbatim), mirroring how the wiki ranker's training data was
+        built. Returns "" if no country or nationality is mentioned.
+        """
+        mention = re.sub(r"\s+", " ", text).strip()
+        pos = context.find(mention)
+        if pos >= 0:
+            passage = context[max(0, pos - window): pos + len(mention) + window]
+        else:
+            passage = context[: 2 * window]
+        country, _ = self.country_detector.search_nat(passage, use_name=True)
+        return country or ""
+
     def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term="") -> dict | None:
         """
         Resolve an actor mention to a code representing their role.
@@ -892,8 +910,12 @@ class ActorResolver:
         Returns:
             dict or None: Actor code information or None if resolution fails
         """
-        # Check cache first
-        cache_key = text + "_" + str(query_date)
+        # Check cache first. The key includes the context and country because
+        # the same mention ("the Liberal Party") resolves differently in
+        # different documents; keying on the mention alone would return the
+        # first document's answer for every later one.
+        cache_key = "_".join([text, str(query_date), known_country,
+                              str(hash(context)) if context else ""])
         cached_result = self.cache_manager.get(cache_key)
         if cached_result:
             logger.debug("Returning from cache")
@@ -984,6 +1006,15 @@ class ActorResolver:
                 actor_desc = ' '.join(desc_parts)
         if core_query != trimmed_text:
             logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
+
+        # Detect the country from the passage around the mention when the
+        # caller did not supply one. The wiki ranker's country_match feature
+        # (and the "Title (Country)" exact-match rule) were trained with a
+        # country detected this way, so leaving it empty at inference time
+        # silently disables them.
+        if not known_country and context:
+            known_country = self._country_from_context(text, context)
+            logger.debug(f"Country detected from context: {known_country!r}")
 
         # Try Wikipedia lookup for better resolution
         logger.debug(f"Trying Wikipedia lookup with: {core_query}")
