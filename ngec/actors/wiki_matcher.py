@@ -1149,8 +1149,12 @@ class WikiMatcher:
             logger.debug("Context present, so attempting NER expansion")
             query_term = self._expand_query(query_term, context)
 
-        # Try exact search first
-        logger.debug("Starting with exact search")
+        # A single search: run_wiki_search already combines exact (term) and
+        # fuzzy (match / folded) clauses, so there is no separate fuzzy mode
+        # to fall back to. An earlier version re-ran this identical search and
+        # re-embedded every candidate whenever pick_best_wiki returned None,
+        # doubling the cost of every failed lookup for no change in output.
+        logger.debug("Searching Wikipedia")
         results = self.wiki_searcher.search_wiki(
             query_term, 
             limit_term=limit_term, 
@@ -1164,25 +1168,6 @@ class WikiMatcher:
             actor_desc=actor_desc,
             wiki_sort_method=method
         )
-        if best:
-            return best
-            
-        # Fall back to fuzzy search
-        logger.debug("Falling back to fuzzy search")
-        results = self.wiki_searcher.search_wiki(
-            query_term, 
-            limit_term=limit_term, 
-            max_results=max_results
-        )
-        best = self.pick_best_wiki(
-            query_term, 
-            results, 
-            country=country, 
-            context=context,
-            actor_desc=actor_desc,
-            wiki_sort_method=method,
-        )
-       
         return best
 
 
