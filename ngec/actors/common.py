@@ -116,7 +116,7 @@ def clean_query(qt):
     qt = re.sub(r"^an ", "", qt, flags=re.IGNORECASE).strip()
     qt = re.sub(r"^a ", "", qt, flags=re.IGNORECASE).strip()
     qt = re.sub(r" of$", "", qt).strip()
-    qt = re.sub(r"^'s", "", qt).strip()
+    qt = re.sub(r"^['’]s", "", qt).strip()
     
     # Remove ordinals
     qt = re.sub(r"(?<=\d\d)(st|nd|rd|th)\b", '', qt).strip()  # two-digit ordinals
@@ -124,7 +124,7 @@ def clean_query(qt):
     
     # Remove leading numbers and possessives
     qt = re.sub(r"^\d+? ", "", qt).strip()
-    qt = re.sub(r"'s$", "", qt).strip()
+    qt = re.sub(r"['’]s$", "", qt).strip()
     
     # Return empty string if too short
     if len(qt) < 2:
@@ -157,6 +157,11 @@ def strip_ents(doc) -> str:
 #######################################################
 # Country Detection
 #######################################################
+
+def _bounded(name: str) -> str:
+    """Regex for a country name or nationality as a whole word."""
+    return r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z0-9])"
+
 
 class CountryDetector:
     """
@@ -206,15 +211,18 @@ class CountryDetector:
         for _, row in countries.iterrows():
             # Handle nationalities
             nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
+            # Patterns are escaped and word-bounded. Unescaped, "U.S." matched
+            # "UWSA" and "Mali" matched inside "al-Maliki"; unbounded, "UN"
+            # matched inside "UNITA" and "UNRWA".
             for nat in nationalities:
-                pattern = (re.compile(nat + r"(?=[^a-z]|$)"), row['CCA3'])
-                pattern_name = (re.compile(nat + r"(?=[^a-z]|$)"), row['Name'])
+                pattern = (re.compile(_bounded(nat)), row['CCA3'])
+                pattern_name = (re.compile(_bounded(nat)), row['Name'])
                 nat_list.append(pattern)
                 nat_list_name.append(pattern_name)
             
             # Handle country names
-            pattern = (re.compile(row['Name']), row['CCA3'])
-            pattern_name = (re.compile(row['Name']), row['Name'])
+            pattern = (re.compile(_bounded(row['Name'])), row['CCA3'])
+            pattern_name = (re.compile(_bounded(row['Name'])), row['Name'])
             nat_list.append(pattern)
             nat_list_name.append(pattern_name)
 
@@ -227,14 +235,14 @@ class CountryDetector:
                 # Handle nationalities in categories
                 nationalities = [nat.strip() for nat in row['Nationality'].split(",")]
                 for nat in nationalities:
-                    pattern = (re.compile(prefix + nat), row['CCA3'])
-                    pattern_name = (re.compile(prefix + nat), row['Name'])
+                    pattern = (re.compile(prefix + _bounded(nat)), row['CCA3'])
+                    pattern_name = (re.compile(prefix + _bounded(nat)), row['Name'])
                     nat_list_cat.append(pattern)
                     nat_list_name_cat.append(pattern_name)
                 
                 # Handle country names in categories
-                pattern = (re.compile(prefix + row['Name']), row['CCA3'])
-                pattern_name = (re.compile(prefix + row['Name']), row['Name'])
+                pattern = (re.compile(prefix + _bounded(row['Name'])), row['CCA3'])
+                pattern_name = (re.compile(prefix + _bounded(row['Name'])), row['Name'])
                 nat_list_cat.append(pattern)
                 nat_list_name_cat.append(pattern_name)
         
@@ -280,6 +288,8 @@ class CountryDetector:
             if match:
                 # Remove the matched country/nationality from text
                 trimmed_text = re.sub(pattern, "", text).strip()
+                # "Mexico's Zapatista rebel group" -> "'s Zapatista rebel group"
+                trimmed_text = re.sub(r"^'s\b", "", trimmed_text).strip()
                 trimmed_text = re.sub(r" +", " ", trimmed_text).strip()
                 found.append((country, trimmed_text.strip(), match))
         

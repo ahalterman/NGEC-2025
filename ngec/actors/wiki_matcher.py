@@ -1143,7 +1143,7 @@ class WikiMatcher:
         if method not in ["neural", "rules"]:
             raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
         # Strip possessive suffix before searching
-        query_term = re.sub(r"[''']s\s*$", "", query_term).strip()
+        query_term = re.sub(r"['’]s\s*$", "", query_term).strip()
         # Do NER expansion unless caller already extracted a specific (multi-word) entity
         if context and not skip_expansion:
             logger.debug("Context present, so attempting NER expansion")
