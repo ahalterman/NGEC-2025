@@ -1,6 +1,36 @@
 """
 Functionality for matching a query term to a Wikipedia article. Relies on a
 Elasticsearch index of Wikipedia data.
+
+Two stages. `WikiSearcher` retrieves candidate articles from the index;
+`WikiMatcher` scores them and picks one, using a small XGBoost ranker shipped as
+`ngec/assets/xgb_model.json`. See the "Actor resolution" section of PIPELINE.md
+for the longer version of what follows.
+
+Retrieval. The four highest-boosted clauses used to be `term` queries against
+analyzed text fields, which fired on 0.4% of queries; they are `match_phrase` and
+`match ... operator: "and"` now. When a country is known, `country_phrase_variants`
+adds the title forms a country's institution is likely to be listed under
+("Ministry of Defence (Ghana)" for "the defense ministry"). `query_wiki` can also
+search a second surface form of the same mention (`alt_query_terms`) and
+interleave the two result lists, which buys recall on polysemous mentions.
+
+Ranking. Besides string similarity and the Elasticsearch score, the ranker sees
+features computed from strings already in hand: whether the country the *story*
+is about appears in the candidate's intro, title or categories (`cm_doc`,
+`cm_title`, `cm_cat`); a TF-IDF cosine between story and intro, weighted by
+`ngec/assets/wiki_idf.json.gz` (`tfidf_ctx_intro`); capitalised words shared
+between the two (`pn_overlap`); and two flags separating a generic concept page
+("Interior ministry") from a country's actual institution.
+
+The encoder used for the embedding features is configurable -- `WIKI_ENCODERS` in
+`common.py`, or the `NGEC_WIKI_ENCODER` environment variable -- and its query-side
+instruction, if it has one, is applied to the story and the actor description
+only, never to the article text.
+
+**The ranker asset must be retrained whenever the feature set or the encoder
+changes** (`setup/train_wiki_model/train_wiki_model.py`). `_call_ranker` selects
+columns by name, so a new feature is simply ignored until then.
 """
 
 import gzip
