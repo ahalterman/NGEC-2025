@@ -100,6 +100,74 @@ INSTITUTION_MODIFIED_HEAD_NOUNS = (
 )
 
 
+# Spans that refer to people without naming them. A pronoun has no referent
+# to look up, and an indefinite phrase ("two men", "a group of men", "some
+# residents") names a quantity, not an actor; both used to be caught by the
+# loose confidence clauses in the old gate.
+PRONOUNS = (
+    "he", "she", "they", "them", "him", "her", "we", "us", "i", "me", "you",
+    "it", "someone", "somebody", "anyone", "anybody", "everyone", "everybody",
+    "nobody", "others",
+)
+
+# Words that open an indefinite phrase. Numbers are caught separately with
+# spaCy's like_num, which also handles digits.
+INDEFINITE_STARTERS = (
+    "a", "an", "some", "several", "many", "few", "both", "another", "other",
+    "dozens", "hundreds", "thousands",
+)
+
+# Collective synonyms that only ever appear bare: "cops", "two men", "people".
+UNLINKABLE_BARE_NOUNS = (
+    "cop", "cops", "man", "men", "woman", "women", "person", "people",
+)
+
+
+def span_is_unlinkable_reference(doc):
+    """
+    Does this span refer to people without naming anyone?
+
+    Three cases, all of which the Wikipedia linker can only get wrong: a
+    pronoun ("he", "they"), an indefinite phrase whose head is a common noun
+    ("two men", "a group of men", "some residents"), and a bare collective
+    synonym ("cops", "people"). As with the collective filter, a span with a
+    PERSON/ORG/GPE/NORP entity, a capitalised word past the start, or an
+    institutional head noun is left alone.
+
+    Args:
+        doc: spaCy Doc of the span, after nationality stripping
+
+    Returns:
+        bool: True if the caller should skip the Wikipedia lookup
+    """
+    if any(e.label_ in ("PERSON", "ORG", "GPE", "NORP") for e in doc.ents):
+        return False
+    if span_names_an_institution(doc):
+        return False
+
+    words = [t for t in doc if t.is_alpha or t.like_num]
+    if not words:
+        return False
+    if words[0].lower_ in PRONOUNS:
+        return len(words) == 1
+    if any(t.text[0].isupper() for t in words[1:]):
+        return False
+
+    article = words[0].lower_ in ("the", "a", "an")
+    body = words[1:] if article else words
+    if not body:
+        return False
+
+    head = body[-1]
+    if len(body) == 1 and head.lower_ in UNLINKABLE_BARE_NOUNS:
+        return True
+    # An indefinite phrase: "two men", "a group of men", "some residents".
+    opener = words[0]
+    if opener.like_num or opener.lower_ in INDEFINITE_STARTERS:
+        return head.pos_ == "NOUN" and head.text[:1].islower()
+    return False
+
+
 def span_names_an_institution(doc):
     """
     Does this span name an institution -- a ministry, a court, a parliament?
@@ -1334,6 +1402,8 @@ class ActorResolver:
         skip_wiki_reason = ""
         if trimmed_text and doc is not None and span_is_generic_collective(doc):
             skip_wiki_reason = "generic collective"
+        elif trimmed_text and doc is not None and span_is_unlinkable_reference(doc):
+            skip_wiki_reason = "unlinkable reference"
         elif (code_full_text and doc is not None
                 and code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
                 and not ents
