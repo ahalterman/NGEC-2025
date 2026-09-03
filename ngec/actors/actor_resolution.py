@@ -1149,9 +1149,20 @@ class ActorResolver:
                 code_full_text['wiki'] = ""
                 code_full_text['actor_wiki_job'] = ""
                 
-                # Return without Wikipedia lookup in certain high-confidence cases
-                if (code_full_text['conf'] > 0.6 and not ents or
-                    code_full_text['conf'] > THRESHOLD_HIGH_CONFIDENCE and trimmed_text == trimmed_text.lower() or
+                # Return without Wikipedia lookup in certain high-confidence cases.
+                #
+                # The first clause used to be just "conf > 0.6 and not ents",
+                # which sent bare surnames straight to a role code without ever
+                # trying Wikipedia: spaCy tags nothing in a one-word span, so
+                # "Zuma", "Hollande" and "Araud" all have no entity. Requiring
+                # the span to be all-lowercase or at least two tokens keeps the
+                # clause doing its real job (generic phrases like "the security
+                # forces") while letting a single capitalised token through to
+                # the linker.
+                is_lowercase = trimmed_text == trimmed_text.lower()
+                looks_generic = is_lowercase or len(trimmed_text.split()) >= 2
+                if (code_full_text['conf'] > 0.6 and not ents and looks_generic or
+                    code_full_text['conf'] > THRESHOLD_HIGH_CONFIDENCE and is_lowercase or
                     code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE):
                     logger.debug("High confidence match. Skipping Wikipedia lookup.")
                     code_full_text = self.code_selector.clean_best(code_full_text)
