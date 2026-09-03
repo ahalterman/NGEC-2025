@@ -1255,6 +1255,7 @@ class ActorResolver:
         except IndexError:
             # Usually caused by a mismatch between token and embedding
             logger.info(f"Token alignment error on {trimmed_text}")
+            doc = None
             non_ent_text = trimmed_text
             token_level_ents = ['']
             ent_text = ""
@@ -1297,7 +1298,7 @@ class ActorResolver:
         # get a role code and no Wikipedia page. Sending them to the linker
         # only ever finds the concept article, which is the right page for the
         # string and the wrong answer for the task.
-        if trimmed_text and span_is_generic_collective(doc):
+        if trimmed_text and doc is not None and span_is_generic_collective(doc):
             logger.debug(f"'{trimmed_text}' is a generic collective. Skipping Wikipedia lookup.")
             generic_code = code_full_text if code_full_text else {
                 "country": country,
