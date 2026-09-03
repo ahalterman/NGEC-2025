@@ -1,5 +1,6 @@
 from collections import Counter
 from copy import deepcopy
+from importlib import resources
 import logging
 import re
 import time
@@ -28,6 +29,56 @@ THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
 #######################################################
 # Cache Management
 #######################################################
+
+def load_actor_priorities(priorities_file=None):
+    """
+    Load actor code priorities from a CSV asset.
+
+    The file lists one code per line as `code,priority,special`, with `#`
+    comments. Priorities are the final tie-break in
+    `CodeSelector.pick_best_code`; `special` marks codes that name a polity
+    rather than a role, which `clean_best` moves into the country field.
+
+    Pulling this out of the class lets a user supply priorities for their own
+    ontology, the same way `agents_file` supplies the patterns. The two go
+    together: a custom agents file emits codes that the default priority table
+    knows nothing about, so every one of them would otherwise tie at 0 and the
+    tie-break would fall through to source order.
+
+    Args:
+        priorities_file: path to a priorities CSV. None uses the PLOVER
+            priorities shipped in ngec.assets.
+
+    Returns:
+        (priorities, special_types): a dict of code -> int, and a list of codes
+        flagged special.
+    """
+    if priorities_file is None:
+        priorities_file = str(resources.files("ngec.assets") / "PLOVER_priorities.csv")
+
+    priorities = {}
+    special_types = []
+    with open(priorities_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                logger.warning(f"Skipping malformed priorities line: {line!r}")
+                continue
+            code = parts[0]
+            try:
+                priorities[code] = int(parts[1])
+            except ValueError:
+                logger.warning(f"Skipping non-integer priority: {line!r}")
+                continue
+            if len(parts) > 2 and parts[2] not in ("", "0"):
+                special_types.append(code)
+
+    logger.debug(f"Loaded {len(priorities)} actor priorities from {priorities_file}")
+    return priorities, special_types
+
 
 class CacheManager:
     """
@@ -92,20 +143,10 @@ class WikiParser:
 
     # TODO #26: allow overriding assets/models
     
-    # Actor type priority dictionary - used for sorting/ranking actor codes
-    ACTOR_TYPE_PRIORITIES = {
-        "IGO": 200, "ISM": 195, "IMG": 192, "PRE": 190, "REB": 130,
-        "SPY": 110, "JUD": 105, "OPP": 102, "GOV": 100, "LEG": 90,
-        "MIL": 80, "COP": 75, "PRM": 72, "ELI": 70, "PTY": 65,
-        "BUS": 60, "UAF": 50, "CRM": 48, "LAB": 47, "MED": 45,
-        "NGO": 43, "SOC": 42, "EDU": 41, "JRN": 40, "ENV": 39,
-        "HRI": 38, "UNK": 37, "REF": 35, "AGR": 30, "RAD": 20,
-        "CVL": 10, "JEW": 5, "MUS": 5, "BUD": 5, "CHR": 5,
-        "HIN": 5, "REL": 1, "": 0, "JNK": 51, "NON": 60
-    }
-    
-    # Actor types that should be treated as countries themselves
-    SPECIAL_ACTOR_TYPES = ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]
+    # Actor priorities and special types live in ngec/assets/
+    # PLOVER_priorities.csv and are held by CodeSelector, which is the only
+    # class that consults them. This class previously carried an unused
+    # duplicate of both.
     
     def __init__(self, 
                  country_detector=None, 
@@ -541,7 +582,9 @@ class CodeSelector:
         cleaned = selector.clean_best(best_code)
     """
     
-    # Actor type priority dictionary - used for sorting/ranking actor codes
+    # Fallback priorities, used only if the asset file cannot be read. The
+    # authoritative copy is ngec/assets/PLOVER_priorities.csv; see
+    # load_actor_priorities().
     ACTOR_TYPE_PRIORITIES = {
         "IGO": 200, "ISM": 195, "IMG": 192, "PRE": 190, "REB": 130,
         "SPY": 110, "JUD": 105, "OPP": 102, "GOV": 100, "LEG": 90,
@@ -555,7 +598,47 @@ class CodeSelector:
     
     # Actor types that should be treated as countries themselves
     SPECIAL_ACTOR_TYPES = ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]
-    
+
+    # Evidence sources that win outright in pick_best_code(), checked before
+    # the priority tie-break. A source listed here short-circuits selection:
+    # if it produced a candidate, that candidate is returned with no
+    # comparison against the others. Kept as the default for backwards
+    # compatibility -- see the `override_sources` argument below.
+    DEFAULT_OVERRIDE_SOURCES = ("Wiki short description",)
+
+    def __init__(self, priorities_file=None, override_sources=None):
+        """
+        Args:
+            priorities_file: path to a priorities CSV in the format of
+                ngec/assets/PLOVER_priorities.csv. None loads the PLOVER
+                priorities. Supply this together with a custom `agents_file`
+                when coding into a different ontology, so the tie-break in
+                pick_best_code() knows how to rank the codes that file emits.
+            override_sources: evidence sources that win outright over every
+                other candidate, bypassing the priority tie-break. None keeps
+                the historical default, `("Wiki short description",)`. Pass an
+                empty sequence to disable the short-circuit entirely, so that
+                conflicts between the span-text match and the Wikipedia short
+                description are settled by `priorities_file` instead of by
+                source. That is usually what a custom ontology wants: the
+                short-circuit is only reached when the two sources disagree,
+                and it resolves every such disagreement in Wikipedia's favour.
+        """
+        try:
+            priorities, special = load_actor_priorities(priorities_file)
+        except (OSError, ValueError) as e:
+            if priorities_file is not None:
+                raise
+            logger.warning(f"Could not load priorities asset ({e}); "
+                           f"falling back to the built-in table.")
+            priorities, special = self.ACTOR_TYPE_PRIORITIES, self.SPECIAL_ACTOR_TYPES
+        self.actor_type_priorities = priorities
+        self.special_actor_types = special
+        self.override_sources = tuple(
+            self.DEFAULT_OVERRIDE_SOURCES if override_sources is None
+            else override_sources
+        )
+
     def _get_actor_priority(self, code_1):
         """
         Get priority value for an actor code.
@@ -566,7 +649,7 @@ class CodeSelector:
         Returns:
             int: Priority value
         """
-        return self.ACTOR_TYPE_PRIORITIES.get(code_1, 0)
+        return self.actor_type_priorities.get(code_1, 0)
 
     def pick_best_code(self, all_codes, country):
         """
@@ -696,18 +779,34 @@ class CodeSelector:
                 best['wiki'] = wiki_title
             return best
                 
-        # 4. Check for short description
-        short_desc_codes = [c for c in code_sources if c['source'] == "Wiki short description"]
-        if short_desc_codes:
-            best = short_desc_codes[0]
+        # 4. Check for an overriding evidence source (by default, the
+        # Wikipedia short description). Steps 1-3 have already returned if the
+        # candidates agree, so this branch is reached only when sources
+        # conflict, and it resolves the conflict by source rather than by
+        # code. Configure with CodeSelector(override_sources=...); an empty
+        # sequence falls through to the priority tie-break in step 6.
+        override_codes = [c for c in code_sources
+                          if c['source'] in self.override_sources]
+        if override_codes:
+            best = override_codes[0]
             if best['code_1'] == "IGO":
                 best['country'] = "IGO"
             else:
                 best['country'] = best_country
-            best['best_reason'] = "Picking Wiki short description"
+            best['best_reason'] = f"Picking {best['source']}"
             return best
             
-        # 5. Check for pre-wiki lookup codes
+        # 5. Check for pre-wiki lookup codes.
+        #
+        # NOTE: this branch is currently dead. Nothing in the codebase assigns
+        # the source "BERT matching on non-entity text" any more, so the list
+        # is always empty and control falls through to the priority sort in
+        # step 6. It matters because step 4 above is now configurable: with
+        # override_sources=[], conflicts that used to be settled by step 4
+        # reach step 6. If this source is ever reinstated, those conflicts
+        # would silently start being settled here instead, under different
+        # semantics -- decide deliberately at that point which of the two
+        # should run first.
         pre_wiki_codes = [
             c for c in all_codes 
             if c.get('source') == "BERT matching on non-entity text" and c.get('country') and c.get('code_1')
@@ -785,7 +884,7 @@ class CodeSelector:
             best['country'] = ""
             
         # Handle actor types that should be treated as countries
-        if best.get('code_1') in self.SPECIAL_ACTOR_TYPES:
+        if best.get('code_1') in self.special_actor_types:
             best['country'] = best['code_1']
             best['code_1'] = ""
             
@@ -827,6 +926,9 @@ class ActorResolver:
                 wiki_sort_method="neural",
                 gpu=False,
                 es_client: None | Elasticsearch = None,
+                agents_file: None | str = None,
+                priorities_file: None | str = None,
+                override_sources: None | list | tuple = None,
                 ):
         """
         Initialize the ActorResolver with the necessary models and data.
@@ -836,6 +938,23 @@ class ActorResolver:
             save_intermediate: Whether to save intermediate results
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
+            agents_file: Path to a custom PLOVER/CAMEO-format agents file. The
+                default None uses the PLOVER agents file shipped in
+                ngec.assets. A custom file lets a user code actors into their
+                own ontology without changing any code; the same matcher is
+                used both for the raw text and for Wikipedia short
+                descriptions, so a custom file applies to both paths.
+            priorities_file: Path to a custom actor-priority CSV, in the format
+                of ngec.assets/PLOVER_priorities.csv. The default None uses the
+                PLOVER priorities. Pass this whenever you pass a custom
+                agents_file: codes absent from the priority table all tie at 0,
+                so the tie-break in pick_best_code() silently degenerates to
+                source order.
+            override_sources: Evidence sources that win outright in
+                pick_best_code(), bypassing the priority tie-break. The default
+                None keeps the historical behaviour, in which a Wikipedia short
+                description beats the span-text match whenever the two
+                disagree. Pass `[]` to let priorities_file arbitrate instead.
         """
         # TODO: #26, make it possible to override models
         # This impacts all the other related classes here
@@ -855,6 +974,7 @@ class ActorResolver:
         # Initialize agent matcher
         self.agent_matcher = AgentMatcher(
             self.trf, 
+            agents_file=agents_file,
             device=self.device, 
         )
         
@@ -872,7 +992,8 @@ class ActorResolver:
         )
         
         # Initialize code selector
-        self.code_selector = CodeSelector()
+        self.code_selector = CodeSelector(priorities_file=priorities_file,
+                                          override_sources=override_sources)
         
         # Store configuration
         self.save_intermediate = save_intermediate
