@@ -49,6 +49,79 @@ DEGENERATE_CORE_WORDS = (
 )
 
 
+# Head nouns (as spaCy lemmas) of spans that name a *category* of people
+# rather than an actor. The ontology wants a role code for these -- "police"
+# is COP, "protesters" is CVL -- and Wikipedia has nothing useful to add:
+# linking "police" to the article `Police`, or "residents" to `The Residents`,
+# is always wrong. Measured on a probe set of real VOA sentences, the linker
+# put a page on 61% of these.
+COLLECTIVE_HEAD_NOUNS = (
+    "police", "officer", "protester", "protestor", "demonstrator", "rioter",
+    "resident", "civilian", "villager", "worker", "student", "refugee",
+    "migrant", "soldier", "troop", "force", "gunman", "militant", "rebel",
+    "insurgent", "fighter", "activist", "supporter", "voter", "official",
+    "authority", "militia", "crowd", "mob", "youth", "farmer", "teacher",
+    "doctor", "journalist",
+)
+
+# The same idea, but only when the span is nothing *but* one of these words.
+# "the government" is a role; "the Government Accountability Office" is a
+# thing with a Wikipedia page. Note that nationality stripping runs first, so
+# "the Nigerian Army" arrives here as "Army".
+COLLECTIVE_BARE_TERMS = (
+    "government", "opposition", "army", "military",
+)
+
+# Modifiers that turn a collective noun back into a named institution with a
+# page of its own: "police" is a role, "the national police" is
+# `National Police of Colombia`.
+INSTITUTIONAL_MODIFIERS = (
+    "national", "federal", "royal", "state", "supreme", "central",
+    "presidential", "republican",
+)
+
+
+def span_is_generic_collective(doc):
+    """
+    Does this span name a category of people rather than a specific actor?
+
+    True when the span has no PERSON/ORG/GPE/NORP entity, its head noun is in
+    COLLECTIVE_HEAD_NOUNS (or the whole span is one of COLLECTIVE_BARE_TERMS),
+    and it carries no capitalised word other than its first. That last
+    condition is what separates "the security forces" from "Kenya Police":
+    a capitalised word past the start of the span is a name, and names are
+    what the Wikipedia linker is for.
+
+    Args:
+        doc: spaCy Doc of the span, after nationality stripping
+
+    Returns:
+        bool: True if the caller should skip the Wikipedia lookup
+    """
+    if any(e.label_ in ("PERSON", "ORG", "GPE", "NORP") for e in doc.ents):
+        return False
+
+    words = [t for t in doc if t.is_alpha]
+    if not words:
+        return False
+    # Ignore a leading article so that "the Police" counts as a bare span
+    # while "Kenya Police" does not.
+    if words[0].lower_ in ("the", "a", "an"):
+        words = words[1:]
+    if not words:
+        return False
+    if any(t.text[0].isupper() for t in words[1:]):
+        return False
+    if any(t.lower_ in INSTITUTIONAL_MODIFIERS for t in words[:-1]):
+        return False
+
+    head = words[-1]
+    if head.lower_ in COLLECTIVE_BARE_TERMS or head.lemma_.lower() in COLLECTIVE_BARE_TERMS:
+        return len(words) == 1
+    return (head.lower_ in COLLECTIVE_HEAD_NOUNS
+            or head.lemma_.lower() in COLLECTIVE_HEAD_NOUNS)
+
+
 def core_query_is_degenerate(core_query, span):
     """
     Is the NER-extracted core entity a worse search term than the span itself?
@@ -1170,7 +1243,26 @@ class ActorResolver:
                     return code_full_text
             else:
                 logger.debug(f"No direct match found for {trimmed_text}")
-                
+
+        # Generic collectives ("police", "the security forces", "residents")
+        # get a role code and no Wikipedia page. Sending them to the linker
+        # only ever finds the concept article, which is the right page for the
+        # string and the wrong answer for the task.
+        if trimmed_text and span_is_generic_collective(doc):
+            logger.debug(f"'{trimmed_text}' is a generic collective. Skipping Wikipedia lookup.")
+            generic_code = code_full_text if code_full_text else {
+                "country": country,
+                "code_1": "",
+                "code_2": "",
+                "query": trimmed_text,
+            }
+            generic_code['source'] = "generic collective"
+            generic_code['wiki'] = ""
+            generic_code['actor_wiki_job'] = ""
+            generic_code = self.code_selector.clean_best(generic_code)
+            self.cache_manager.set(cache_key, generic_code)
+            return generic_code
+
         # Extract core entity and role from the span using NER
         # This handles noisy spans like "Republican Senator Pat Roberts of Kansas"
         # --> core_query="Pat Roberts", actor_desc="Republican Senator"
