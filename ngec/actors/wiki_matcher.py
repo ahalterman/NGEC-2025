@@ -3,8 +3,11 @@ Functionality for matching a query term to a Wikipedia article. Relies on a
 Elasticsearch index of Wikipedia data.
 """
 
+import gzip
 from importlib import resources
+import json
 import logging
+import math
 from pathlib import Path
 import re
 from typing import Literal
@@ -22,13 +25,109 @@ from textacy.preprocessing.remove import accents as remove_accents
 import torch
 from xgboost import XGBClassifier
 
-from .common import ModelManager, clean_query
+from .common import CountryDetector, ModelManager, clean_query
 
 # Constants
 THRESHOLD_NEURAL_TITLE_MATCH = 0.9
 THRESHOLD_COMBINED_SCORE = 9 
 
+# Words of two or more letters, lowercased. Shared by the IDF table builder
+# (setup/wiki/build_idf_table.py) and the runtime, so the two cannot drift.
+TFIDF_TOKEN_PATTERN = re.compile(r"[a-z]{2,}")
+
+# A capitalised word. Apostrophes and hyphens are kept ("Mugabe's", "Abu-Bakr").
+CAPITALIZED_WORD = re.compile(r"[A-Z][A-Za-z'\u2019\-]{2,}")
+
+# Punctuation that ends a sentence (or a bullet). A capitalised word right
+# after one of these is capitalised by grammar, not because it is a name.
+SENTENCE_BREAK = ".!?:;\u2022"
+
 logger = logging.getLogger(__name__)
+
+# Loaded once per process, on first use: see load_idf_table.
+_idf_table = None
+_country_detector = None
+
+
+def load_idf_table(path: str | Path | None = None) -> dict:
+    """
+    Inverse document frequencies for Wikipedia intro paragraphs.
+
+    A word like "footballer" says a lot about which article a mention belongs
+    to; a word like "years" says almost nothing. The IDF table records how rare
+    each word is across a 200,000-article sample of the index, so the ranker can
+    weight the overlap between a news story and a candidate article accordingly.
+    The table ships with the package (`ngec/assets/wiki_idf.json.gz`) and is
+    built by `setup/wiki/build_idf_table.py`.
+
+    The table is cached in a module-level variable, so the file is read at most
+    once per process.
+    """
+    global _idf_table
+    if _idf_table is None:
+        if path is None:
+            path = Path(str(resources.files("ngec"))) / "assets" / "wiki_idf.json.gz"
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            table = json.load(f)
+        _idf_table = table["idf"]
+        logger.debug(f"Loaded {len(_idf_table)} IDF weights from {path}")
+    return _idf_table
+
+
+def get_country_detector() -> CountryDetector:
+    """A shared CountryDetector, built on first use (it compiles ~1,000 regexes)."""
+    global _country_detector
+    if _country_detector is None:
+        _country_detector = CountryDetector()
+    return _country_detector
+
+
+def tfidf_vector(text: str, idf: dict) -> dict:
+    """
+    The L2-normalized TF-IDF vector of `text`, as a {word: weight} dict.
+
+    Sublinear term frequency (1 + log(count)), so a word repeated ten times in a
+    long news story does not swamp everything else. Words missing from the IDF
+    table (stop words, typos, rare names) are dropped.
+    """
+    counts = {}
+    for token in TFIDF_TOKEN_PATTERN.findall(text.lower()):
+        if token in idf:
+            counts[token] = counts.get(token, 0) + 1
+    weights = {word: (1 + math.log(count)) * idf[word] for word, count in counts.items()}
+    length = math.sqrt(sum(w * w for w in weights.values()))
+    if length == 0:
+        return {}
+    return {word: weight / length for word, weight in weights.items()}
+
+
+def tfidf_cosine(first: dict, second: dict) -> float:
+    """Cosine similarity of two vectors from `tfidf_vector` (already normalized)."""
+    if len(second) < len(first):
+        first, second = second, first
+    return float(sum(weight * second.get(word, 0.0) for word, weight in first.items()))
+
+
+def capitalized_words(text: str) -> set:
+    """
+    The distinct capitalised words in `text`, skipping the first word of each
+    sentence.
+
+    Shared capitalised words are a cheap stand-in for "these two texts are about
+    the same people and places": a news story about Ghana's election and the
+    Wikipedia article on Ghana's electoral commission will share "Accra",
+    "Mahama", "Ghana". Sentence-initial words are dropped because their capital
+    letter carries no such information.
+    """
+    if not text:
+        return set()
+    words = set()
+    for match in CAPITALIZED_WORD.finditer(text):
+        before = text[max(0, match.start() - 3):match.start()].strip()
+        if not before or before[-1] in SENTENCE_BREAK:
+            continue
+        words.add(match.group(0))
+    return words
 
 
 def country_phrase_variants(query_term: str, country: str) -> list[str]:
@@ -126,6 +225,45 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
                     seen_titles.add(article['title'])
                     merged.append(article)
     return merged[:max_results]
+
+
+
+def title_concept_features(title: str, intro_length: int, doc_country: str,
+                           detector: CountryDetector) -> tuple[int, int]:
+    """
+    Two flags for telling a *concept* page from an *institution* page.
+
+    When a story mentions "the interior ministry", Wikipedia offers both the
+    generic article `Interior ministry` (about the idea of interior ministries)
+    and the specific one, `Ministry of the Interior (Ghana)`. The generic page is
+    almost never the right answer, but it looks like a good match on every
+    string feature, so the ranker needs a way to see the difference.
+
+    Returns:
+        tuple: (title_is_generic_concept, title_has_other_country)
+
+        `title_is_generic_concept` is 1 when the title reads like a common noun:
+        no disambiguating parenthetical, nothing title-cased after the first
+        word, no country or demonym, and a short article behind it.
+
+        `title_has_other_country` is 1 when the title names a country and it is
+        not the country the story is about -- "Ministry of the Interior (Kenya)"
+        in a story about Ghana.
+    """
+    has_parenthetical = "(" in title
+    after_first_word = title.split(" ", 1)[1] if " " in title else ""
+    nothing_capitalized_after_first = after_first_word == after_first_word.lower()
+
+    country_in_title = detector.any_country_name.search(title)
+    has_country_word = bool(country_in_title) or bool(detector.any_demonym.search(title))
+
+    is_generic = int(not has_parenthetical
+                     and nothing_capitalized_after_first
+                     and not has_country_word
+                     and intro_length < 900)
+    has_other_country = int(bool(country_in_title) and bool(doc_country)
+                            and doc_country not in title)
+    return is_generic, has_other_country
 
 
 #######################################################
@@ -749,6 +887,16 @@ class WikiMatcher:
         # Prepare data for DataFrame
         data = []
 
+        # Things that depend on the document, not the candidate, so they are
+        # computed once here rather than once per candidate article.
+        detector = get_country_detector()
+        # The country the *story* is about, which is often not the country of
+        # the mention itself (and `country` below is frequently empty).
+        doc_country = detector.most_frequent_country(context) if context else ""
+        context_caps = capitalized_words(context)
+        context_tfidf = tfidf_vector(context, load_idf_table()) if context else {}
+        query_words_cased = set(re.findall(r"[A-Za-z'\u2019\-]{2,}", query_term))
+
         # Prepare basic matching scores (non-embedding based)
 
         for i, article in enumerate(articles):
@@ -794,6 +942,31 @@ class WikiMatcher:
                     if any(w in context_lower for w in cat_words if len(w) > 3):
                         cat_overlap += 1
 
+            # Does the story's country show up in this candidate article? The
+            # existing `country_match` above asks the same question of the
+            # `country` the caller passed in, which in the pipeline is usually
+            # empty; these ask it of the country detected from the story itself.
+            categories = article.get('categories', [])
+            intro_para = article.get('intro_para', '')
+            short_desc = article.get('short_desc', '')
+            cm_doc = int(bool(doc_country)
+                         and (doc_country in intro_para or doc_country in short_desc))
+            cm_title = int(bool(doc_country) and doc_country in title)
+            cm_cat = int(bool(doc_country) and any(doc_country in c for c in categories))
+
+            # Word-level overlap between the story and the candidate's intro:
+            # rare words (TF-IDF) and shared names (capitalised words). Both are
+            # 0 when there is no context to compare against.
+            tfidf_ctx_intro = tfidf_cosine(context_tfidf,
+                                           tfidf_vector(intro_para, load_idf_table())) if context_tfidf else 0.0
+            intro_caps = capitalized_words(intro_para)
+            shared_caps = (intro_caps & context_caps) - query_words_cased
+            pn_overlap = len(shared_caps)
+            pn_overlap_frac = pn_overlap / len(intro_caps) if intro_caps else 0.0
+
+            is_generic_concept, has_other_country = title_concept_features(
+                title, intro_length, doc_country, detector)
+
             data.append({
                 'index': i,
                 'title': title,
@@ -810,6 +983,16 @@ class WikiMatcher:
                 'num_es_results': results_count,
                 'intro_length': intro_length,
                 'country_match': country_match,
+                'cm_doc': cm_doc,
+                'cm_title': cm_title,
+                'cm_cat': cm_cat,
+                'tfidf_ctx_intro': tfidf_ctx_intro,
+                'pn_overlap': pn_overlap,
+                'pn_overlap_frac': pn_overlap_frac,
+                'n_categories': len(categories),
+                'title_is_generic_concept': is_generic_concept,
+                'title_has_other_country': has_other_country,
+                'from_alt_query': article.get('from_alt_query', 0),
                 'name_coverage': name_coverage,
                 'cat_overlap': cat_overlap,
                 'raw_es_score': article.get('raw_es_score', 0),
@@ -888,10 +1071,14 @@ class WikiMatcher:
         df['es_score_norm'] = (df['raw_es_score'] - es_min) / (es_max - es_min) if es_max > es_min else 0
 
         # Normalize scores
+        # The new country and overlap columns get `_norm` twins because their
+        # existing counterparts (`country_match`, `context_sim_intro`) have them.
         for col in ['title_sim', 'context_sim_intro', 'context_sim_short',
                     'actor_desc_sim_intro', 'actor_desc_sim_short',
                     'lcs', 'levenshtein', 'country_match', 'exact_title_match',
-                    'alt_name_match', 'redirect_match']:
+                    'alt_name_match', 'redirect_match',
+                    'cm_doc', 'cm_title', 'cm_cat',
+                    'tfidf_ctx_intro', 'pn_overlap']:
             col_norm, normed = self._normalize_scores(df, col)
             df[col_norm] = normed
 
@@ -913,8 +1100,19 @@ class WikiMatcher:
         return df
     
     def _normalize_scores(self, df, col):
+        """
+        Scale a column by its own maximum within this candidate set.
+
+        When every candidate scores 0 the division gives NaN, which XGBoost
+        treats as missing -- that is the intended behavior. It can also give
+        +/- infinity: a column whose maximum is exactly 0.0 but which has
+        negative entries below it (an encoder that maps an empty short
+        description to the zero vector produces exactly this). XGBoost refuses
+        infinite inputs outright, so those become NaN too.
+        """
         col_norm = f"{col}_norm"
-        return (col_norm, df[col] / df[col].max())
+        normed = df[col] / df[col].max()
+        return (col_norm, normed.replace([np.inf, -np.inf], np.nan))
 
     def _apply_selection_rules(self, df, articles, context):
         """

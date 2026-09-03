@@ -186,6 +186,29 @@ class CountryDetector:
         """
         self.nat_list, self.nat_list_cat, self.nat_list_name, self.nat_list_name_cat = self._load_country_dict(country_csv_path=country_csv_path)
 
+        # The lists above mix country names and nationalities together, which is
+        # what most callers want. Some features need to tell the two apart --
+        # "a country name appears in this Wikipedia title" is a different test
+        # from "a demonym appears in it" -- so keep them separately as well.
+        self.demonyms = []
+        for nationalities in self.countries['Nationality']:
+            for nat in nationalities.split(","):
+                nat = nat.strip()
+                # Short demonyms ("Thai", "Lao") match too much inside titles
+                if len(nat) > 3 and nat not in self.demonyms:
+                    self.demonyms.append(nat)
+
+        # One combined pattern each, for the common "does any country name (or
+        # demonym) appear in this short string?" question -- asking it with 750
+        # separate patterns per candidate article is too slow. Longest
+        # alternative first, so a name is not shadowed by a shorter one that
+        # happens to be a prefix of it.
+        names = sorted(self.countries['Name'], key=len, reverse=True)
+        self.any_country_name = re.compile(
+            r"(?<![A-Za-z])(" + "|".join(re.escape(n) for n in names) + r")(?![A-Za-z0-9])")
+        self.any_demonym = re.compile(
+            r"(?<![A-Za-z])(" + "|".join(re.escape(d) for d in sorted(self.demonyms, key=len, reverse=True)) + r")(?![A-Za-z0-9])")
+
 
     def _load_country_dict(self, country_csv_path: str | Path | None = None):
         """
@@ -204,7 +227,8 @@ class CountryDetector:
                 countries = pd.read_csv(f)
         else:
             countries = pd.read_csv(country_csv_path)
-        
+        self.countries = countries
+
         # Direct country name/nationality patterns
         nat_list = []
         nat_list_name = []
@@ -247,6 +271,39 @@ class CountryDetector:
                 nat_list_name_cat.append(pattern_name)
         
         return nat_list, nat_list_cat, nat_list_name, nat_list_name_cat
+
+    def most_frequent_country(self, text: str) -> str:
+        """
+        The country named most often in `text`, as a country *name*.
+
+        `search_nat` answers "which country does this short phrase belong to?".
+        This answers the document-level question instead: over a whole news
+        story, which country is this story about? Counting every mention (by
+        name or by nationality) and taking the most frequent one is a crude but
+        reliable answer, and it gives the Wikipedia ranker a country to check
+        candidate articles against even when the mention itself carries none.
+
+        Returns "" when no country is mentioned. Ties are broken by the order
+        of the country list, so the answer is deterministic.
+
+        Args:
+            text: the text to scan, typically a whole document
+
+        Returns:
+            str: a country name (e.g. "Ghana"), or "" if none was found
+        """
+        if not text:
+            return ""
+        text = unidecode.unidecode(text)
+
+        counts = {}
+        for pattern, country in self.nat_list_name:
+            hits = len(pattern.findall(text))
+            if hits:
+                counts[country] = counts.get(country, 0) + hits
+        if not counts:
+            return ""
+        return max(counts, key=counts.get)
 
     def search_nat(self, 
                    text: str, 
