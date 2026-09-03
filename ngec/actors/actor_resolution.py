@@ -1353,6 +1353,16 @@ class ActorResolver:
         # Sometimes they also should be expanded, but can also replace the correct name with something worse.
         # Just do allow expansion for single-word entities (e.g. okay to expand "Robertson", but will also expand "Hamas").
         ner_extracted_specific = (core_query != trimmed_text and len(core_query.split()) >= 2)
+        # The other surface forms of this same mention: the raw span, and the
+        # span after nationality stripping but before NER cut it down. The
+        # matcher searches the first one that differs from the main term and
+        # merges the two candidate lists, because the form the article is
+        # titled under is often not the one the pipeline settled on.
+        raw_span = re.sub(r"['’]s\s*$", "", text).strip()
+        alt_query_terms = []
+        for term in [raw_span, trimmed_text, core_query]:
+            if term and term != core_query and term not in alt_query_terms:
+                alt_query_terms.append(term)
         wiki = self.wiki_matcher.query_wiki(
             query_term=core_query,
             country=known_country,
@@ -1360,6 +1370,7 @@ class ActorResolver:
             actor_desc=actor_desc,
             limit_term=search_limit_term,
             skip_expansion=ner_extracted_specific,
+            alt_query_terms=alt_query_terms,
         )
 
         if wiki:
