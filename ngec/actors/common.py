@@ -1,6 +1,7 @@
 
 from importlib import resources
 import logging
+import os
 from pathlib import Path
 import re
 from typing import Literal
@@ -15,6 +16,35 @@ from spacy.language import Language
 
 # Constants
 DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
+
+# Sentence-transformer encoders the Wikipedia matcher knows how to use. Each
+# entry says how to load the model and what instruction, if any, to prepend on
+# the *query* side (the news story), which is a convention of the model and not
+# something we can guess. Pick one with `ModelManager(encoder_name=...)` or the
+# NGEC_WIKI_ENCODER environment variable.
+#
+# The default is jina because that is what the shipped wiki ranker
+# (`ngec/assets/xgb_model.json`) was trained against. bge-small is more
+# accurate and about nine times cheaper on CPU; static-retrieval-mrl has no
+# transformer in it at all and is a thousand times cheaper again at the same
+# accuracy. Either only becomes the default once the ranker is retrained on
+# features generated with it.
+WIKI_ENCODERS = {
+    "jinaai/jina-embeddings-v3": {
+        "load_kwargs": {"trust_remote_code": True,
+                        "model_kwargs": {"use_flash_attn": False}},
+        "query_prefix": "",
+    },
+    "BAAI/bge-small-en-v1.5": {
+        "load_kwargs": {},
+        "query_prefix": "Represent this sentence for searching relevant passages: ",
+    },
+    "sentence-transformers/static-retrieval-mrl-en-v1": {
+        "load_kwargs": {},
+        "query_prefix": "",
+    },
+}
+DEFAULT_ENCODER = DEFAULT_MODEL_PATH
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -35,18 +65,33 @@ class ModelManager:
         trf = manager.load_trf_model()
     """
 
-    # TODO #26: allow overriding models
-    
-    def __init__(self, device=None):
+    def __init__(self, device=None, encoder_name: str | None = None):
         """
         Initialize the model manager.
-        
+
         Args:
-            base_path: Path to directory containing model files
             device: Device to use for model inference ('cuda' or None)
+            encoder_name: Which sentence transformer to use for the Wikipedia
+                matcher, as a Hugging Face model id. Defaults to the
+                NGEC_WIKI_ENCODER environment variable, and then to
+                DEFAULT_ENCODER. See WIKI_ENCODERS for the models with known
+                settings; anything else is loaded with no extra arguments and
+                no query prefix.
         """
         self.device = device
         self.models = {}  # Cache for loaded models
+
+        if encoder_name is None:
+            encoder_name = os.environ.get("NGEC_WIKI_ENCODER", DEFAULT_ENCODER)
+        self.encoder_name = encoder_name
+        if encoder_name in WIKI_ENCODERS:
+            self.encoder_settings = WIKI_ENCODERS[encoder_name]
+        else:
+            logger.warning(f"'{encoder_name}' is not in WIKI_ENCODERS. Loading it with no extra "
+                           "arguments and no query prefix, which may not be what the model expects.")
+            self.encoder_settings = {"load_kwargs": {}, "query_prefix": ""}
+        # The instruction to prepend to the query side. WikiMatcher reads this.
+        self.query_prefix = self.encoder_settings["query_prefix"]
 
 
     def load_spacy_lg(self) -> Language:
@@ -66,18 +111,23 @@ class ModelManager:
         Load and return the sentence transformer model.
         
         Args:
-            model_dir: Path or name of the transformer model
-            
+            model_dir: Path or name of a transformer model to load instead of
+                the one this ModelManager was configured with
+
         Returns:
             SentenceTransformer: Loaded transformer model
         """
         if 'trf' not in self.models:
-            if not model_dir:
-                model_dir = Path(str(resources.files('ngec'))) / 'assets'
-            self.models['trf'] = SentenceTransformer("jinaai/jina-embeddings-v3", 
-                                                     trust_remote_code=True, 
-                                                     model_kwargs={'use_flash_attn': False},
-                                                     device=self.device)
+            if model_dir:
+                model_name = str(model_dir)
+                load_kwargs = WIKI_ENCODERS.get(model_name, {}).get("load_kwargs", {})
+            else:
+                model_name = self.encoder_name
+                load_kwargs = self.encoder_settings["load_kwargs"]
+            logger.info(f"Loading sentence transformer: {model_name}")
+            self.models['trf'] = SentenceTransformer(model_name,
+                                                     device=self.device,
+                                                     **load_kwargs)
         return self.models['trf']
 
     

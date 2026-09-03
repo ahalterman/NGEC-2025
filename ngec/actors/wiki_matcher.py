@@ -691,8 +691,14 @@ class WikiMatcher:
         # Initialize models if not provided
         if trf_model is None:
             self.trf = model_manager.load_trf_model()
+            # Some encoders want an instruction prepended to the query side.
+            # See WIKI_ENCODERS in common.py.
+            self.query_prefix = model_manager.query_prefix
         else:
             self.trf = trf_model
+            # A caller who hands us a model directly has told us nothing about
+            # what prefix it wants, so use none.
+            self.query_prefix = ""
         
         if nlp is None:
             self.nlp = model_manager.load_spacy_lg()
@@ -1027,7 +1033,7 @@ class WikiMatcher:
             # Encode query once
             query_embedding = self.actor_sim.encode(query_term, show_progress_bar=False)
             # Encode all titles in one batch
-            title_embeddings = self.actor_sim.encode(titles, show_progress_bar=False)
+            title_embeddings = self.actor_sim.encode(titles, batch_size=8, show_progress_bar=False)
             # Compute similarities
             title_sims = cos_sim(query_embedding.reshape(1, -1), title_embeddings)
             # Add to dataframe
@@ -1038,11 +1044,13 @@ class WikiMatcher:
             intros = [article['intro_para'][0:600] for article in articles]
             short_descs = [article['short_desc'] for article in articles]
             # Encode context once
-            intro_embeddings = self.trf.encode(intros, show_progress_bar=False)
-            short_desc_embeddings = self.trf.encode(short_descs, show_progress_bar=False)
+            intro_embeddings = self.trf.encode(intros, batch_size=8, show_progress_bar=False)
+            short_desc_embeddings = self.trf.encode(short_descs, batch_size=8, show_progress_bar=False)
         
         if context:
-            context_embedding = self.trf.encode(context, show_progress_bar=False)
+            # The prefix goes on the query side only: the article text is the
+            # "passage" and gets nothing.
+            context_embedding = self.trf.encode(self.query_prefix + context, show_progress_bar=False)
             # Compute similarities
             context_sims = cos_sim(context_embedding.reshape(1, -1), intro_embeddings)
             short_desc_sims = cos_sim(context_embedding.reshape(1, -1), short_desc_embeddings)
@@ -1052,7 +1060,7 @@ class WikiMatcher:
 
         if actor_desc:
             # Encode actor description once
-            desc_embedding = self.trf.encode(actor_desc, show_progress_bar=False)
+            desc_embedding = self.trf.encode(self.query_prefix + actor_desc, show_progress_bar=False)
             # Compute similarities
             desc_sims_intro = cos_sim(desc_embedding.reshape(1, -1), intro_embeddings)
             desc_sims_short = cos_sim(desc_embedding.reshape(1, -1), short_desc_embeddings)
@@ -1279,7 +1287,7 @@ class WikiMatcher:
     def _calculate_context_similarity(self, context, article):
         """Calculate similarity between context and article intro."""
         intro = article['intro_para'][0:200]
-        enc_context = self.trf.encode(context, show_progress_bar=False)
+        enc_context = self.trf.encode(self.query_prefix + context, show_progress_bar=False)
         enc_intro = self.trf.encode(intro, show_progress_bar=False)
         sims = cos_sim(enc_context, enc_intro)
         return float(sims[0][0])
