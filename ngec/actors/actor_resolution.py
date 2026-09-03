@@ -25,6 +25,62 @@ THRESHOLD_HIGH_CONFIDENCE = 0.90
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
 
 
+# Words that make a *single-token* NER core entity worthless as a search term.
+# spaCy will happily tag "House" in "House Judiciary" or "Fox" in "President
+# Fox" as the entity, and the pipeline then throws the rest of the span away
+# and searches Wikipedia for "House". These are the tokens that, on their own,
+# name nobody: articles and determiners, honorifics and job titles, and the
+# bare institution nouns that are meaningless without their qualifier.
+DEGENERATE_CORE_WORDS = (
+    # articles / determiners
+    "the", "a", "an", "this", "that", "these", "those", "his", "her", "its",
+    "their", "our", "some", "such",
+    # honorifics and job titles
+    "mr", "mrs", "ms", "dr", "sir", "president", "vice", "prime", "minister",
+    "secretary", "senator", "representative", "governor", "mayor", "chairman",
+    "chairwoman", "chief", "director", "commissioner", "ambassador", "general",
+    "colonel", "captain", "spokesman", "spokeswoman", "spokesperson", "leader",
+    "official", "officials", "head", "deputy", "acting", "former",
+    # bare institution nouns
+    "house", "senate", "congress", "parliament", "assembly", "ministry",
+    "department", "court", "council", "committee", "commission", "party",
+    "government", "administration", "state", "office", "authority", "agency",
+    "bureau", "bank", "force", "forces", "army", "navy", "police", "union",
+)
+
+
+def core_query_is_degenerate(core_query, span):
+    """
+    Is the NER-extracted core entity a worse search term than the span itself?
+
+    Two ways it can be. Either the core is a single token that names nobody
+    ("the", "House", "President": see DEGENERATE_CORE_WORDS), or it throws away
+    more than half of the letters of an already-short span, which is what
+    happens when spaCy tags one word of a two-word name ("President Fox" ->
+    "Fox"). The length rule is restricted to spans of four words or fewer so
+    that it never fires on the case NER is there for: pulling "Pat Roberts"
+    out of "Republican Senator Pat Roberts of Kansas".
+
+    Args:
+        core_query: The entity text NER picked out of the span
+        span: The span it was picked out of (after nationality stripping)
+
+    Returns:
+        bool: True if the caller should search on `span` instead
+    """
+    core_letters = [c for c in core_query if c.isalpha()]
+    span_letters = [c for c in span if c.isalpha()]
+    if not core_letters:
+        return True
+
+    if len(core_query.split()) == 1 and core_query.strip(".,'").lower() in DEGENERATE_CORE_WORDS:
+        return True
+
+    short_span = len(span.split()) <= 4
+    dropped_most = len(core_letters) * 2 < len(span_letters)
+    return short_span and dropped_most
+
+
 
 #######################################################
 # Cache Management
@@ -1125,6 +1181,12 @@ class ActorResolver:
                 after = trimmed_text[best_ent.end_char:].strip().strip(',').strip()
                 desc_parts = [p for p in [before, after] if p]
                 actor_desc = ' '.join(desc_parts)
+        # Guard against NER handing back a core entity that is a worse query
+        # than the span it came from ("House Judiciary" -> "House").
+        if core_query != trimmed_text and core_query_is_degenerate(core_query, trimmed_text):
+            logger.debug(f"Core entity '{core_query}' is degenerate; searching on '{trimmed_text}' instead")
+            core_query = trimmed_text
+            actor_desc = ""
         if core_query != trimmed_text:
             logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
 
