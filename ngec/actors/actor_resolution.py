@@ -1176,6 +1176,9 @@ class ActorResolver:
         
         Args:
             text: Text mention of the actor to resolve
+            doc: Unused, kept for signature compatibility. The span is parsed
+                below, after nationality stripping, which is the only parse
+                this function needs.
             context: Additional context to help with disambiguation
             query_date: Date to use when determining current offices
             known_country: Country code if already known
@@ -1195,8 +1198,10 @@ class ActorResolver:
             logger.debug("Returning from cache")
             return cached_result
         
-        if doc is None:
-            doc = self.nlp(text)
+        # NB: `doc` is not used. The span has to be re-parsed below anyway,
+        # after nationality stripping changes it, so parsing `text` here was
+        # a spaCy call per mention whose result was thrown away. The argument
+        # is kept because it is part of the public signature.
 
         # TODO: replace this with the new entity splitter
 
@@ -1485,6 +1490,13 @@ class ActorResolver:
                     # expansion and the context-similarity features the wiki
                     # ranker was trained with. The demo and the ECAV evaluation
                     # already pass it; the pipeline path was silently omitting it.
+                    #
+                    # TODO: this re-parses the whole story with spaCy once per
+                    # mention. The parse happens in WikiMatcher._expand_query,
+                    # which is reached through query_wiki and has no way to
+                    # accept a pre-parsed document, so fixing it means adding a
+                    # doc argument there. A story with eight actor mentions is
+                    # parsed eight times.
                     res = self.actor_to_code(actor,
                                              context=event.get("event_text", ""),
                                              query_date=query_date)
