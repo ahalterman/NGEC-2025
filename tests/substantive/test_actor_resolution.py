@@ -724,7 +724,7 @@ def test_111(ag):
     code = ag.actor_to_code("South Africa")
     assert code['country'] == "ZAF"
     assert code['code_1'] == ""  
-    assert code['wiki'] == ""  
+    assert code['wiki'] == "South Africa"  # country names now carry their page  
 
 def test_112(ag):
     code = ag.actor_to_code("Vladimir Putin", "", "2025-01-01")
@@ -844,7 +844,7 @@ def test_127(ag):
     code = ag.actor_to_code("United States")
     assert code['country'] == "USA"
     assert code['code_1'] == ""  
-    assert code['wiki'] == ""  
+    assert code['wiki'] == "United States"  # country names now carry their page  
 
 def test_128(ag):
     code = ag.actor_to_code("Ukrainian agricultural workers")

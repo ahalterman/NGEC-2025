@@ -23,6 +23,7 @@ logger.addHandler(logging.NullHandler())
 # Threshold constants. The only confidence high enough to skip the Wikipedia
 # lookup on an agent match; see the policy comment in actor_to_code.
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
+THRESHOLD_CONFIDENT_NO_CONTEXT = 0.6  # agent match that settles a span when no context is given
 
 
 # Words that make a *single-token* NER core entity worthless as a search term.
@@ -120,6 +121,9 @@ INDEFINITE_STARTERS = (
 # Collective synonyms that only ever appear bare: "cops", "two men", "people".
 UNLINKABLE_BARE_NOUNS = (
     "cop", "cops", "man", "men", "woman", "women", "person", "people",
+    # adjectives used as collective nouns: "the displaced", "the wounded"
+    "displaced", "wounded", "injured", "dead", "missing", "homeless",
+    "unemployed", "poor",
 )
 
 
@@ -160,6 +164,10 @@ def span_is_unlinkable_reference(doc):
 
     head = body[-1]
     if len(body) == 1 and head.lower_ in UNLINKABLE_BARE_NOUNS:
+        return True
+    # A single lowercase word that is not a proper noun ("yesterday",
+    # "displaced") names nothing Wikipedia could have an article about.
+    if len(body) == 1 and head.text[:1].islower() and head.pos_ != "PROPN":
         return True
     # An indefinite phrase: "two men", "a group of men", "some residents".
     opener = words[0]
@@ -1399,19 +1407,41 @@ class ActorResolver:
         # swallowed almost every institution mention in the corpus: 164 of 173
         # institution probes never reached the linker, because "the defence
         # ministry" is lowercase, multi-word, and a very good agent match.
+        # Detect the country from the passage around the mention when the
+        # caller did not supply one, falling back to a country named in the
+        # span itself ("Norway's central bank"). The wiki ranker's
+        # country_match feature and the "Title (Country)" retrieval variants
+        # need it, and the gate below only sends a generically named
+        # institution to the linker when there is a country to disambiguate
+        # with: "the defence ministry" with no context has no right answer.
+        if not known_country and context:
+            known_country = self._country_from_context(text, context)
+            logger.debug(f"Country detected from context: {known_country!r}")
+        if not known_country and country:
+            known_country = self.country_detector.search_nat(text, use_name=True)[0] or ""
+
         skip_wiki_reason = ""
         if trimmed_text and doc is not None and span_is_generic_collective(doc):
             skip_wiki_reason = "generic collective"
         elif trimmed_text and doc is not None and span_is_unlinkable_reference(doc):
             skip_wiki_reason = "unlinkable reference"
         elif (code_full_text and doc is not None
-                and code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
                 and not ents
-                and not span_names_an_institution(doc)):
+                and not (span_names_an_institution(doc) and known_country)
+                and (code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
+                     # With no context and no country there is nothing to
+                     # disambiguate a title like "Defense Minister" with, so
+                     # a merely confident agent match settles it, as before.
+                     or (not context and not known_country
+                         and code_full_text['conf'] > THRESHOLD_CONFIDENT_NO_CONTEXT))):
             skip_wiki_reason = "high-confidence agent match"
 
         if skip_wiki_reason:
             logger.debug(f"Skipping Wikipedia lookup for '{trimmed_text}': {skip_wiki_reason}")
+            if not code_full_text and not country:
+                # Nothing to return: no role code, no country, and no page.
+                self.cache_manager.set(cache_key, None)
+                return None
             skipped_code = code_full_text if code_full_text else {
                 "country": country,
                 "code_1": "",
@@ -1455,15 +1485,6 @@ class ActorResolver:
             actor_desc = ""
         if core_query != trimmed_text:
             logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
-
-        # Detect the country from the passage around the mention when the
-        # caller did not supply one. The wiki ranker's country_match feature
-        # (and the "Title (Country)" exact-match rule) were trained with a
-        # country detected this way, so leaving it empty at inference time
-        # silently disables them.
-        if not known_country and context:
-            known_country = self._country_from_context(text, context)
-            logger.debug(f"Country detected from context: {known_country!r}")
 
         # Try Wikipedia lookup for better resolution
         logger.debug(f"Trying Wikipedia lookup with: {core_query}")
