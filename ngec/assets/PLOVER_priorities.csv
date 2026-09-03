@@ -1,0 +1,57 @@
+# PLOVER actor code priorities.
+#
+# Used by CodeSelector.pick_best_code() as the final tie-break: when several
+# candidate codes survive earlier checks, they are sorted by the priority of
+# their code_1 and the highest wins (wiki-sourced codes preferred within the
+# top group). A code absent from this file gets priority 0.
+#
+# `special` marks codes that name a polity rather than a role. CodeSelector
+# .clean_best() moves these into the `country` field and blanks code_1 --
+# e.g. an actor coded IGO becomes country=IGO with no code_1.
+#
+# To use a different ontology, write a file in this format and pass it as
+# ActorResolver(priorities_file=...), alongside the matching agents_file.
+#
+# code,priority,special
+IGO,200,1
+ISM,195,1
+IMG,192,0
+PRE,190,0
+REB,130,0
+SPY,110,0
+JUD,105,0
+OPP,102,0
+GOV,100,0
+LEG,90,0
+MIL,80,0
+COP,75,0
+PRM,72,0
+ELI,70,0
+PTY,65,0
+BUS,60,0
+NON,60,0
+JNK,51,0
+UAF,50,0
+CRM,48,0
+LAB,47,0
+MED,45,0
+NGO,43,1
+SOC,42,0
+EDU,41,0
+JRN,40,0
+ENV,39,0
+HRI,38,0
+UNK,37,0
+REF,35,0
+AGR,30,0
+RAD,20,0
+CVL,10,0
+BUD,5,0
+CHR,5,0
+HIN,5,0
+JEW,5,0
+MUS,5,0
+REL,1,0
+EUR,0,1
+MNC,0,1
+UNO,0,1
