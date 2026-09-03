@@ -199,10 +199,16 @@ class AgentMatcher:
         # Read agents file and compute hash for cache key
         with open(self.agents_file, "r", encoding="utf-8") as f:
             data = f.read()
-        current_hash = hashlib.sha256(data.encode("utf-8")).hexdigest()[:16]
+        # The cached matrix is only valid for the encoder that produced it, so
+        # fold a fingerprint of the encoder (its embedding of a fixed string)
+        # into the hash alongside the file contents.
+        probe = self.trf.encode("ngec agent cache fingerprint", show_progress_bar=False)
+        hasher = hashlib.sha256(data.encode("utf-8"))
+        hasher.update(probe.astype("float32").tobytes())
+        current_hash = hasher.hexdigest()[:16]
 
         # Create cache directory based on hash and filename
-        # This allows different agent files to have separate caches
+        # This allows different agent files (and encoders) to have separate caches
         cache_key = f"{current_hash}_{Path(self.agents_file).stem}"
         cache_dir = Path(self.cache_path) / cache_key
         cache_file = cache_dir / "bert_matrix.pkl"

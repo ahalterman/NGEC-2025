@@ -34,21 +34,35 @@ DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
 # because the ranker's four similarity features would then come from a
 # different model than the one it was fit on.
 WIKI_ENCODERS = {
+    # "ranker_asset" names the XGBoost ranker trained on this encoder's
+    # features (train_NGEC_2026/train_wiki_model/03_train_ranker.py). The
+    # ranker and the encoder must match: WikiMatcher picks the asset from here
+    # unless given an explicit wiki_ranker_model.
     "jinaai/jina-embeddings-v3": {
         "load_kwargs": {"trust_remote_code": True,
                         "model_kwargs": {"use_flash_attn": False}},
         "query_prefix": "",
+        "ranker_asset": "xgb_model_jina.json",
     },
     "BAAI/bge-small-en-v1.5": {
         "load_kwargs": {},
         "query_prefix": "Represent this sentence for searching relevant passages: ",
+        "ranker_asset": "xgb_model_bge-small.json",
     },
     "sentence-transformers/static-retrieval-mrl-en-v1": {
         "load_kwargs": {},
         "query_prefix": "",
+        "ranker_asset": "xgb_model_static-mrl.json",
     },
 }
 DEFAULT_ENCODER = "sentence-transformers/static-retrieval-mrl-en-v1"
+
+# The agent matcher (PLOVER role patterns) uses its own encoder. Its cosine
+# thresholds and the cached pattern embeddings were calibrated on this model,
+# and the paper's actor-categorization results depend on it, so it is not
+# switched by NGEC_WIKI_ENCODER. Change it only together with a re-evaluation
+# of actor categorization.
+AGENT_ENCODER = "jinaai/jina-embeddings-v3"
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -93,7 +107,8 @@ class ModelManager:
         else:
             logger.warning(f"'{encoder_name}' is not in WIKI_ENCODERS. Loading it with no extra "
                            "arguments and no query prefix, which may not be what the model expects.")
-            self.encoder_settings = {"load_kwargs": {}, "query_prefix": ""}
+            self.encoder_settings = {"load_kwargs": {}, "query_prefix": "",
+                                     "ranker_asset": "xgb_model.json"}
         # The instruction to prepend to the query side. WikiMatcher reads this.
         self.query_prefix = self.encoder_settings["query_prefix"]
 
@@ -110,29 +125,37 @@ class ModelManager:
         return self.models['spacy']
 
 
+    def _load_encoder(self, model_name: str) -> SentenceTransformer:
+        """Load a sentence transformer once and keep it, keyed on its name."""
+        if model_name not in self.models:
+            load_kwargs = WIKI_ENCODERS.get(model_name, {}).get("load_kwargs", {})
+            logger.info(f"Loading sentence transformer: {model_name}")
+            self.models[model_name] = SentenceTransformer(model_name,
+                                                          device=self.device,
+                                                          **load_kwargs)
+        return self.models[model_name]
+
     def load_trf_model(self, model_dir: None | str | Path=None) -> SentenceTransformer:
         """
-        Load and return the sentence transformer model.
-        
+        Load and return the agent matcher's sentence transformer (AGENT_ENCODER).
+
         Args:
             model_dir: Path or name of a transformer model to load instead of
-                the one this ModelManager was configured with
+                AGENT_ENCODER
 
         Returns:
             SentenceTransformer: Loaded transformer model
         """
-        if 'trf' not in self.models:
-            if model_dir:
-                model_name = str(model_dir)
-                load_kwargs = WIKI_ENCODERS.get(model_name, {}).get("load_kwargs", {})
-            else:
-                model_name = self.encoder_name
-                load_kwargs = self.encoder_settings["load_kwargs"]
-            logger.info(f"Loading sentence transformer: {model_name}")
-            self.models['trf'] = SentenceTransformer(model_name,
-                                                     device=self.device,
-                                                     **load_kwargs)
-        return self.models['trf']
+        return self._load_encoder(str(model_dir) if model_dir else AGENT_ENCODER)
+
+    def load_wiki_encoder(self) -> SentenceTransformer:
+        """
+        Load and return the Wikipedia matcher's sentence transformer: the one
+        this ModelManager was configured with (encoder_name / NGEC_WIKI_ENCODER
+        / DEFAULT_ENCODER). Shares the object with load_trf_model when the two
+        names coincide.
+        """
+        return self._load_encoder(self.encoder_name)
 
     
     

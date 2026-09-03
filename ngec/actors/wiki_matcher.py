@@ -703,6 +703,7 @@ class WikiMatcher:
                  nlp=None,
                  actor_sim_model: None | str | Path=None, 
                  wiki_ranker_model: None | str | Path=None,
+                 ranker_threshold: float = 0.1,
                  device=None,
                  ):
         """
@@ -720,7 +721,7 @@ class WikiMatcher:
             
         # Initialize models if not provided
         if trf_model is None:
-            self.trf = model_manager.load_trf_model()
+            self.trf = model_manager.load_wiki_encoder()
             # Some encoders want an instruction prepended to the query side.
             # See WIKI_ENCODERS in common.py.
             self.query_prefix = model_manager.query_prefix
@@ -740,10 +741,24 @@ class WikiMatcher:
             actor_sim_model = Path(str(resources.files("ngec"))) / "assets" / "actor_sim_model2"
         self.actor_sim = load_actor_sim_model(actor_sim_model)
 
-        # Wiki Ranker models (xgboost)
+        # Wiki Ranker models (xgboost). The ranker was trained on one encoder's
+        # similarity features, so pick the asset that matches the encoder in
+        # use; fall back to xgb_model.json (a copy of the default encoder's).
         if wiki_ranker_model is None:
-            wiki_ranker_model = Path(str(resources.files("ngec"))) / "assets" / 'xgb_model.json'
+            assets = Path(str(resources.files("ngec"))) / "assets"
+            asset_name = "xgb_model.json"
+            if trf_model is None and model_manager is not None:
+                asset_name = model_manager.encoder_settings.get("ranker_asset", asset_name)
+            wiki_ranker_model = assets / asset_name
+            if not wiki_ranker_model.exists():
+                logger.warning(f"No ranker asset {asset_name} for this encoder; using xgb_model.json")
+                wiki_ranker_model = assets / "xgb_model.json"
+        logger.info(f"Loading wiki ranker from {wiki_ranker_model}")
         self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(wiki_ranker_model)
+        # Minimum ranker probability for the top candidate to be accepted as
+        # the article. 0.1 is what the pipeline has always shipped; the
+        # calibrated value from retraining is recorded in the asset's metadata.
+        self.ranker_threshold = ranker_threshold
 
         self.wiki_sort_method = wiki_sort_method
             
@@ -1346,7 +1361,7 @@ class WikiMatcher:
             y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
         score_df['ranker_score'] = y_proba
         score_df['is_max_for_task'] = (score_df['ranker_score'] == score_df['ranker_score'].max()).astype(int)
-        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > 0.1)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > self.ranker_threshold)
         pick = score_df[score_df['is_predicted_match'] == True]
         if not pick.empty:
             pick = pick.iloc[0].to_dict()
