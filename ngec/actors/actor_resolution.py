@@ -20,8 +20,8 @@ logger.addHandler(logging.NullHandler())
 
 
 
-# Threshold constants
-THRESHOLD_HIGH_CONFIDENCE = 0.90
+# Threshold constants. The only confidence high enough to skip the Wikipedia
+# lookup on an agent match; see the policy comment in actor_to_code.
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
 
 
@@ -61,7 +61,7 @@ COLLECTIVE_HEAD_NOUNS = (
     "migrant", "soldier", "troop", "force", "gunman", "militant", "rebel",
     "insurgent", "fighter", "activist", "supporter", "voter", "official",
     "authority", "militia", "crowd", "mob", "youth", "farmer", "teacher",
-    "doctor", "journalist",
+    "doctor", "journalist", "lawmaker", "attacker", "public",
 )
 
 # The same idea, but only when the span is nothing *but* one of these words.
@@ -79,6 +79,49 @@ INSTITUTIONAL_MODIFIERS = (
     "national", "federal", "royal", "state", "supreme", "central",
     "presidential", "republican",
 )
+
+# Head nouns of spans that name a *body*, not a category of people. A news
+# story writes "the interior ministry" or "the supreme court" and means one
+# specific institution in one specific country, which is exactly what the
+# Wikipedia linker is for: `Ministry of Home Affairs (Tanzania)`,
+# `Supreme Court of Kenya`. Matched on the surface form, not the lemma, so
+# that "authorities" stays a generic collective while "authority" (as in
+# "the Palestinian Authority") does not.
+INSTITUTION_HEAD_NOUNS = (
+    "ministry", "department", "court", "assembly", "parliament", "senate",
+    "congress", "legislature", "council", "commission", "committee", "agency",
+    "bureau", "authority", "bank", "party", "cabinet", "presidency", "office",
+)
+
+# These name an institution only when something says *whose*: "the national
+# police" is `National Police of Colombia`, but "police" on its own is a role.
+INSTITUTION_MODIFIED_HEAD_NOUNS = (
+    "police", "army", "forces", "guard",
+)
+
+
+def span_names_an_institution(doc):
+    """
+    Does this span name an institution -- a ministry, a court, a parliament?
+
+    Args:
+        doc: spaCy Doc of the span, after nationality stripping
+
+    Returns:
+        bool: True if the span should reach the Wikipedia linker
+    """
+    words = [t for t in doc if t.is_alpha]
+    if words and words[0].lower_ in ("the", "a", "an"):
+        words = words[1:]
+    if not words:
+        return False
+
+    head = words[-1]
+    if head.lower_ in INSTITUTION_HEAD_NOUNS:
+        return True
+    if head.lower_ in INSTITUTION_MODIFIED_HEAD_NOUNS:
+        return any(t.lower_ in INSTITUTIONAL_MODIFIERS for t in words[:-1])
+    return False
 
 
 def span_is_generic_collective(doc):
@@ -99,6 +142,8 @@ def span_is_generic_collective(doc):
         bool: True if the caller should skip the Wikipedia lookup
     """
     if any(e.label_ in ("PERSON", "ORG", "GPE", "NORP") for e in doc.ents):
+        return False
+    if span_names_an_institution(doc):
         return False
 
     words = [t for t in doc if t.is_alpha]
@@ -1262,56 +1307,54 @@ class ActorResolver:
             ents = []
             
         # Try direct matching first
+        code_full_text = None
         if trimmed_text:
             logger.debug(f"Trying direct matching on: {trimmed_text}")
             code_full_text = self.agent_matcher.trf_agent_match(trimmed_text, country=country)
-            
+
             if code_full_text:
                 logger.debug(f"Direct match found: {code_full_text}")
                 code_full_text['source'] = "BERT matching full text"
                 code_full_text['wiki'] = ""
                 code_full_text['actor_wiki_job'] = ""
-                
-                # Return without Wikipedia lookup in certain high-confidence cases.
-                #
-                # The first clause used to be just "conf > 0.6 and not ents",
-                # which sent bare surnames straight to a role code without ever
-                # trying Wikipedia: spaCy tags nothing in a one-word span, so
-                # "Zuma", "Hollande" and "Araud" all have no entity. Requiring
-                # the span to be all-lowercase or at least two tokens keeps the
-                # clause doing its real job (generic phrases like "the security
-                # forces") while letting a single capitalised token through to
-                # the linker.
-                is_lowercase = trimmed_text == trimmed_text.lower()
-                looks_generic = is_lowercase or len(trimmed_text.split()) >= 2
-                if (code_full_text['conf'] > 0.6 and not ents and looks_generic or
-                    code_full_text['conf'] > THRESHOLD_HIGH_CONFIDENCE and is_lowercase or
-                    code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE):
-                    logger.debug("High confidence match. Skipping Wikipedia lookup.")
-                    code_full_text = self.code_selector.clean_best(code_full_text)
-                    self.cache_manager.set(cache_key, code_full_text)
-                    return code_full_text
             else:
                 logger.debug(f"No direct match found for {trimmed_text}")
 
-        # Generic collectives ("police", "the security forces", "residents")
-        # get a role code and no Wikipedia page. Sending them to the linker
-        # only ever finds the concept article, which is the right page for the
-        # string and the wrong answer for the task.
+        # The policy: a mention gets a role code and no Wikipedia page only if
+        # it names a category of people rather than an actor ("police",
+        # "protesters"), or if the agent matcher is nearly certain about a span
+        # that names nothing in particular. A generically-worded institution --
+        # "the interior ministry", "the supreme court", "the central bank" --
+        # names one body in one country and goes to the linker.
+        #
+        # This used to be three confidence clauses, and the two loosest ones
+        # swallowed almost every institution mention in the corpus: 164 of 173
+        # institution probes never reached the linker, because "the defence
+        # ministry" is lowercase, multi-word, and a very good agent match.
+        skip_wiki_reason = ""
         if trimmed_text and doc is not None and span_is_generic_collective(doc):
-            logger.debug(f"'{trimmed_text}' is a generic collective. Skipping Wikipedia lookup.")
-            generic_code = code_full_text if code_full_text else {
+            skip_wiki_reason = "generic collective"
+        elif (code_full_text and doc is not None
+                and code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
+                and not ents
+                and not span_names_an_institution(doc)):
+            skip_wiki_reason = "high-confidence agent match"
+
+        if skip_wiki_reason:
+            logger.debug(f"Skipping Wikipedia lookup for '{trimmed_text}': {skip_wiki_reason}")
+            skipped_code = code_full_text if code_full_text else {
                 "country": country,
                 "code_1": "",
                 "code_2": "",
                 "query": trimmed_text,
             }
-            generic_code['source'] = "generic collective"
-            generic_code['wiki'] = ""
-            generic_code['actor_wiki_job'] = ""
-            generic_code = self.code_selector.clean_best(generic_code)
-            self.cache_manager.set(cache_key, generic_code)
-            return generic_code
+            if not code_full_text:
+                skipped_code['source'] = skip_wiki_reason
+            skipped_code['wiki'] = ""
+            skipped_code['actor_wiki_job'] = ""
+            skipped_code = self.code_selector.clean_best(skipped_code)
+            self.cache_manager.set(cache_key, skipped_code)
+            return skipped_code
 
         # Extract core entity and role from the span using NER
         # This handles noisy spans like "Republican Senator Pat Roberts of Kansas"
@@ -1406,7 +1449,7 @@ class ActorResolver:
                 wiki_codes = self.wiki_parser.wiki_to_code(wiki, query_date)
                 
         # Combine all possible codes
-        code_full_text_list = [code_full_text] if 'code_full_text' in locals() and code_full_text else []
+        code_full_text_list = [code_full_text] if code_full_text else []
         all_codes = wiki_codes + code_full_text_list
         all_codes = [c for c in all_codes if c]
         
