@@ -321,7 +321,7 @@ def test_igo_full(ag):
         "date": "Today",
         "correct_country": "IGO"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['country'] == d['correct_country'] 
 
 
@@ -336,12 +336,12 @@ def test_kassym(ag):
         }
     wiki = ag.wiki_matcher.query_wiki(d['actor'])
     assert wiki['title'] == 'Kassym-Jomart Tokayev'
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
 def test_kassym2(ag):
-    code = ag.actor_to_code("Kassym-Jomart Tokayev", "", "today")
+    code = ag.actor_to_code("Kassym-Jomart Tokayev", context="", query_date="today")
     assert code['country'] == "KAZ"
     assert code['code_1'] == "GOV"
 
@@ -358,7 +358,7 @@ def kaz2(ag):
         "correct_country": "KAZ",
         "correct_code1": "CVL"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -369,7 +369,7 @@ def kaz3(ag):
         "correct_country": "KAZ",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -380,7 +380,7 @@ def kaz4(ag):
         "correct_country": "KAZ",
         "correct_code1": "CVL" # "former" officials used to be ELI, now they're CVL
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
  
@@ -417,12 +417,12 @@ def test_mex(ag):
         "correct_country": "MEX",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
         
 def test_dea(ag):
-    code = ag.actor_to_code("The DEA", "", "")
+    code = ag.actor_to_code("The DEA", context="", query_date="")
     assert code['wiki'] == 'Drug Enforcement Administration'
     assert code['country'] == "USA"
     assert code['code_1'] == "COP"
@@ -435,7 +435,7 @@ def test_pan(ag):
         "correct_country": "MEX",
         "correct_code1": "PTY"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -447,7 +447,7 @@ def test_pan_context(ag):
         "correct_country": "MEX",
         "correct_code1": "PTY"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -485,7 +485,7 @@ def test_pri_context(ag):
 def test_hezbollah(ag):
     # side note: here's an interesting case of wanting two separate, non-hierarchical
     # codes, one PTY and one REB
-    code = ag.actor_to_code("Hezbollah", "", "2024-01-01")
+    code = ag.actor_to_code("Hezbollah", context="", query_date="2024-01-01")
     assert code['code_1'] in ["PTY", "REB"]
     assert code['country'] == "LBN"
     assert code['wiki'] == "Hezbollah"
@@ -504,7 +504,7 @@ def test_prd_context(ag):
         "correct_country": "MEX",
         "correct_code1": "PTY"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -556,7 +556,7 @@ def test_def_min_full(ag):
         "correct_code1": "GOV",
         "correct_code2": "MIL"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -918,7 +918,7 @@ def test_somali_pm(ag):
         "correct_country": "SOM",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
         
@@ -952,7 +952,7 @@ def test_macron_full(ag):
         "correct_country": "FRA",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
         
@@ -971,7 +971,7 @@ def test_french_pres(ag):
         "correct_country": "FRA",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
         
@@ -997,7 +997,7 @@ def test_tseng_full(ag):
         "correct_country": "TWN",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
         
@@ -1030,7 +1030,7 @@ def test_lith_full(ag):
         "correct_code1": "GOV",
         "wiki": "Gitanas Nausėda"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     assert code['wiki'] == d['wiki']
@@ -1043,7 +1043,7 @@ def test_lith_name(ag):
         "correct_country": "LTU",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1055,7 +1055,7 @@ def test_col_sen(ag):
         "correct_country": "COL",
         "correct_code1": "LEG"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1089,7 +1089,7 @@ def test_national_guard_context2(ag):
         "correct_country": "SAU",
         "correct_code1": "MIL"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1100,7 +1100,7 @@ def test_national_guard_saudi(ag):
         "correct_country": "SAU",
         "correct_code1": "MIL"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country'] 
 
@@ -1113,7 +1113,7 @@ def test_searchers(ag):
         "correct_country": "",  # No wiki page, so leave blank
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1209,7 +1209,7 @@ def spokesman(ag):
         "correct_country": "",  # from context, AFG, but no wiki
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
                 
@@ -1236,7 +1236,7 @@ def test_indig(ag):
         "correct_country": "",
         "correct_code1": "CVL"  # maybe?? or GOV?
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1291,7 +1291,7 @@ def test_nawaf(ag):
         "correct_code1": "GOV",
         "correct_wiki": "Nawaf Al-Ahmad Al-Jaber Al-Sabah"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     assert code['wiki'] == d['correct_wiki']
@@ -1317,7 +1317,7 @@ def test_ratas_gov(ag):
         "correct_country": "EST",
         "correct_code1": "GOV" # prime minister
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1328,7 +1328,7 @@ def test_ratas_office(ag):
         "correct_country": "EST",
         "correct_code1": "GOV" # prime minister
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
         
@@ -1369,7 +1369,7 @@ def test_fsb2(ag):
         "correct_country": "RUS",
         "correct_code1": "SPY"  # ??? Or COP?
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1411,7 +1411,7 @@ def test_demonym1(ag):
         "correct_country": "PSE",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1423,7 +1423,7 @@ def test_demonym2(ag):
         "correct_country": "BRA",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1435,7 +1435,7 @@ def test_demonym3(ag):
         "correct_country": "GBR",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1448,7 +1448,7 @@ def test_country1(ag):
         "correct_country": "GBR",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1460,7 +1460,7 @@ def test_country2(ag):
         "correct_country": "GBR",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1471,7 +1471,7 @@ def test_country3(ag):
         "correct_country": "JPN",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1482,7 +1482,7 @@ def test_country4(ag):
         "correct_country": "FRA",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1493,7 +1493,7 @@ def test_palestinian_auth(ag):
         "correct_country": "PSE",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1504,7 +1504,7 @@ def tony_blair_now(ag):
         "correct_country": "GBR",
         "correct_code1": "GOV"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country'] 
 
@@ -1516,7 +1516,7 @@ def tony_blair_2003(ag):
         "correct_country": "GBR",
         "correct_code1": "ELI"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country'] 
         
@@ -1527,7 +1527,7 @@ def test_kosovo(ag):
         "correct_country": "XKX",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
     
@@ -1598,7 +1598,7 @@ def junk(ag):
         "correct_country": "",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert not code
 
 def dozen_men(ag):        
@@ -1613,7 +1613,7 @@ def test_junk2(ag):
         "correct_country": "",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code == None
 
 def test_targets_in_syria(ag):
@@ -1623,7 +1623,7 @@ def test_targets_in_syria(ag):
         "correct_country": "SYR",
         "correct_code1": ""
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1638,7 +1638,7 @@ def test_mus_cleric(ag):
         "correct_country": "",
         "correct_code1": "REL"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1650,7 +1650,7 @@ def am_soldiers(ag):
         "correct_country": "USA",
         "correct_code1": "MIL"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
@@ -1661,7 +1661,7 @@ def ukr_farmers(ag):
         "correct_country": "UKR",
         "correct_code1": "AGR"
         }
-    code = ag.actor_to_code(d['actor'], d['context'], d['date'])
+    code = ag.actor_to_code(d['actor'], context=d['context'], query_date=d['date'])
     assert code['code_1'] == d['correct_code1']
     assert code['country'] == d['correct_country']
 
