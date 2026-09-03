@@ -30,6 +30,104 @@ THRESHOLD_COMBINED_SCORE = 9
 
 logger = logging.getLogger(__name__)
 
+
+def country_phrase_variants(query_term: str, country: str) -> list[str]:
+    """
+    Title forms a country's institution is likely to be listed under.
+
+    News stories name institutions the way a reader would ("the defense
+    ministry"); Wikipedia names them the way a catalogue would ("Ministry of
+    Defence (Ghana)"). This builds the country-qualified strings to search for.
+    Returns an empty list if either argument is empty.
+
+    With query_term="electoral commission" and country="Ghana":
+
+    | rewrite                | result                              |
+    |------------------------|-------------------------------------|
+    | parenthetical          | electoral commission (Ghana)        |
+    | "of" form              | electoral commission of Ghana       |
+    | country first          | Ghana electoral commission          |
+
+    Two head-noun rewrites are added for institutions, because the country
+    forms above can never reach an inverted title on their own:
+
+    | rewrite                | example                                       |
+    |------------------------|-----------------------------------------------|
+    | "X ministry"           | defense ministry -> Ministry of defense,       |
+    |   / "X department"     |   Ministry of defense (Ghana),                 |
+    |                        |   Ministry of defense of Ghana                 |
+    | "central bank"         | central bank -> Bank of Ghana,                 |
+    |                        |   Central Bank of Ghana                        |
+
+    Finally, anything containing "defense"/"defence" is emitted in both
+    spellings, since Wikipedia uses whichever the country itself uses.
+
+    Capitalization does not matter: these strings are used in `match_phrase`
+    queries against analyzed (lowercased) fields.
+    """
+    if not query_term or not country:
+        return []
+
+    variants = [f"{query_term} ({country})",
+                f"{query_term} of {country}",
+                f"{country} {query_term}"]
+
+    # "defense ministry" -> "Ministry of defense" (+ its country forms)
+    head_noun = re.match(r"(.+?)\s+(ministry|department)\s*$", query_term, flags=re.IGNORECASE)
+    if head_noun:
+        modifier, head = head_noun.group(1), head_noun.group(2).capitalize()
+        inverted = f"{head} of {modifier}"
+        variants += [inverted, f"{inverted} ({country})", f"{inverted} of {country}"]
+
+    # "the central bank" is almost always titled after the country itself
+    if re.search(r"\bcentral bank\b", query_term, flags=re.IGNORECASE):
+        variants += [f"Bank of {country}", f"Central Bank of {country}"]
+
+    # British vs. American spelling of "defence"
+    for variant in list(variants):
+        if re.search(r"defen[sc]e", variant, flags=re.IGNORECASE):
+            variants.append(re.sub(r"defense", "defence", variant, flags=re.IGNORECASE))
+            variants.append(re.sub(r"defence", "defense", variant, flags=re.IGNORECASE))
+
+    # De-duplicate (case-insensitively) while keeping the order above
+    seen = set()
+    deduped = []
+    for variant in variants:
+        if variant.lower() not in seen:
+            seen.add(variant.lower())
+            deduped.append(variant)
+    return deduped
+
+
+def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results: int) -> list[dict]:
+    """
+    Merge two ranked lists of Wikipedia articles by interleaving them.
+
+    Takes the first article of each list, then the second of each, and so on,
+    skipping any title already taken. Interleaving (rather than appending)
+    keeps the merged list roughly sorted by "how highly did *some* query rank
+    this", which is what the downstream trim and ranker expect.
+
+    Args:
+        primary: results for the main query term, in rank order
+        alternate: results for the alternative query term, in rank order
+        max_results: cap on the length of the merged list
+
+    Returns:
+        list: the merged, de-duplicated, capped list of articles
+    """
+    merged = []
+    seen_titles = set()
+    for rank in range(max(len(primary), len(alternate))):
+        for results in (primary, alternate):
+            if rank < len(results):
+                article = results[rank]
+                if article['title'] not in seen_titles:
+                    seen_titles.add(article['title'])
+                    merged.append(article)
+    return merged[:max_results]
+
+
 #######################################################
 # Wikipedia Client
 #######################################################
@@ -89,8 +187,10 @@ class WikiClient:
             raise ValueError(f"Error checking Wikipedia index: {e}")
 
     def run_wiki_search(self, query_term, limit_term="", max_results=200,
+                        country="",
                         use_importance=False,
                         title_exact_boost=250,
+                        title_and_boost=120,
                         title_fuzzy_boost=50,
                         redirects_exact_boost=100,
                         redirects_fuzzy_boost=50,
@@ -98,28 +198,64 @@ class WikiClient:
                         alternative_names_fuzzy_boost=20,
                         short_desc_boost=10,
                         intro_para_boost=5,
+                        country_title_boost=200,
+                        country_redirects_boost=150,
                         ):
         """
-        Enhanced search with importance scoring compatible with ES 7.10.1
+        Search the Wikipedia index for `query_term`.
+
+        Args:
+            query_term: the (already cleaned) string to search for
+            limit_term: optional second term the article must also match
+            max_results: how many articles to return
+            country: the country *name* (e.g. "Ghana") the mention belongs to,
+                if known. Used to add country-qualified title clauses; see
+                `country_phrase_variants`. Passing "" is the old behavior.
+            use_importance: also boost articles by redirect count and by having
+                an infobox/short description
         """
 
-        # Base matching clauses
+        # Base matching clauses.
+        #
+        # The first four clauses are the "the query looks just like the title"
+        # clauses. They used to be `term` queries, which do not work here:
+        # `title`, `redirects` and `alternative_names` are analyzed `text`
+        # fields with no `.keyword` sub-field, so a `term` query only matches
+        # when the whole query is a single already-lowercase token. Measured on
+        # the 1,966-row wiki gold set, they fired on 0.4% of queries, i.e. the
+        # three highest boosts in the search were dead. `match_phrase` (all the
+        # query's tokens, in order) and `match ... operator: "and"` (all the
+        # tokens, any order) are the working equivalents.
         base_should_clauses = [
-            # Exact matches (highest priority)
-            {"term": {"title": {"value": query_term, "boost": title_exact_boost}}},
+            {"match_phrase": {"title": {"query": query_term, "boost": title_exact_boost}}},
+            {"match": {"title": {"query": query_term, "operator": "and", "boost": title_and_boost}}},
+            {"match_phrase": {"redirects": {"query": query_term, "boost": redirects_exact_boost}}},
+            {"match_phrase": {"alternative_names": {"query": query_term, "boost": alternative_names_boost}}},
+            # Looser bag-of-words matches
             {"match": {"title": {"query": query_term, "boost": title_fuzzy_boost}}},
             # Folded (ASCII-normalized + stemmed) title match
             {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
-            {"term": {"redirects": {"value": query_term, "boost": redirects_exact_boost}}},
             {"match": {"redirects": {"query": query_term, "boost": redirects_fuzzy_boost}}},
             # Folded redirects match (handles diacritics + plurals)
             {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
-            {"term": {"alternative_names": {"value": query_term, "boost": alternative_names_boost}}},
             {"match": {"alternative_names": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
             {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
             {"match": {"intro_para": {"query": query_term, "boost": intro_para_boost}}},
             {"match": {"short_desc": {"query": query_term, "boost": short_desc_boost}}}
         ]
+
+        # Country-qualified title clauses. News text says "the electoral
+        # commission"; Wikipedia says "Electoral Commission of Kenya". These
+        # clauses look for the country-qualified titles the mention implies.
+        # (Deliberately *not* a plain `match` of the country name against
+        # intro_para/short_desc: measured, that is the slowest clause in the
+        # set, buys no extra recall, and pads the candidate list for generic
+        # mentions that should have had no candidates at all.)
+        for phrase in country_phrase_variants(query_term, country):
+            base_should_clauses += [
+                {"match_phrase": {"title": {"query": phrase, "boost": country_title_boost}}},
+                {"match_phrase": {"redirects": {"query": phrase, "boost": country_redirects_boost}}},
+            ]
 
         if use_importance:
             # Boost articles by redirect count (proxy for Wikipedia importance)
@@ -222,28 +358,30 @@ class WikiSearcher:
             case _, _:
                 self.wiki_client = wiki_client
     
-    def search_wiki(self, query_term, limit_term="", max_results=200):
+    def search_wiki(self, query_term, limit_term="", max_results=200, country=""):
         """
         Search Wikipedia for a given query term.
-        
+
         Args:
             query_term: Term to search for
             limit_term: Term to limit results by
             max_results: Maximum number of results to return
-            fields: Fields to search in
-            
+            country: Country *name* (e.g. "Ghana") the mention belongs to, if
+                known. Adds country-qualified title clauses to the search.
+
         Returns:
             list: List of Wikipedia article dictionaries
         """
         # Clean query term
         query_term = clean_query(query_term)
         logger.debug(f"Using query term: '{query_term}'")
-        
+
         # Perform search via client
         return self.wiki_client.run_wiki_search(
             query_term=query_term,
             limit_term=limit_term,
             max_results=max_results,
+            country=country,
         )
 
     def text_ranker_features(self, matches, fields):
@@ -1115,6 +1253,24 @@ class WikiMatcher:
                 logger.debug(f"Using acronym expansion: {query_term}")
         return query_term
 
+    def _pick_alt_query_term(self, query_term, alt_query_terms):
+        """
+        Pick the first alternative surface form worth a second search.
+
+        "Worth a second search" means: it survives `clean_query` and, once
+        cleaned, is not the same string as the primary query term (comparing
+        the cleaned forms, since that is what actually gets sent to
+        Elasticsearch). Returns "" when there is nothing to add.
+        """
+        if not alt_query_terms:
+            return ""
+        primary = clean_query(query_term)
+        for term in alt_query_terms:
+            cleaned = clean_query(term)
+            if cleaned and cleaned != primary:
+                return cleaned
+        return ""
+
     def query_wiki(self,
                    query_term,
                    limit_term="",
@@ -1123,19 +1279,27 @@ class WikiMatcher:
                    actor_desc="",
                    method="neural",
                    max_results=200,
-                   skip_expansion=False):
+                   skip_expansion=False,
+                   alt_query_terms: list[str] | None = None):
         """
         Search Wikipedia and return the best matching article.
 
         Args:
             query_term: Term to search for
             limit_term: Term to limit results by
-            country: Country code to help with disambiguation
+            country: Country *name* (e.g. "Ghana") to help with disambiguation
             context: Context text to help with disambiguation
             actor_desc: Actor description (automatically parsed)
             max_results: Maximum results to return from search
             skip_expansion: If True, skip NER-based query expansion (use when
                 the caller already extracted the core entity via NER)
+            alt_query_terms: Other surface forms of the same mention (e.g. the
+                raw span before country-stripping, or the span before NER
+                expansion). The first one that differs from `query_term` is
+                searched as well and the two candidate lists are merged. One
+                extra Elasticsearch round trip buys about a point of recall,
+                because whichever surface form the article is titled under is
+                often not the one the pipeline settled on.
 
         Returns:
             dict or None: Best matching Wikipedia article or None if no good match
@@ -1156,10 +1320,30 @@ class WikiMatcher:
         # doubling the cost of every failed lookup for no change in output.
         logger.debug("Searching Wikipedia")
         results = self.wiki_searcher.search_wiki(
-            query_term, 
-            limit_term=limit_term, 
+            query_term,
+            limit_term=limit_term,
             max_results=max_results,
+            country=country,
         )
+        for article in results:
+            article['from_alt_query'] = 0
+
+        # Optional second search over another surface form of the same mention.
+        # The candidate's `raw_es_score` then comes from a different query and
+        # is not on the same scale as the primary query's scores, so we flag
+        # the candidates that came from it and let the ranker learn that.
+        alt_term = self._pick_alt_query_term(query_term, alt_query_terms)
+        if alt_term:
+            logger.debug(f"Also searching Wikipedia for alternative form '{alt_term}'")
+            alt_results = self.wiki_searcher.search_wiki(
+                alt_term,
+                limit_term=limit_term,
+                max_results=max_results,
+            )
+            for article in alt_results:
+                article['from_alt_query'] = 1
+            results = merge_ranked_results(results, alt_results, max_results)
+
         best = self.pick_best_wiki(
             query_term, 
             results, 
