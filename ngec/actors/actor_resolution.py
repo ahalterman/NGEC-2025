@@ -122,6 +122,30 @@ def span_is_generic_collective(doc):
             or head.lemma_.lower() in COLLECTIVE_HEAD_NOUNS)
 
 
+def span_looks_like_organisation(text):
+    """
+    Does this span look like the name of an organisation rather than a
+    nationality?
+
+    Used only for spans that `search_nat` swallows whole. "U.N.", "DPRK",
+    "UWSA" and "European Union" are all country *patterns* as far as
+    CountryDetector is concerned, but each is also an organisation with a
+    Wikipedia article; "Israeli" and "Iranian" are not. The test is an
+    internal capital or a period, which is what separates an acronym or a
+    multi-word proper name from a nationality adjective.
+
+    Args:
+        text: The raw actor span
+
+    Returns:
+        bool: True if the span is worth a Wikipedia lookup
+    """
+    text = text.strip()
+    if len(text) < 2:
+        return False
+    return "." in text or any(c.isupper() for c in text[1:])
+
+
 def core_query_is_degenerate(core_query, span):
     """
     Is the NER-extracted core entity a worse search term than the span itself?
@@ -1191,9 +1215,29 @@ class ActorResolver:
                 'actor_wiki_job': "",
                 "query": text
             }
+            # A span that search_nat swallows whole is usually a nationality
+            # ("Israeli"), but it can also be an organisation that happens to
+            # be one of the country patterns: "U.N.", "DPRK", "UWSA",
+            # "European Union". Those have Wikipedia articles, and returning
+            # here used to throw them away before retrieval even started, so
+            # look the organisation-like ones up and attach the page. The
+            # code itself stays country-only.
+            if span_looks_like_organisation(text):
+                logger.debug(f"Country-only span '{text}' looks like an organisation. Trying Wikipedia.")
+                if not known_country and context:
+                    known_country = self._country_from_context(text, context)
+                wiki = self.wiki_matcher.query_wiki(
+                    query_term=text,
+                    country=known_country,
+                    context=context,
+                    limit_term=search_limit_term
+                )
+                if wiki:
+                    logger.debug(f"Wikipedia page found for country-only span: {wiki['title']}")
+                    code_full_text['wiki'] = wiki['title']
             self.cache_manager.set(cache_key, code_full_text)
             return self.code_selector.clean_best(code_full_text)
-            
+
         # Parse entities in text
         # TODO: all of this probably goes away with the new entity splitter
         try:
