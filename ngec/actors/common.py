@@ -23,12 +23,16 @@ DEFAULT_MODEL_PATH = "jinaai/jina-embeddings-v3"
 # something we can guess. Pick one with `ModelManager(encoder_name=...)` or the
 # NGEC_WIKI_ENCODER environment variable.
 #
-# The default is jina because that is what the shipped wiki ranker
-# (`ngec/assets/xgb_model.json`) was trained against. bge-small is more
-# accurate and about nine times cheaper on CPU; static-retrieval-mrl has no
-# transformer in it at all and is a thousand times cheaper again at the same
-# accuracy. Either only becomes the default once the ranker is retrained on
-# features generated with it.
+# The default is static-retrieval-mrl: it has no transformer in it at all, so it
+# costs 0.026 CPU-seconds per query against jina's 28.3, while the ranker
+# retrained on its features scores 84.4% [78.7, 89.4] on the held-out document
+# split against jina's 85.2% [79.3, 90.4] -- three queries in 372, well inside a
+# single interval. A ranker trained against each encoder ships as
+# `ngec/assets/xgb_model_<name>.json`, and `xgb_model.json` (what WikiMatcher
+# loads) is a copy of the default's. Changing this constant without also
+# pointing the matcher at the matching ranker asset degrades linking silently,
+# because the ranker's four similarity features would then come from a
+# different model than the one it was fit on.
 WIKI_ENCODERS = {
     "jinaai/jina-embeddings-v3": {
         "load_kwargs": {"trust_remote_code": True,
@@ -44,7 +48,7 @@ WIKI_ENCODERS = {
         "query_prefix": "",
     },
 }
-DEFAULT_ENCODER = DEFAULT_MODEL_PATH
+DEFAULT_ENCODER = "sentence-transformers/static-retrieval-mrl-en-v1"
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
