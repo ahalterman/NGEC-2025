@@ -22,14 +22,16 @@ EXAMPLES: list[tuple[str, str, str]] = [
      "Ethiopia and Eritrea signed a ceasefire agreement in Cairo on Monday."),
 ]
 
-# The agents-file format: a pattern, then its PLOVER code in square brackets.
-# Underscores stand for spaces. A custom file replaces the bundled dictionary
-# entirely, which is what makes the comparison below legible.
-CUSTOM_AGENTS = """PORT_WORKERS [LAB]
-DOCK_WORKERS [LAB]
-DOCKERS [LAB]
-ULTRAS [CVL]"""
-CUSTOM_SPAN = "dock workers"
+# The agents-file format: a pattern, then its code in square brackets, with
+# underscores for spaces. ENV is not a PLOVER code -- the point is that a project
+# can invent one. The bundled dictionary codes "climate activists" as CVL and
+# "Extinction Rebellion" as REB (it matches on "rebellion"); the custom file
+# gives both ENV.
+CUSTOM_AGENTS = """CLIMATE_ACTIVISTS [ENV]
+CLIMATE_PROTESTERS [ENV]
+EXTINCTION_REBELLION [ENV]
+GREENPEACE [ENV]"""
+CUSTOM_SPAN = "Extinction Rebellion"
 
 TMP_DIR = Path(__file__).resolve().parent.parent / ".tmp"
 

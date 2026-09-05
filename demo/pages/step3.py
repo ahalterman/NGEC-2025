@@ -7,19 +7,17 @@ from ngec_demo import resources as R
 from ngec_demo import steps
 from ngec_demo.style import hbar_chart, json_block, lede
 
-# Spans chosen to make the ranker visible: a common surname whose article
-# depends entirely on the sentence around it, and an acronym that is a dozen
-# different organisations until the context names a country.
+# Two full names, which the ranker resolves with near certainty, and an acronym
+# that is a dozen organisations until the context names a country. A bare
+# surname is a bad example: the search returns 200 title matches and the right
+# article is usually not among them.
 EXAMPLES: list[tuple[str, str, str]] = [
     ("Macron", "Emmanuel Macron",
      "President Emmanuel Macron said the pension reforms would proceed despite "
      "the demonstrations in Paris."),
-    ("Johnson · UK", "Johnson",
+    ("Boris Johnson", "Boris Johnson",
      "The prime minister faced questions in the House of Commons over parties "
      "held in Downing Street during lockdown."),
-    ("Johnson · NBA", "Johnson",
-     "The forward scored 32 points for the Los Angeles Lakers in a win over the "
-     "Boston Celtics on Sunday night."),
     ("ANC · South Africa", "the ANC",
      "The ANC lost its parliamentary majority in South Africa for the first time "
      "since 1994."),
