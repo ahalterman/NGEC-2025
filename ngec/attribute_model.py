@@ -153,7 +153,10 @@ def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
         try:
             with resources.files("NGEC").joinpath("assets", def_file).open() as f:
                 event_definitions = pd.read_csv(f)
-        except (FileNotFoundError, ModuleNotFoundError):
+        except (OSError, ModuleNotFoundError):
+            # OSError covers FileNotFoundError as well as NotADirectoryError, which
+            # importlib.resources can raise when a same-named file shadows the package
+            # directory (e.g. an uppercase 'NGEC' path on a case-insensitive lookup).
             # Fallback to file-based approach for development
             current_dir = os.path.dirname(__file__)
             file_path = os.path.join(current_dir, "assets", def_file)

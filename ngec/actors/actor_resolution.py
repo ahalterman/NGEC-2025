@@ -1,6 +1,7 @@
 from collections import Counter
 from copy import deepcopy
 import logging
+from pathlib import Path
 import re
 import time
 
@@ -827,6 +828,7 @@ class ActorResolver:
                 wiki_sort_method="neural",
                 gpu=False,
                 es_client: None | Elasticsearch = None,
+                agents_file: None | str | Path = None,
                 ):
         """
         Initialize the ActorResolver with the necessary models and data.
@@ -836,6 +838,9 @@ class ActorResolver:
             save_intermediate: Whether to save intermediate results
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
+            es_client: Pre-configured Elasticsearch client to use for Wikipedia lookups
+            agents_file: Optional path to a custom PLOVER/CAMEO agents file. If None
+                (the default), the agents file bundled with the package is used.
         """
         # TODO: #26, make it possible to override models
         # This impacts all the other related classes here
@@ -855,6 +860,7 @@ class ActorResolver:
         # Initialize agent matcher
         self.agent_matcher = AgentMatcher(
             self.trf, 
+            agents_file=agents_file,
             device=self.device, 
         )
         
