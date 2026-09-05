@@ -6,8 +6,14 @@ A six-page Streamlit app: one end-to-end run, then one page per pipeline step.
 
 ```bash
 cd demo
-uv run --group demo-app streamlit run app.py
+uv run --extra cu12 --extra vllm --group demo-app streamlit run app.py
 ```
+
+Pass the same extras to every `uv run`: `uv run` syncs the environment to the
+extras it is given, so a bare `uv run --group demo-app` swaps the CUDA 12 torch
+that vllm needs for the default CUDA 13 build and leaves the two half-installed.
+On a CPU-only box use `--extra cpu` instead of the two above and set
+`NGEC_DEMO_BACKEND=transformers`.
 
 On this box, prefix everything with `env -u LD_LIBRARY_PATH` so torch picks up
 its own CUDA libraries.
@@ -19,7 +25,7 @@ no Streamlit involved. The pages hold no pipeline logic, so this is the test:
 
 ```bash
 cd demo
-NGEC_DEMO_BACKEND=transformers uv run --group demo-app python check_demo.py
+NGEC_DEMO_BACKEND=transformers uv run --extra cu12 --extra vllm --group demo-app python check_demo.py
 ```
 
 It loads the real models and takes a few minutes on CPU.
