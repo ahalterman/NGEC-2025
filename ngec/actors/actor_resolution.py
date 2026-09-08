@@ -459,26 +459,30 @@ class WikiParser:
             
         Returns:
             tuple: (term_start, term_end) as datetime objects or None
+
+        The dates come from English Wikipedia infoboxes, so the parser is told
+        the language. Without it, dateparser tries every locale it knows on
+        each string, which was 60 of the 65 ms per mention this function cost.
         """
         # Try to get term end date
         term_end = None
         try:
-            term_end = dateparser.parse(infobox[f"term_end{num}"])
+            term_end = dateparser.parse(infobox[f"term_end{num}"], languages=["en"])
         except KeyError:
             try:
                 # Sometimes no underscore is used
-                term_end = dateparser.parse(infobox[f"termend{num}"])
+                term_end = dateparser.parse(infobox[f"termend{num}"], languages=["en"])
             except KeyError:
                 pass
         
         # Try to get term start date
         term_start = None
         try:
-            term_start = dateparser.parse(infobox[f"term_start{num}"])
+            term_start = dateparser.parse(infobox[f"term_start{num}"], languages=["en"])
         except KeyError:
             try:
                 # Sometimes no underscore is used
-                term_start = dateparser.parse(infobox[f"termstart{num}"])
+                term_start = dateparser.parse(infobox[f"termstart{num}"], languages=["en"])
             except KeyError:
                 pass
                 
