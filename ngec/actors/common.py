@@ -313,7 +313,38 @@ class CountryDetector:
             r"(?<![A-Za-z])(" + "|".join(re.escape(n) for n in names) + r")(?![A-Za-z0-9])")
         self.any_demonym = re.compile(
             r"(?<![A-Za-z])(" + "|".join(re.escape(d) for d in sorted(self.demonyms, key=len, reverse=True)) + r")(?![A-Za-z0-9])")
+        # Index for search_nat. Every pattern in the four lists above is
+        # _bounded(x) for a country name or nationality x, optionally behind
+        # "of " / "in ". A bounded match of x starts at a letter boundary and
+        # runs through x's leading letters, so x's leading letter-run must
+        # occur in the text as a maximal letter-run. Keying the patterns on that
+        # run lets search_nat test only the patterns the text can match, in
+        # their original order, instead of all 764 to 1,528. search_nat runs
+        # once per Wikipedia category of the chosen article (~26 per mention),
+        # and profiled at 64 ms per mention with the full loop.
+        self._letter_runs = re.compile(r"[A-Za-z]+")
+        self._pattern_index = {}
+        for name, patterns in (("nat_list", self.nat_list), ("nat_list_cat", self.nat_list_cat),
+                               ("nat_list_name", self.nat_list_name), ("nat_list_name_cat", self.nat_list_name_cat)):
+            index = {}
+            for i, (pattern, _) in enumerate(patterns):
+                # pattern.pattern is e.g. "of (?<![A-Za-z])Sri\\ Lanka(?![A-Za-z0-9])";
+                # the term's leading letters follow the lookbehind.
+                m = re.search(r"\(\?<!\[A-Za-z\]\)((?:\\?[A-Za-z])+)", pattern.pattern)
+                run = m.group(1).replace("\\", "") if m else ""
+                index.setdefault(run, []).append(i)
+            self._pattern_index[name] = index
 
+    def _candidate_patterns(self, patterns, list_name: str, text: str):
+        """The (pattern, country) pairs in `patterns` that can match `text`,
+        in list order. See the index built in __init__."""
+        index = self._pattern_index[list_name]
+        # Patterns whose term does not start with an ASCII letter are keyed on
+        # "" and always tested, so nothing depends on how they behave.
+        hits = set(index.get("", ()))
+        for run in self._letter_runs.findall(text):
+            hits.update(index.get(run, ()))
+        return [patterns[i] for i in sorted(hits)]
 
     def _load_country_dict(self, country_csv_path: str | Path | None = None):
         """
@@ -440,12 +471,14 @@ class CountryDetector:
         
         # Use appropriate pattern list based on categories flag
         if use_name:
-            patterns = self.nat_list_name_cat if categories else self.nat_list_name
+            list_name = "nat_list_name_cat" if categories else "nat_list_name"
         else:
-            patterns = self.nat_list_cat if categories else self.nat_list
+            list_name = "nat_list_cat" if categories else "nat_list"
+        patterns = getattr(self, list_name)
         
-        # Find all matching countries
-        for pattern, country in patterns:
+        # Find all matching countries, testing only the patterns whose term
+        # can start somewhere in this text (usually none or a handful).
+        for pattern, country in self._candidate_patterns(patterns, list_name, text):
             match = re.search(pattern, text)
             if match:
                 # Remove the matched country/nationality from text
