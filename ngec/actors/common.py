@@ -37,32 +37,46 @@ WIKI_ENCODERS = {
     # "ranker_asset" names the XGBoost ranker trained on this encoder's
     # features (train_NGEC_2026/train_wiki_model/03_train_ranker.py). The
     # ranker and the encoder must match: WikiMatcher picks the asset from here
-    # unless given an explicit wiki_ranker_model.
+    # unless given an explicit wiki_ranker_model. "ranker_threshold" is the
+    # minimum ranker probability for the top candidate to be accepted, swept
+    # per encoder on the gold document split and the institution probes
+    # (train_wiki_model/06_threshold_sweep.py); it is encoder-specific.
     "jinaai/jina-embeddings-v3": {
         "load_kwargs": {"trust_remote_code": True,
                         "model_kwargs": {"use_flash_attn": False}},
         "query_prefix": "",
         "ranker_asset": "xgb_model_jina.json",
+        "ranker_threshold": 0.1,   # not swept; the value the pipeline always shipped
     },
     "BAAI/bge-small-en-v1.5": {
         "load_kwargs": {},
         "query_prefix": "Represent this sentence for searching relevant passages: ",
         "ranker_asset": "xgb_model_bge-small.json",
+        "ranker_threshold": 0.1,   # its institution probes fall off fast above this
     },
     "sentence-transformers/static-retrieval-mrl-en-v1": {
         "load_kwargs": {},
         "query_prefix": "",
         "ranker_asset": "xgb_model_static-mrl.json",
+        "ranker_threshold": 0.3,   # 86.0% vs 84.4% gold top-1 at 0.1, -3 institution probes
     },
 }
 DEFAULT_ENCODER = "sentence-transformers/static-retrieval-mrl-en-v1"
 
-# The agent matcher (PLOVER role patterns) uses its own encoder. Its cosine
-# thresholds and the cached pattern embeddings were calibrated on this model,
-# and the paper's actor-categorization results depend on it, so it is not
-# switched by NGEC_WIKI_ENCODER. Change it only together with a re-evaluation
-# of actor categorization.
-AGENT_ENCODER = "jinaai/jina-embeddings-v3"
+# The agent matcher (PLOVER role patterns) uses its own encoder, chosen
+# separately from the wiki encoder because its cosine threshold
+# (agent_matcher.THRESHOLD_COSINE_SIMILARITY) is read on this model's
+# similarity scale. bge-small replaced jina-embeddings-v3 here on 2026-09-03:
+# its cosine scale coincides with jina's (mean best-match 0.795 vs 0.791), it
+# agrees with jina's code on 72% of real spans, and ECAV actor categorization
+# moved from 55.2% to 56.5% (gold spans) and 41.0% to 41.7% (model spans).
+# A static encoder was worse (53.7%): PLOVER patterns are multi-word role
+# phrases whose modifiers carry the code. Change this only together with a
+# re-evaluation of actor categorization -- `ModelManager(agent_encoder_name=...)`
+# or the NGEC_AGENT_ENCODER environment variable override it for that purpose;
+# the original jina results reproduce with NGEC_AGENT_ENCODER=jinaai/jina-embeddings-v3
+# and the threshold at 0.6.
+AGENT_ENCODER = "BAAI/bge-small-en-v1.5"
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -83,7 +97,8 @@ class ModelManager:
         trf = manager.load_trf_model()
     """
 
-    def __init__(self, device=None, encoder_name: str | None = None):
+    def __init__(self, device=None, encoder_name: str | None = None,
+                 agent_encoder_name: str | None = None):
         """
         Initialize the model manager.
 
@@ -95,9 +110,18 @@ class ModelManager:
                 DEFAULT_ENCODER. See WIKI_ENCODERS for the models with known
                 settings; anything else is loaded with no extra arguments and
                 no query prefix.
+            agent_encoder_name: Which sentence transformer the *agent* matcher
+                should use. Defaults to the NGEC_AGENT_ENCODER environment
+                variable, and then to AGENT_ENCODER. Changing it changes the
+                cosine scale the agent thresholds are read on, so it exists for
+                evaluation rather than for everyday use.
         """
         self.device = device
         self.models = {}  # Cache for loaded models
+
+        if agent_encoder_name is None:
+            agent_encoder_name = os.environ.get("NGEC_AGENT_ENCODER", AGENT_ENCODER)
+        self.agent_encoder_name = agent_encoder_name
 
         if encoder_name is None:
             encoder_name = os.environ.get("NGEC_WIKI_ENCODER", DEFAULT_ENCODER)
@@ -108,7 +132,8 @@ class ModelManager:
             logger.warning(f"'{encoder_name}' is not in WIKI_ENCODERS. Loading it with no extra "
                            "arguments and no query prefix, which may not be what the model expects.")
             self.encoder_settings = {"load_kwargs": {}, "query_prefix": "",
-                                     "ranker_asset": "xgb_model.json"}
+                                     "ranker_asset": "xgb_model.json",
+                                     "ranker_threshold": 0.1}
         # The instruction to prepend to the query side. WikiMatcher reads this.
         self.query_prefix = self.encoder_settings["query_prefix"]
 
@@ -137,16 +162,18 @@ class ModelManager:
 
     def load_trf_model(self, model_dir: None | str | Path=None) -> SentenceTransformer:
         """
-        Load and return the agent matcher's sentence transformer (AGENT_ENCODER).
+        Load and return the agent matcher's sentence transformer: the one this
+        ModelManager was configured with (agent_encoder_name /
+        NGEC_AGENT_ENCODER / AGENT_ENCODER).
 
         Args:
             model_dir: Path or name of a transformer model to load instead of
-                AGENT_ENCODER
+                the configured agent encoder
 
         Returns:
             SentenceTransformer: Loaded transformer model
         """
-        return self._load_encoder(str(model_dir) if model_dir else AGENT_ENCODER)
+        return self._load_encoder(str(model_dir) if model_dir else self.agent_encoder_name)
 
     def load_wiki_encoder(self) -> SentenceTransformer:
         """

@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 
 # Constants for decision making
-THRESHOLD_COSINE_SIMILARITY = 0.6
+# Read on the cosine scale of common.AGENT_ENCODER. 0.6 was jina's value;
+# 0.625 is the percentile-matched value for bge-small (same match rate on
+# the gold and ECAV spans). Sweep it if the agent encoder changes.
+THRESHOLD_COSINE_SIMILARITY = 0.625
 THRESHOLD_DOT_SIMILARITY = 45
-THRESHOLD_ALT_NAME_TITLE_MATCH = 0.8
-THRESHOLD_CONTEXT_MATCH = 0.6 # 0.7
 
 # TODO #26: allow overriding assets/models
 

@@ -703,7 +703,7 @@ class WikiMatcher:
                  nlp=None,
                  actor_sim_model: None | str | Path=None, 
                  wiki_ranker_model: None | str | Path=None,
-                 ranker_threshold: float = 0.3,
+                 ranker_threshold: float | None = None,
                  device=None,
                  ):
         """
@@ -758,17 +758,13 @@ class WikiMatcher:
         logger.info(f"Loading wiki ranker from {wiki_ranker_model}")
         self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(wiki_ranker_model)
         # Minimum ranker probability for the top candidate to be accepted as
-        # the article. 0.1 shipped from April 2026 to September 2026, tuned
-        # against the April ranker; the retrained rankers see wider candidate
-        # lists and ten more features, put far more mass near 1, and so accept
-        # almost anything the argmax offers at 0.1. Swept over 0.1-0.8 for the
-        # default encoder (train_wiki_model/06_threshold_sweep.py): 0.3 is the
-        # best held-out document-split top-1, 86.0% against 84.4% at 0.1, almost
-        # all of it the "this mention has no article" class (89.2% against
-        # 75.4%), and it costs 3 of 173 institution probes end to end. The right
-        # value is encoder-specific -- bge-small wants 0.1, because its
-        # institution probes fall away much faster -- so a caller who overrides
-        # the encoder should sweep this too.
+        # the article. Encoder-specific (see WIKI_ENCODERS["ranker_threshold"]
+        # in common.py for the measured values); a caller may override it.
+        if ranker_threshold is None:
+            if trf_model is None and model_manager is not None:
+                ranker_threshold = model_manager.encoder_settings.get("ranker_threshold", 0.1)
+            else:
+                ranker_threshold = 0.1
         self.ranker_threshold = ranker_threshold
 
         self.wiki_sort_method = wiki_sort_method
