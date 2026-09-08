@@ -1,10 +1,43 @@
 """
 Functionality for matching a query term to a Wikipedia article. Relies on a
 Elasticsearch index of Wikipedia data.
+
+Two stages. `WikiSearcher` retrieves candidate articles from the index;
+`WikiMatcher` scores them and picks one, using a small XGBoost ranker shipped as
+`ngec/assets/xgb_model.json`. See the "Actor resolution" section of PIPELINE.md
+for the longer version of what follows.
+
+Retrieval. The four highest-boosted clauses used to be `term` queries against
+analyzed text fields, which fired on 0.4% of queries; they are `match_phrase` and
+`match ... operator: "and"` now. When a country is known, `country_phrase_variants`
+adds the title forms a country's institution is likely to be listed under
+("Ministry of Defence (Ghana)" for "the defense ministry"). `query_wiki` can also
+search a second surface form of the same mention (`alt_query_terms`) and
+interleave the two result lists, which buys recall on polysemous mentions.
+
+Ranking. Besides string similarity and the Elasticsearch score, the ranker sees
+features computed from strings already in hand: whether the country the *story*
+is about appears in the candidate's intro, title or categories (`cm_doc`,
+`cm_title`, `cm_cat`); a TF-IDF cosine between story and intro, weighted by
+`ngec/assets/wiki_idf.json.gz` (`tfidf_ctx_intro`); capitalised words shared
+between the two (`pn_overlap`); and two flags separating a generic concept page
+("Interior ministry") from a country's actual institution.
+
+The encoder used for the embedding features is configurable -- `WIKI_ENCODERS` in
+`common.py`, or the `NGEC_WIKI_ENCODER` environment variable -- and its query-side
+instruction, if it has one, is applied to the story and the actor description
+only, never to the article text.
+
+**The ranker asset must be retrained whenever the feature set or the encoder
+changes** (`setup/train_wiki_model/train_wiki_model.py`). `_call_ranker` selects
+columns by name, so a new feature is simply ignored until then.
 """
 
+import gzip
 from importlib import resources
+import json
 import logging
+import math
 from pathlib import Path
 import re
 from typing import Literal
@@ -22,13 +55,246 @@ from textacy.preprocessing.remove import accents as remove_accents
 import torch
 from xgboost import XGBClassifier
 
-from .common import ModelManager, clean_query
+from .common import CountryDetector, ModelManager, clean_query
 
 # Constants
 THRESHOLD_NEURAL_TITLE_MATCH = 0.9
 THRESHOLD_COMBINED_SCORE = 9 
 
+# Words of two or more letters, lowercased. Shared by the IDF table builder
+# (setup/train_wiki_model/build_idf_table.py) and the runtime, so the two cannot drift.
+TFIDF_TOKEN_PATTERN = re.compile(r"[a-z]{2,}")
+
+# A capitalised word. Apostrophes and hyphens are kept ("Mugabe's", "Abu-Bakr").
+CAPITALIZED_WORD = re.compile(r"[A-Z][A-Za-z'\u2019\-]{2,}")
+
+# Punctuation that ends a sentence (or a bullet). A capitalised word right
+# after one of these is capitalised by grammar, not because it is a name.
+SENTENCE_BREAK = ".!?:;\u2022"
+
 logger = logging.getLogger(__name__)
+
+# Loaded once per process, on first use: see load_idf_table.
+_idf_table = None
+_country_detector = None
+
+
+def load_idf_table(path: str | Path | None = None) -> dict:
+    """
+    Inverse document frequencies for Wikipedia intro paragraphs.
+
+    A word like "footballer" says a lot about which article a mention belongs
+    to; a word like "years" says almost nothing. The IDF table records how rare
+    each word is across a 200,000-article sample of the index, so the ranker can
+    weight the overlap between a news story and a candidate article accordingly.
+    The table ships with the package (`ngec/assets/wiki_idf.json.gz`) and is
+    built by `setup/train_wiki_model/build_idf_table.py`.
+
+    The table is cached in a module-level variable, so the file is read at most
+    once per process.
+    """
+    global _idf_table
+    if _idf_table is None:
+        if path is None:
+            path = Path(str(resources.files("ngec"))) / "assets" / "wiki_idf.json.gz"
+        with gzip.open(path, "rt", encoding="utf-8") as f:
+            table = json.load(f)
+        _idf_table = table["idf"]
+        logger.debug(f"Loaded {len(_idf_table)} IDF weights from {path}")
+    return _idf_table
+
+
+def get_country_detector() -> CountryDetector:
+    """A shared CountryDetector, built on first use (it compiles ~1,000 regexes)."""
+    global _country_detector
+    if _country_detector is None:
+        _country_detector = CountryDetector()
+    return _country_detector
+
+
+def tfidf_vector(text: str, idf: dict) -> dict:
+    """
+    The L2-normalized TF-IDF vector of `text`, as a {word: weight} dict.
+
+    Sublinear term frequency (1 + log(count)), so a word repeated ten times in a
+    long news story does not swamp everything else. Words missing from the IDF
+    table (stop words, typos, rare names) are dropped.
+    """
+    counts = {}
+    for token in TFIDF_TOKEN_PATTERN.findall(text.lower()):
+        if token in idf:
+            counts[token] = counts.get(token, 0) + 1
+    weights = {word: (1 + math.log(count)) * idf[word] for word, count in counts.items()}
+    length = math.sqrt(sum(w * w for w in weights.values()))
+    if length == 0:
+        return {}
+    return {word: weight / length for word, weight in weights.items()}
+
+
+def tfidf_cosine(first: dict, second: dict) -> float:
+    """Cosine similarity of two vectors from `tfidf_vector` (already normalized)."""
+    if len(second) < len(first):
+        first, second = second, first
+    return float(sum(weight * second.get(word, 0.0) for word, weight in first.items()))
+
+
+def capitalized_words(text: str) -> set:
+    """
+    The distinct capitalised words in `text`, skipping the first word of each
+    sentence.
+
+    Shared capitalised words are a cheap stand-in for "these two texts are about
+    the same people and places": a news story about Ghana's election and the
+    Wikipedia article on Ghana's electoral commission will share "Accra",
+    "Mahama", "Ghana". Sentence-initial words are dropped because their capital
+    letter carries no such information.
+    """
+    if not text:
+        return set()
+    words = set()
+    for match in CAPITALIZED_WORD.finditer(text):
+        before = text[max(0, match.start() - 3):match.start()].strip()
+        if not before or before[-1] in SENTENCE_BREAK:
+            continue
+        words.add(match.group(0))
+    return words
+
+
+def country_phrase_variants(query_term: str, country: str) -> list[str]:
+    """
+    Title forms a country's institution is likely to be listed under.
+
+    News stories name institutions the way a reader would ("the defense
+    ministry"); Wikipedia names them the way a catalogue would ("Ministry of
+    Defence (Ghana)"). This builds the country-qualified strings to search for.
+    Returns an empty list if either argument is empty.
+
+    With query_term="electoral commission" and country="Ghana":
+
+    | rewrite                | result                              |
+    |------------------------|-------------------------------------|
+    | parenthetical          | electoral commission (Ghana)        |
+    | "of" form              | electoral commission of Ghana       |
+    | country first          | Ghana electoral commission          |
+
+    Two head-noun rewrites are added for institutions, because the country
+    forms above can never reach an inverted title on their own:
+
+    | rewrite                | example                                       |
+    |------------------------|-----------------------------------------------|
+    | "X ministry"           | defense ministry -> Ministry of defense,       |
+    |   / "X department"     |   Ministry of defense (Ghana),                 |
+    |                        |   Ministry of defense of Ghana                 |
+    | "central bank"         | central bank -> Bank of Ghana,                 |
+    |                        |   Central Bank of Ghana                        |
+
+    Finally, anything containing "defense"/"defence" is emitted in both
+    spellings, since Wikipedia uses whichever the country itself uses.
+
+    Capitalization does not matter: these strings are used in `match_phrase`
+    queries against analyzed (lowercased) fields.
+    """
+    if not query_term or not country:
+        return []
+
+    variants = [f"{query_term} ({country})",
+                f"{query_term} of {country}",
+                f"{country} {query_term}"]
+
+    # "defense ministry" -> "Ministry of defense" (+ its country forms)
+    head_noun = re.match(r"(.+?)\s+(ministry|department)\s*$", query_term, flags=re.IGNORECASE)
+    if head_noun:
+        modifier, head = head_noun.group(1), head_noun.group(2).capitalize()
+        inverted = f"{head} of {modifier}"
+        variants += [inverted, f"{inverted} ({country})", f"{inverted} of {country}"]
+
+    # "the central bank" is almost always titled after the country itself
+    if re.search(r"\bcentral bank\b", query_term, flags=re.IGNORECASE):
+        variants += [f"Bank of {country}", f"Central Bank of {country}"]
+
+    # British vs. American spelling of "defence"
+    for variant in list(variants):
+        if re.search(r"defen[sc]e", variant, flags=re.IGNORECASE):
+            variants.append(re.sub(r"defense", "defence", variant, flags=re.IGNORECASE))
+            variants.append(re.sub(r"defence", "defense", variant, flags=re.IGNORECASE))
+
+    # De-duplicate (case-insensitively) while keeping the order above
+    seen = set()
+    deduped = []
+    for variant in variants:
+        if variant.lower() not in seen:
+            seen.add(variant.lower())
+            deduped.append(variant)
+    return deduped
+
+
+def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results: int) -> list[dict]:
+    """
+    Merge two ranked lists of Wikipedia articles by interleaving them.
+
+    Takes the first article of each list, then the second of each, and so on,
+    skipping any title already taken. Interleaving (rather than appending)
+    keeps the merged list roughly sorted by "how highly did *some* query rank
+    this", which is what the downstream trim and ranker expect.
+
+    Args:
+        primary: results for the main query term, in rank order
+        alternate: results for the alternative query term, in rank order
+        max_results: cap on the length of the merged list
+
+    Returns:
+        list: the merged, de-duplicated, capped list of articles
+    """
+    merged = []
+    seen_titles = set()
+    for rank in range(max(len(primary), len(alternate))):
+        for results in (primary, alternate):
+            if rank < len(results):
+                article = results[rank]
+                if article['title'] not in seen_titles:
+                    seen_titles.add(article['title'])
+                    merged.append(article)
+    return merged[:max_results]
+
+
+
+def title_concept_features(title: str, intro_length: int, doc_country: str,
+                           detector: CountryDetector) -> tuple[int, int]:
+    """
+    Two flags for telling a *concept* page from an *institution* page.
+
+    When a story mentions "the interior ministry", Wikipedia offers both the
+    generic article `Interior ministry` (about the idea of interior ministries)
+    and the specific one, `Ministry of the Interior (Ghana)`. The generic page is
+    almost never the right answer, but it looks like a good match on every
+    string feature, so the ranker needs a way to see the difference.
+
+    Returns:
+        tuple: (title_is_generic_concept, title_has_other_country)
+
+        `title_is_generic_concept` is 1 when the title reads like a common noun:
+        no disambiguating parenthetical, nothing title-cased after the first
+        word, no country or demonym, and a short article behind it.
+
+        `title_has_other_country` is 1 when the title names a country and it is
+        not the country the story is about -- "Ministry of the Interior (Kenya)"
+        in a story about Ghana.
+    """
+    has_parenthetical = "(" in title
+    after_first_word = title.split(" ", 1)[1] if " " in title else ""
+    nothing_capitalized_after_first = after_first_word == after_first_word.lower()
+
+    country_in_title = detector.any_country_name.search(title)
+    has_country_word = bool(country_in_title) or bool(detector.any_demonym.search(title))
+
+    is_generic = int(not has_parenthetical
+                     and nothing_capitalized_after_first
+                     and not has_country_word
+                     and intro_length < 900)
+    has_other_country = int(bool(country_in_title) and bool(doc_country)
+                            and doc_country not in title)
+    return is_generic, has_other_country
+
 
 #######################################################
 # Wikipedia Client
@@ -89,8 +355,10 @@ class WikiClient:
             raise ValueError(f"Error checking Wikipedia index: {e}")
 
     def run_wiki_search(self, query_term, limit_term="", max_results=200,
+                        country="",
                         use_importance=False,
                         title_exact_boost=250,
+                        title_and_boost=120,
                         title_fuzzy_boost=50,
                         redirects_exact_boost=100,
                         redirects_fuzzy_boost=50,
@@ -98,28 +366,64 @@ class WikiClient:
                         alternative_names_fuzzy_boost=20,
                         short_desc_boost=10,
                         intro_para_boost=5,
+                        country_title_boost=200,
+                        country_redirects_boost=150,
                         ):
         """
-        Enhanced search with importance scoring compatible with ES 7.10.1
+        Search the Wikipedia index for `query_term`.
+
+        Args:
+            query_term: the (already cleaned) string to search for
+            limit_term: optional second term the article must also match
+            max_results: how many articles to return
+            country: the country *name* (e.g. "Ghana") the mention belongs to,
+                if known. Used to add country-qualified title clauses; see
+                `country_phrase_variants`. Passing "" is the old behavior.
+            use_importance: also boost articles by redirect count and by having
+                an infobox/short description
         """
 
-        # Base matching clauses
+        # Base matching clauses.
+        #
+        # The first four clauses are the "the query looks just like the title"
+        # clauses. They used to be `term` queries, which do not work here:
+        # `title`, `redirects` and `alternative_names` are analyzed `text`
+        # fields with no `.keyword` sub-field, so a `term` query only matches
+        # when the whole query is a single already-lowercase token. Measured on
+        # the 1,966-row wiki gold set, they fired on 0.4% of queries, i.e. the
+        # three highest boosts in the search were dead. `match_phrase` (all the
+        # query's tokens, in order) and `match ... operator: "and"` (all the
+        # tokens, any order) are the working equivalents.
         base_should_clauses = [
-            # Exact matches (highest priority)
-            {"term": {"title": {"value": query_term, "boost": title_exact_boost}}},
+            {"match_phrase": {"title": {"query": query_term, "boost": title_exact_boost}}},
+            {"match": {"title": {"query": query_term, "operator": "and", "boost": title_and_boost}}},
+            {"match_phrase": {"redirects": {"query": query_term, "boost": redirects_exact_boost}}},
+            {"match_phrase": {"alternative_names": {"query": query_term, "boost": alternative_names_boost}}},
+            # Looser bag-of-words matches
             {"match": {"title": {"query": query_term, "boost": title_fuzzy_boost}}},
             # Folded (ASCII-normalized + stemmed) title match
             {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
-            {"term": {"redirects": {"value": query_term, "boost": redirects_exact_boost}}},
             {"match": {"redirects": {"query": query_term, "boost": redirects_fuzzy_boost}}},
             # Folded redirects match (handles diacritics + plurals)
             {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
-            {"term": {"alternative_names": {"value": query_term, "boost": alternative_names_boost}}},
             {"match": {"alternative_names": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
             {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
             {"match": {"intro_para": {"query": query_term, "boost": intro_para_boost}}},
             {"match": {"short_desc": {"query": query_term, "boost": short_desc_boost}}}
         ]
+
+        # Country-qualified title clauses. News text says "the electoral
+        # commission"; Wikipedia says "Electoral Commission of Kenya". These
+        # clauses look for the country-qualified titles the mention implies.
+        # (Deliberately *not* a plain `match` of the country name against
+        # intro_para/short_desc: measured, that is the slowest clause in the
+        # set, buys no extra recall, and pads the candidate list for generic
+        # mentions that should have had no candidates at all.)
+        for phrase in country_phrase_variants(query_term, country):
+            base_should_clauses += [
+                {"match_phrase": {"title": {"query": phrase, "boost": country_title_boost}}},
+                {"match_phrase": {"redirects": {"query": phrase, "boost": country_redirects_boost}}},
+            ]
 
         if use_importance:
             # Boost articles by redirect count (proxy for Wikipedia importance)
@@ -222,28 +526,30 @@ class WikiSearcher:
             case _, _:
                 self.wiki_client = wiki_client
     
-    def search_wiki(self, query_term, limit_term="", max_results=200):
+    def search_wiki(self, query_term, limit_term="", max_results=200, country=""):
         """
         Search Wikipedia for a given query term.
-        
+
         Args:
             query_term: Term to search for
             limit_term: Term to limit results by
             max_results: Maximum number of results to return
-            fields: Fields to search in
-            
+            country: Country *name* (e.g. "Ghana") the mention belongs to, if
+                known. Adds country-qualified title clauses to the search.
+
         Returns:
             list: List of Wikipedia article dictionaries
         """
         # Clean query term
         query_term = clean_query(query_term)
         logger.debug(f"Using query term: '{query_term}'")
-        
+
         # Perform search via client
         return self.wiki_client.run_wiki_search(
             query_term=query_term,
             limit_term=limit_term,
             max_results=max_results,
+            country=country,
         )
 
     def text_ranker_features(self, matches, fields):
@@ -397,6 +703,7 @@ class WikiMatcher:
                  nlp=None,
                  actor_sim_model: None | str | Path=None, 
                  wiki_ranker_model: None | str | Path=None,
+                 ranker_threshold: float | None = None,
                  device=None,
                  ):
         """
@@ -406,6 +713,8 @@ class WikiMatcher:
             wiki_searcher: WikiSearcher instance
             trf_model: Sentence transformer model
             actor_sim_model: Actor similarity model
+            ranker_threshold: Minimum ranker probability to accept the top
+                candidate as the article; below it the mention gets no page
             device: Device to use for inference ('cuda' or None)
             wiki_sort_method: Method to use for sorting results
         """
@@ -414,9 +723,15 @@ class WikiMatcher:
             
         # Initialize models if not provided
         if trf_model is None:
-            self.trf = model_manager.load_trf_model()
+            self.trf = model_manager.load_wiki_encoder()
+            # Some encoders want an instruction prepended to the query side.
+            # See WIKI_ENCODERS in common.py.
+            self.query_prefix = model_manager.query_prefix
         else:
             self.trf = trf_model
+            # A caller who hands us a model directly has told us nothing about
+            # what prefix it wants, so use none.
+            self.query_prefix = ""
         
         if nlp is None:
             self.nlp = model_manager.load_spacy_lg()
@@ -428,10 +743,29 @@ class WikiMatcher:
             actor_sim_model = Path(str(resources.files("ngec"))) / "assets" / "actor_sim_model2"
         self.actor_sim = load_actor_sim_model(actor_sim_model)
 
-        # Wiki Ranker models (xgboost)
+        # Wiki Ranker models (xgboost). The ranker was trained on one encoder's
+        # similarity features, so pick the asset that matches the encoder in
+        # use; fall back to xgb_model.json (a copy of the default encoder's).
         if wiki_ranker_model is None:
-            wiki_ranker_model = Path(str(resources.files("ngec"))) / "assets" / 'xgb_model.json'
+            assets = Path(str(resources.files("ngec"))) / "assets"
+            asset_name = "xgb_model.json"
+            if trf_model is None and model_manager is not None:
+                asset_name = model_manager.encoder_settings.get("ranker_asset", asset_name)
+            wiki_ranker_model = assets / asset_name
+            if not wiki_ranker_model.exists():
+                logger.warning(f"No ranker asset {asset_name} for this encoder; using xgb_model.json")
+                wiki_ranker_model = assets / "xgb_model.json"
+        logger.info(f"Loading wiki ranker from {wiki_ranker_model}")
         self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(wiki_ranker_model)
+        # Minimum ranker probability for the top candidate to be accepted as
+        # the article. Encoder-specific (see WIKI_ENCODERS["ranker_threshold"]
+        # in common.py for the measured values); a caller may override it.
+        if ranker_threshold is None:
+            if trf_model is None and model_manager is not None:
+                ranker_threshold = model_manager.encoder_settings.get("ranker_threshold", 0.1)
+            else:
+                ranker_threshold = 0.1
+        self.ranker_threshold = ranker_threshold
 
         self.wiki_sort_method = wiki_sort_method
             
@@ -611,6 +945,16 @@ class WikiMatcher:
         # Prepare data for DataFrame
         data = []
 
+        # Things that depend on the document, not the candidate, so they are
+        # computed once here rather than once per candidate article.
+        detector = get_country_detector()
+        # The country the *story* is about, which is often not the country of
+        # the mention itself (and `country` below is frequently empty).
+        doc_country = detector.most_frequent_country(context) if context else ""
+        context_caps = capitalized_words(context)
+        context_tfidf = tfidf_vector(context, load_idf_table()) if context else {}
+        query_words_cased = set(re.findall(r"[A-Za-z'\u2019\-]{2,}", query_term))
+
         # Prepare basic matching scores (non-embedding based)
 
         for i, article in enumerate(articles):
@@ -656,6 +1000,31 @@ class WikiMatcher:
                     if any(w in context_lower for w in cat_words if len(w) > 3):
                         cat_overlap += 1
 
+            # Does the story's country show up in this candidate article? The
+            # existing `country_match` above asks the same question of the
+            # `country` the caller passed in, which in the pipeline is usually
+            # empty; these ask it of the country detected from the story itself.
+            categories = article.get('categories', [])
+            intro_para = article.get('intro_para', '')
+            short_desc = article.get('short_desc', '')
+            cm_doc = int(bool(doc_country)
+                         and (doc_country in intro_para or doc_country in short_desc))
+            cm_title = int(bool(doc_country) and doc_country in title)
+            cm_cat = int(bool(doc_country) and any(doc_country in c for c in categories))
+
+            # Word-level overlap between the story and the candidate's intro:
+            # rare words (TF-IDF) and shared names (capitalised words). Both are
+            # 0 when there is no context to compare against.
+            tfidf_ctx_intro = tfidf_cosine(context_tfidf,
+                                           tfidf_vector(intro_para, load_idf_table())) if context_tfidf else 0.0
+            intro_caps = capitalized_words(intro_para)
+            shared_caps = (intro_caps & context_caps) - query_words_cased
+            pn_overlap = len(shared_caps)
+            pn_overlap_frac = pn_overlap / len(intro_caps) if intro_caps else 0.0
+
+            is_generic_concept, has_other_country = title_concept_features(
+                title, intro_length, doc_country, detector)
+
             data.append({
                 'index': i,
                 'title': title,
@@ -672,6 +1041,16 @@ class WikiMatcher:
                 'num_es_results': results_count,
                 'intro_length': intro_length,
                 'country_match': country_match,
+                'cm_doc': cm_doc,
+                'cm_title': cm_title,
+                'cm_cat': cm_cat,
+                'tfidf_ctx_intro': tfidf_ctx_intro,
+                'pn_overlap': pn_overlap,
+                'pn_overlap_frac': pn_overlap_frac,
+                'n_categories': len(categories),
+                'title_is_generic_concept': is_generic_concept,
+                'title_has_other_country': has_other_country,
+                'from_alt_query': article.get('from_alt_query', 0),
                 'name_coverage': name_coverage,
                 'cat_overlap': cat_overlap,
                 'raw_es_score': article.get('raw_es_score', 0),
@@ -706,7 +1085,7 @@ class WikiMatcher:
             # Encode query once
             query_embedding = self.actor_sim.encode(query_term, show_progress_bar=False)
             # Encode all titles in one batch
-            title_embeddings = self.actor_sim.encode(titles, show_progress_bar=False)
+            title_embeddings = self.actor_sim.encode(titles, batch_size=8, show_progress_bar=False)
             # Compute similarities
             title_sims = cos_sim(query_embedding.reshape(1, -1), title_embeddings)
             # Add to dataframe
@@ -717,11 +1096,13 @@ class WikiMatcher:
             intros = [article['intro_para'][0:600] for article in articles]
             short_descs = [article['short_desc'] for article in articles]
             # Encode context once
-            intro_embeddings = self.trf.encode(intros, show_progress_bar=False)
-            short_desc_embeddings = self.trf.encode(short_descs, show_progress_bar=False)
+            intro_embeddings = self.trf.encode(intros, batch_size=8, show_progress_bar=False)
+            short_desc_embeddings = self.trf.encode(short_descs, batch_size=8, show_progress_bar=False)
         
         if context:
-            context_embedding = self.trf.encode(context, show_progress_bar=False)
+            # The prefix goes on the query side only: the article text is the
+            # "passage" and gets nothing.
+            context_embedding = self.trf.encode(self.query_prefix + context, show_progress_bar=False)
             # Compute similarities
             context_sims = cos_sim(context_embedding.reshape(1, -1), intro_embeddings)
             short_desc_sims = cos_sim(context_embedding.reshape(1, -1), short_desc_embeddings)
@@ -731,7 +1112,7 @@ class WikiMatcher:
 
         if actor_desc:
             # Encode actor description once
-            desc_embedding = self.trf.encode(actor_desc, show_progress_bar=False)
+            desc_embedding = self.trf.encode(self.query_prefix + actor_desc, show_progress_bar=False)
             # Compute similarities
             desc_sims_intro = cos_sim(desc_embedding.reshape(1, -1), intro_embeddings)
             desc_sims_short = cos_sim(desc_embedding.reshape(1, -1), short_desc_embeddings)
@@ -750,10 +1131,14 @@ class WikiMatcher:
         df['es_score_norm'] = (df['raw_es_score'] - es_min) / (es_max - es_min) if es_max > es_min else 0
 
         # Normalize scores
+        # The new country and overlap columns get `_norm` twins because their
+        # existing counterparts (`country_match`, `context_sim_intro`) have them.
         for col in ['title_sim', 'context_sim_intro', 'context_sim_short',
                     'actor_desc_sim_intro', 'actor_desc_sim_short',
                     'lcs', 'levenshtein', 'country_match', 'exact_title_match',
-                    'alt_name_match', 'redirect_match']:
+                    'alt_name_match', 'redirect_match',
+                    'cm_doc', 'cm_title', 'cm_cat',
+                    'tfidf_ctx_intro', 'pn_overlap']:
             col_norm, normed = self._normalize_scores(df, col)
             df[col_norm] = normed
 
@@ -775,8 +1160,19 @@ class WikiMatcher:
         return df
     
     def _normalize_scores(self, df, col):
+        """
+        Scale a column by its own maximum within this candidate set.
+
+        When every candidate scores 0 the division gives NaN, which XGBoost
+        treats as missing -- that is the intended behavior. It can also give
+        +/- infinity: a column whose maximum is exactly 0.0 but which has
+        negative entries below it (an encoder that maps an empty short
+        description to the zero vector produces exactly this). XGBoost refuses
+        infinite inputs outright, so those become NaN too.
+        """
         col_norm = f"{col}_norm"
-        return (col_norm, df[col] / df[col].max())
+        normed = df[col] / df[col].max()
+        return (col_norm, normed.replace([np.inf, -np.inf], np.nan))
 
     def _apply_selection_rules(self, df, articles, context):
         """
@@ -943,7 +1339,7 @@ class WikiMatcher:
     def _calculate_context_similarity(self, context, article):
         """Calculate similarity between context and article intro."""
         intro = article['intro_para'][0:200]
-        enc_context = self.trf.encode(context, show_progress_bar=False)
+        enc_context = self.trf.encode(self.query_prefix + context, show_progress_bar=False)
         enc_intro = self.trf.encode(intro, show_progress_bar=False)
         sims = cos_sim(enc_context, enc_intro)
         return float(sims[0][0])
@@ -972,7 +1368,7 @@ class WikiMatcher:
             y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
         score_df['ranker_score'] = y_proba
         score_df['is_max_for_task'] = (score_df['ranker_score'] == score_df['ranker_score'].max()).astype(int)
-        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > 0.1)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > self.ranker_threshold)
         pick = score_df[score_df['is_predicted_match'] == True]
         if not pick.empty:
             pick = pick.iloc[0].to_dict()
@@ -1115,6 +1511,24 @@ class WikiMatcher:
                 logger.debug(f"Using acronym expansion: {query_term}")
         return query_term
 
+    def _pick_alt_query_term(self, query_term, alt_query_terms):
+        """
+        Pick the first alternative surface form worth a second search.
+
+        "Worth a second search" means: it survives `clean_query` and, once
+        cleaned, is not the same string as the primary query term (comparing
+        the cleaned forms, since that is what actually gets sent to
+        Elasticsearch). Returns "" when there is nothing to add.
+        """
+        if not alt_query_terms:
+            return ""
+        primary = clean_query(query_term)
+        for term in alt_query_terms:
+            cleaned = clean_query(term)
+            if cleaned and cleaned != primary:
+                return cleaned
+        return ""
+
     def query_wiki(self,
                    query_term,
                    limit_term="",
@@ -1123,19 +1537,27 @@ class WikiMatcher:
                    actor_desc="",
                    method="neural",
                    max_results=200,
-                   skip_expansion=False):
+                   skip_expansion=False,
+                   alt_query_terms: list[str] | None = None):
         """
         Search Wikipedia and return the best matching article.
 
         Args:
             query_term: Term to search for
             limit_term: Term to limit results by
-            country: Country code to help with disambiguation
+            country: Country *name* (e.g. "Ghana") to help with disambiguation
             context: Context text to help with disambiguation
             actor_desc: Actor description (automatically parsed)
             max_results: Maximum results to return from search
             skip_expansion: If True, skip NER-based query expansion (use when
                 the caller already extracted the core entity via NER)
+            alt_query_terms: Other surface forms of the same mention (e.g. the
+                raw span before country-stripping, or the span before NER
+                expansion). The first one that differs from `query_term` is
+                searched as well and the two candidate lists are merged. One
+                extra Elasticsearch round trip buys about a point of recall,
+                because whichever surface form the article is titled under is
+                often not the one the pipeline settled on.
 
         Returns:
             dict or None: Best matching Wikipedia article or None if no good match
@@ -1143,19 +1565,43 @@ class WikiMatcher:
         if method not in ["neural", "rules"]:
             raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
         # Strip possessive suffix before searching
-        query_term = re.sub(r"[''']s\s*$", "", query_term).strip()
+        query_term = re.sub(r"['’]s\s*$", "", query_term).strip()
         # Do NER expansion unless caller already extracted a specific (multi-word) entity
         if context and not skip_expansion:
             logger.debug("Context present, so attempting NER expansion")
             query_term = self._expand_query(query_term, context)
 
-        # Try exact search first
-        logger.debug("Starting with exact search")
+        # A single search: run_wiki_search already combines exact (term) and
+        # fuzzy (match / folded) clauses, so there is no separate fuzzy mode
+        # to fall back to. An earlier version re-ran this identical search and
+        # re-embedded every candidate whenever pick_best_wiki returned None,
+        # doubling the cost of every failed lookup for no change in output.
+        logger.debug("Searching Wikipedia")
         results = self.wiki_searcher.search_wiki(
-            query_term, 
-            limit_term=limit_term, 
+            query_term,
+            limit_term=limit_term,
             max_results=max_results,
+            country=country,
         )
+        for article in results:
+            article['from_alt_query'] = 0
+
+        # Optional second search over another surface form of the same mention.
+        # The candidate's `raw_es_score` then comes from a different query and
+        # is not on the same scale as the primary query's scores, so we flag
+        # the candidates that came from it and let the ranker learn that.
+        alt_term = self._pick_alt_query_term(query_term, alt_query_terms)
+        if alt_term:
+            logger.debug(f"Also searching Wikipedia for alternative form '{alt_term}'")
+            alt_results = self.wiki_searcher.search_wiki(
+                alt_term,
+                limit_term=limit_term,
+                max_results=max_results,
+            )
+            for article in alt_results:
+                article['from_alt_query'] = 1
+            results = merge_ranked_results(results, alt_results, max_results)
+
         best = self.pick_best_wiki(
             query_term, 
             results, 
@@ -1164,25 +1610,6 @@ class WikiMatcher:
             actor_desc=actor_desc,
             wiki_sort_method=method
         )
-        if best:
-            return best
-            
-        # Fall back to fuzzy search
-        logger.debug("Falling back to fuzzy search")
-        results = self.wiki_searcher.search_wiki(
-            query_term, 
-            limit_term=limit_term, 
-            max_results=max_results
-        )
-        best = self.pick_best_wiki(
-            query_term, 
-            results, 
-            country=country, 
-            context=context,
-            actor_desc=actor_desc,
-            wiki_sort_method=method,
-        )
-       
         return best
 
 
