@@ -62,7 +62,7 @@ THRESHOLD_NEURAL_TITLE_MATCH = 0.9
 THRESHOLD_COMBINED_SCORE = 9 
 
 # Words of two or more letters, lowercased. Shared by the IDF table builder
-# (setup/wiki/build_idf_table.py) and the runtime, so the two cannot drift.
+# (setup/train_wiki_model/build_idf_table.py) and the runtime, so the two cannot drift.
 TFIDF_TOKEN_PATTERN = re.compile(r"[a-z]{2,}")
 
 # A capitalised word. Apostrophes and hyphens are kept ("Mugabe's", "Abu-Bakr").
@@ -88,7 +88,7 @@ def load_idf_table(path: str | Path | None = None) -> dict:
     each word is across a 200,000-article sample of the index, so the ranker can
     weight the overlap between a news story and a candidate article accordingly.
     The table ships with the package (`ngec/assets/wiki_idf.json.gz`) and is
-    built by `setup/wiki/build_idf_table.py`.
+    built by `setup/train_wiki_model/build_idf_table.py`.
 
     The table is cached in a module-level variable, so the file is read at most
     once per process.

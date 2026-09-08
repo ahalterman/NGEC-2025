@@ -13,8 +13,8 @@ re-running this against the same index gives the same table.
 
 Usage:
 
-    python setup/wiki/build_idf_table.py
-    python setup/wiki/build_idf_table.py --sample-size 50000 --output /tmp/idf.json.gz
+    python setup/train_wiki_model/build_idf_table.py
+    python setup/train_wiki_model/build_idf_table.py --sample-size 50000 --output /tmp/idf.json.gz
 
 Takes a few minutes for the default 200,000-article sample.
 """

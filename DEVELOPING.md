@@ -7,14 +7,20 @@ E.g. after dependencies have been added or removed.
 To sync the local venv using `uv` with all possible dependencies (and assuming the appropriate pytorch has been installed seperately if needed):
 
 ```shell
-uv sync --extra models --group dev --extra mlx
+uv sync --extra mlx
 ```
 
 Or on Linux with GPU and vLLM:
 
 ```shell
-uv sync --extra models --group dev --extra vllm
+uv sync --extra vllm
 ```
+
+The two spaCy models come with these: they are the `models` dependency group,
+which is a default group, so a bare `uv sync` installs them and no later sync
+prunes them. Note that dependency groups other than the default ones *are*
+pruned by the next sync, so keep `--group demo-app` / `--group es-build` on
+every sync once you are using them.
 
 ## Testing
 
@@ -58,6 +64,7 @@ uv run --with gguf --with safetensors --with sentencepiece python "$LLAMA_DIR"/c
     --outfile attr-exp5.1-bf16.gguf --outtype bf16
 
 llama-quantize attr-exp5.1-bf16.gguf attr-exp5.1-q8.gguf Q8_0
+rm attr-exp5.1-bf16.gguf
 ```
 
 (I installed llama.cpp with homebrew otherwise, did not build from the cloned

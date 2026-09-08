@@ -381,7 +381,7 @@ computed from strings already in hand:
 - **`tfidf_ctx_intro`** — TF-IDF cosine between the story and the candidate's
   intro paragraph, sublinear tf, weighted by `ngec/assets/wiki_idf.json.gz`.
   That table is a 200,000-article sample of the index with a fixed
-  `random_score` seed, built by `setup/wiki/build_idf_table.py`, capped at the
+  `random_score` seed, built by `setup/train_wiki_model/build_idf_table.py`, capped at the
   100,000 most widely-seen words. The builder imports its tokenizer from
   `wiki_matcher` so the asset and the runtime cannot drift.
 - **`pn_overlap`, `pn_overlap_frac`** — capitalised words shared between story

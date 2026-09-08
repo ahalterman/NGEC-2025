@@ -2,9 +2,10 @@ from copy import deepcopy
 import logging
 
 import numpy as np
-import spacy
 from spacy.tokens import Token
 from spacy.language import Language
+
+from .models import load_spacy
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -12,7 +13,7 @@ logger.addHandler(logging.NullHandler())
 
 def load_nlp():
     spacy_doc_setup()
-    nlp = spacy.load("en_core_web_trf")
+    nlp = load_spacy("en_core_web_trf")
     nlp.add_pipe("token_tensors")
     return nlp
 

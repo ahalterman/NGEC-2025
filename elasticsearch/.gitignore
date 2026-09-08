@@ -1,0 +1,16 @@
+# Elasticsearch data directory (the built indices -- tens of GB)
+data/
+
+# Wikipedia dump + the redirect dict built from it
+es_wiki/data/
+
+# GeoNames gazetteer downloads
+es_geonames/geonames_data/
+
+# tools/rebuild_index.sh bookkeeping: the resume checkpoint and the
+# before/after stats it diffs.
+.rebuild_state
+.rebuild_snapshots/
+
+# tools/publish_index.sh output: the tarball, its checksum, and the manifest.
+dist/

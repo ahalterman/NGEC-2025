@@ -323,7 +323,7 @@ Each of these changed a published or shipped result, or would have.
 - **Features:** the 40 existing plus `cm_doc`, `cm_title`, `cm_cat`,
   `tfidf_ctx_intro`, `pn_overlap`, `pn_overlap_frac`, `n_categories`,
   `title_is_generic_concept`, `title_has_other_country`, `from_alt_query`; IDF
-  table `ngec/assets/wiki_idf.json.gz` built by `setup/wiki/build_idf_table.py`.
+  table `ngec/assets/wiki_idf.json.gz` built by `setup/train_wiki_model/build_idf_table.py`.
 - **Encoders:** `WIKI_ENCODERS` registry in `common.py`; wiki encoder
   `sentence-transformers/static-retrieval-mrl-en-v1` (override with
   `NGEC_WIKI_ENCODER`), agent encoder `BAAI/bge-small-en-v1.5` at cosine 0.625
