@@ -1,5 +1,6 @@
 from collections import Counter
 from copy import deepcopy
+from importlib import resources
 import logging
 import re
 import time
@@ -19,15 +20,339 @@ logger.addHandler(logging.NullHandler())
 
 
 
-# Threshold constants
-THRESHOLD_HIGH_CONFIDENCE = 0.90
+# Threshold constants. The only confidence high enough to skip the Wikipedia
+# lookup on an agent match; see the policy comment in actor_to_code.
 THRESHOLD_VERY_HIGH_CONFIDENCE = 0.95
+THRESHOLD_CONFIDENT_NO_CONTEXT = 0.6  # agent match that settles a span when no context is given
+
+
+# Words that make a *single-token* NER core entity worthless as a search term.
+# spaCy will happily tag "House" in "House Judiciary" or "Fox" in "President
+# Fox" as the entity, and the pipeline then throws the rest of the span away
+# and searches Wikipedia for "House". These are the tokens that, on their own,
+# name nobody: articles and determiners, honorifics and job titles, and the
+# bare institution nouns that are meaningless without their qualifier.
+DEGENERATE_CORE_WORDS = (
+    # articles / determiners
+    "the", "a", "an", "this", "that", "these", "those", "his", "her", "its",
+    "their", "our", "some", "such",
+    # honorifics and job titles
+    "mr", "mrs", "ms", "dr", "sir", "president", "vice", "prime", "minister",
+    "secretary", "senator", "representative", "governor", "mayor", "chairman",
+    "chairwoman", "chief", "director", "commissioner", "ambassador", "general",
+    "colonel", "captain", "spokesman", "spokeswoman", "spokesperson", "leader",
+    "official", "officials", "head", "deputy", "acting", "former",
+    # bare institution nouns
+    "house", "senate", "congress", "parliament", "assembly", "ministry",
+    "department", "court", "council", "committee", "commission", "party",
+    "government", "administration", "state", "office", "authority", "agency",
+    "bureau", "bank", "force", "forces", "army", "navy", "police", "union",
+)
+
+
+# Head nouns (as spaCy lemmas) of spans that name a *category* of people
+# rather than an actor. The ontology wants a role code for these -- "police"
+# is COP, "protesters" is CVL -- and Wikipedia has nothing useful to add:
+# linking "police" to the article `Police`, or "residents" to `The Residents`,
+# is always wrong. Measured on a probe set of real VOA sentences, the linker
+# put a page on 61% of these.
+COLLECTIVE_HEAD_NOUNS = (
+    "police", "officer", "protester", "protestor", "demonstrator", "rioter",
+    "resident", "civilian", "villager", "worker", "student", "refugee",
+    "migrant", "soldier", "troop", "force", "gunman", "militant", "rebel",
+    "insurgent", "fighter", "activist", "supporter", "voter", "official",
+    "authority", "militia", "crowd", "mob", "youth", "farmer", "teacher",
+    "doctor", "journalist", "lawmaker", "attacker", "public",
+)
+
+# The same idea, but only when the span is nothing *but* one of these words.
+# "the government" is a role; "the Government Accountability Office" is a
+# thing with a Wikipedia page. Note that nationality stripping runs first, so
+# "the Nigerian Army" arrives here as "Army".
+COLLECTIVE_BARE_TERMS = (
+    "government", "opposition", "army", "military",
+)
+
+# Modifiers that turn a collective noun back into a named institution with a
+# page of its own: "police" is a role, "the national police" is
+# `National Police of Colombia`.
+INSTITUTIONAL_MODIFIERS = (
+    "national", "federal", "royal", "state", "supreme", "central",
+    "presidential", "republican",
+)
+
+# Head nouns of spans that name a *body*, not a category of people. A news
+# story writes "the interior ministry" or "the supreme court" and means one
+# specific institution in one specific country, which is exactly what the
+# Wikipedia linker is for: `Ministry of Home Affairs (Tanzania)`,
+# `Supreme Court of Kenya`. Matched on the surface form, not the lemma, so
+# that "authorities" stays a generic collective while "authority" (as in
+# "the Palestinian Authority") does not.
+INSTITUTION_HEAD_NOUNS = (
+    "ministry", "department", "court", "assembly", "parliament", "senate",
+    "congress", "legislature", "council", "commission", "committee", "agency",
+    "bureau", "authority", "bank", "party", "cabinet", "presidency", "office",
+)
+
+# These name an institution only when something says *whose*: "the national
+# police" is `National Police of Colombia`, but "police" on its own is a role.
+INSTITUTION_MODIFIED_HEAD_NOUNS = (
+    "police", "army", "forces", "guard",
+)
+
+
+# Spans that refer to people without naming them. A pronoun has no referent
+# to look up, and an indefinite phrase ("two men", "a group of men", "some
+# residents") names a quantity, not an actor; both used to be caught by the
+# loose confidence clauses in the old gate.
+PRONOUNS = (
+    "he", "she", "they", "them", "him", "her", "we", "us", "i", "me", "you",
+    "it", "someone", "somebody", "anyone", "anybody", "everyone", "everybody",
+    "nobody", "others",
+)
+
+# Words that open an indefinite phrase. Numbers are caught separately with
+# spaCy's like_num, which also handles digits.
+INDEFINITE_STARTERS = (
+    "a", "an", "some", "several", "many", "few", "both", "another", "other",
+    "dozens", "hundreds", "thousands",
+)
+
+# Collective synonyms that only ever appear bare: "cops", "two men", "people".
+UNLINKABLE_BARE_NOUNS = (
+    "cop", "cops", "man", "men", "woman", "women", "person", "people",
+    # adjectives used as collective nouns: "the displaced", "the wounded"
+    "displaced", "wounded", "injured", "dead", "missing", "homeless",
+    "unemployed", "poor",
+)
+
+
+def span_is_unlinkable_reference(doc):
+    """
+    Does this span refer to people without naming anyone?
+
+    Three cases, all of which the Wikipedia linker can only get wrong: a
+    pronoun ("he", "they"), an indefinite phrase whose head is a common noun
+    ("two men", "a group of men", "some residents"), and a bare collective
+    synonym ("cops", "people"). As with the collective filter, a span with a
+    PERSON/ORG/GPE/NORP entity, a capitalised word past the start, or an
+    institutional head noun is left alone.
+
+    Args:
+        doc: spaCy Doc of the span, after nationality stripping
+
+    Returns:
+        bool: True if the caller should skip the Wikipedia lookup
+    """
+    if any(e.label_ in ("PERSON", "ORG", "GPE", "NORP") for e in doc.ents):
+        return False
+    if span_names_an_institution(doc):
+        return False
+
+    words = [t for t in doc if t.is_alpha or t.like_num]
+    if not words:
+        return False
+    if words[0].lower_ in PRONOUNS:
+        return len(words) == 1
+    if any(t.text[0].isupper() for t in words[1:]):
+        return False
+
+    article = words[0].lower_ in ("the", "a", "an")
+    body = words[1:] if article else words
+    if not body:
+        return False
+
+    head = body[-1]
+    if len(body) == 1 and head.lower_ in UNLINKABLE_BARE_NOUNS:
+        return True
+    # A single lowercase word that is not a proper noun ("yesterday",
+    # "displaced") names nothing Wikipedia could have an article about.
+    if len(body) == 1 and head.text[:1].islower() and head.pos_ != "PROPN":
+        return True
+    # An indefinite phrase: "two men", "a group of men", "some residents".
+    opener = words[0]
+    if opener.like_num or opener.lower_ in INDEFINITE_STARTERS:
+        return head.pos_ == "NOUN" and head.text[:1].islower()
+    return False
+
+
+def span_names_an_institution(doc):
+    """
+    Does this span name an institution -- a ministry, a court, a parliament?
+
+    Args:
+        doc: spaCy Doc of the span, after nationality stripping
+
+    Returns:
+        bool: True if the span should reach the Wikipedia linker
+    """
+    words = [t for t in doc if t.is_alpha]
+    if words and words[0].lower_ in ("the", "a", "an"):
+        words = words[1:]
+    if not words:
+        return False
+
+    head = words[-1]
+    if head.lower_ in INSTITUTION_HEAD_NOUNS:
+        return True
+    if head.lower_ in INSTITUTION_MODIFIED_HEAD_NOUNS:
+        return any(t.lower_ in INSTITUTIONAL_MODIFIERS for t in words[:-1])
+    return False
+
+
+def span_is_generic_collective(doc):
+    """
+    Does this span name a category of people rather than a specific actor?
+
+    True when the span has no PERSON/ORG/GPE/NORP entity, its head noun is in
+    COLLECTIVE_HEAD_NOUNS (or the whole span is one of COLLECTIVE_BARE_TERMS),
+    and it carries no capitalised word other than its first. That last
+    condition is what separates "the security forces" from "Kenya Police":
+    a capitalised word past the start of the span is a name, and names are
+    what the Wikipedia linker is for.
+
+    Args:
+        doc: spaCy Doc of the span, after nationality stripping
+
+    Returns:
+        bool: True if the caller should skip the Wikipedia lookup
+    """
+    if any(e.label_ in ("PERSON", "ORG", "GPE", "NORP") for e in doc.ents):
+        return False
+    if span_names_an_institution(doc):
+        return False
+
+    words = [t for t in doc if t.is_alpha]
+    if not words:
+        return False
+    # Ignore a leading article so that "the Police" counts as a bare span
+    # while "Kenya Police" does not.
+    if words[0].lower_ in ("the", "a", "an"):
+        words = words[1:]
+    if not words:
+        return False
+    if any(t.text[0].isupper() for t in words[1:]):
+        return False
+    if any(t.lower_ in INSTITUTIONAL_MODIFIERS for t in words[:-1]):
+        return False
+
+    head = words[-1]
+    if head.lower_ in COLLECTIVE_BARE_TERMS or head.lemma_.lower() in COLLECTIVE_BARE_TERMS:
+        return len(words) == 1
+    return (head.lower_ in COLLECTIVE_HEAD_NOUNS
+            or head.lemma_.lower() in COLLECTIVE_HEAD_NOUNS)
+
+
+def span_looks_like_organisation(text):
+    """
+    Does this span look like the name of an organisation rather than a
+    nationality?
+
+    Used only for spans that `search_nat` swallows whole. "U.N.", "DPRK",
+    "UWSA" and "European Union" are all country *patterns* as far as
+    CountryDetector is concerned, but each is also an organisation with a
+    Wikipedia article; "Israeli" and "Iranian" are not. The test is an
+    internal capital or a period, which is what separates an acronym or a
+    multi-word proper name from a nationality adjective.
+
+    Args:
+        text: The raw actor span
+
+    Returns:
+        bool: True if the span is worth a Wikipedia lookup
+    """
+    text = text.strip()
+    if len(text) < 2:
+        return False
+    return "." in text or any(c.isupper() for c in text[1:])
+
+
+def core_query_is_degenerate(core_query, span):
+    """
+    Is the NER-extracted core entity a worse search term than the span itself?
+
+    Two ways it can be. Either the core is a single token that names nobody
+    ("the", "House", "President": see DEGENERATE_CORE_WORDS), or it throws away
+    more than half of the letters of an already-short span, which is what
+    happens when spaCy tags one word of a two-word name ("President Fox" ->
+    "Fox"). The length rule is restricted to spans of four words or fewer so
+    that it never fires on the case NER is there for: pulling "Pat Roberts"
+    out of "Republican Senator Pat Roberts of Kansas".
+
+    Args:
+        core_query: The entity text NER picked out of the span
+        span: The span it was picked out of (after nationality stripping)
+
+    Returns:
+        bool: True if the caller should search on `span` instead
+    """
+    core_letters = [c for c in core_query if c.isalpha()]
+    span_letters = [c for c in span if c.isalpha()]
+    if not core_letters:
+        return True
+
+    if len(core_query.split()) == 1 and core_query.strip(".,'").lower() in DEGENERATE_CORE_WORDS:
+        return True
+
+    short_span = len(span.split()) <= 4
+    dropped_most = len(core_letters) * 2 < len(span_letters)
+    return short_span and dropped_most
 
 
 
 #######################################################
 # Cache Management
 #######################################################
+
+def load_actor_priorities(priorities_file=None):
+    """
+    Load actor code priorities from a CSV asset.
+
+    The file lists one code per line as `code,priority,special`, with `#`
+    comments. Priorities are the final tie-break in
+    `CodeSelector.pick_best_code`; `special` marks codes that name a polity
+    rather than a role, which `clean_best` moves into the country field.
+
+    Pulling this out of the class lets a user supply priorities for their own
+    ontology, the same way `agents_file` supplies the patterns. The two go
+    together: a custom agents file emits codes that the default priority table
+    knows nothing about, so every one of them would otherwise tie at 0 and the
+    tie-break would fall through to source order.
+
+    Args:
+        priorities_file: path to a priorities CSV. None uses the PLOVER
+            priorities shipped in ngec.assets.
+
+    Returns:
+        (priorities, special_types): a dict of code -> int, and a list of codes
+        flagged special.
+    """
+    if priorities_file is None:
+        priorities_file = str(resources.files("ngec.assets") / "PLOVER_priorities.csv")
+
+    priorities = {}
+    special_types = []
+    with open(priorities_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 2:
+                logger.warning(f"Skipping malformed priorities line: {line!r}")
+                continue
+            code = parts[0]
+            try:
+                priorities[code] = int(parts[1])
+            except ValueError:
+                logger.warning(f"Skipping non-integer priority: {line!r}")
+                continue
+            if len(parts) > 2 and parts[2] not in ("", "0"):
+                special_types.append(code)
+
+    logger.debug(f"Loaded {len(priorities)} actor priorities from {priorities_file}")
+    return priorities, special_types
+
 
 class CacheManager:
     """
@@ -92,20 +417,10 @@ class WikiParser:
 
     # TODO #26: allow overriding assets/models
     
-    # Actor type priority dictionary - used for sorting/ranking actor codes
-    ACTOR_TYPE_PRIORITIES = {
-        "IGO": 200, "ISM": 195, "IMG": 192, "PRE": 190, "REB": 130,
-        "SPY": 110, "JUD": 105, "OPP": 102, "GOV": 100, "LEG": 90,
-        "MIL": 80, "COP": 75, "PRM": 72, "ELI": 70, "PTY": 65,
-        "BUS": 60, "UAF": 50, "CRM": 48, "LAB": 47, "MED": 45,
-        "NGO": 43, "SOC": 42, "EDU": 41, "JRN": 40, "ENV": 39,
-        "HRI": 38, "UNK": 37, "REF": 35, "AGR": 30, "RAD": 20,
-        "CVL": 10, "JEW": 5, "MUS": 5, "BUD": 5, "CHR": 5,
-        "HIN": 5, "REL": 1, "": 0, "JNK": 51, "NON": 60
-    }
-    
-    # Actor types that should be treated as countries themselves
-    SPECIAL_ACTOR_TYPES = ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]
+    # Actor priorities and special types live in ngec/assets/
+    # PLOVER_priorities.csv and are held by CodeSelector, which is the only
+    # class that consults them. This class previously carried an unused
+    # duplicate of both.
     
     def __init__(self, 
                  country_detector=None, 
@@ -144,26 +459,30 @@ class WikiParser:
             
         Returns:
             tuple: (term_start, term_end) as datetime objects or None
+
+        The dates come from English Wikipedia infoboxes, so the parser is told
+        the language. Without it, dateparser tries every locale it knows on
+        each string, which was 60 of the 65 ms per mention this function cost.
         """
         # Try to get term end date
         term_end = None
         try:
-            term_end = dateparser.parse(infobox[f"term_end{num}"])
+            term_end = dateparser.parse(infobox[f"term_end{num}"], languages=["en"])
         except KeyError:
             try:
                 # Sometimes no underscore is used
-                term_end = dateparser.parse(infobox[f"termend{num}"])
+                term_end = dateparser.parse(infobox[f"termend{num}"], languages=["en"])
             except KeyError:
                 pass
         
         # Try to get term start date
         term_start = None
         try:
-            term_start = dateparser.parse(infobox[f"term_start{num}"])
+            term_start = dateparser.parse(infobox[f"term_start{num}"], languages=["en"])
         except KeyError:
             try:
                 # Sometimes no underscore is used
-                term_start = dateparser.parse(infobox[f"termstart{num}"])
+                term_start = dateparser.parse(infobox[f"termstart{num}"], languages=["en"])
             except KeyError:
                 pass
                 
@@ -541,7 +860,9 @@ class CodeSelector:
         cleaned = selector.clean_best(best_code)
     """
     
-    # Actor type priority dictionary - used for sorting/ranking actor codes
+    # Fallback priorities, used only if the asset file cannot be read. The
+    # authoritative copy is ngec/assets/PLOVER_priorities.csv; see
+    # load_actor_priorities().
     ACTOR_TYPE_PRIORITIES = {
         "IGO": 200, "ISM": 195, "IMG": 192, "PRE": 190, "REB": 130,
         "SPY": 110, "JUD": 105, "OPP": 102, "GOV": 100, "LEG": 90,
@@ -555,7 +876,47 @@ class CodeSelector:
     
     # Actor types that should be treated as countries themselves
     SPECIAL_ACTOR_TYPES = ["IGO", "MNC", "NGO", "ISM", "EUR", "UNO"]
-    
+
+    # Evidence sources that win outright in pick_best_code(), checked before
+    # the priority tie-break. A source listed here short-circuits selection:
+    # if it produced a candidate, that candidate is returned with no
+    # comparison against the others. Kept as the default for backwards
+    # compatibility -- see the `override_sources` argument below.
+    DEFAULT_OVERRIDE_SOURCES = ("Wiki short description",)
+
+    def __init__(self, priorities_file=None, override_sources=None):
+        """
+        Args:
+            priorities_file: path to a priorities CSV in the format of
+                ngec/assets/PLOVER_priorities.csv. None loads the PLOVER
+                priorities. Supply this together with a custom `agents_file`
+                when coding into a different ontology, so the tie-break in
+                pick_best_code() knows how to rank the codes that file emits.
+            override_sources: evidence sources that win outright over every
+                other candidate, bypassing the priority tie-break. None keeps
+                the historical default, `("Wiki short description",)`. Pass an
+                empty sequence to disable the short-circuit entirely, so that
+                conflicts between the span-text match and the Wikipedia short
+                description are settled by `priorities_file` instead of by
+                source. That is usually what a custom ontology wants: the
+                short-circuit is only reached when the two sources disagree,
+                and it resolves every such disagreement in Wikipedia's favour.
+        """
+        try:
+            priorities, special = load_actor_priorities(priorities_file)
+        except (OSError, ValueError) as e:
+            if priorities_file is not None:
+                raise
+            logger.warning(f"Could not load priorities asset ({e}); "
+                           f"falling back to the built-in table.")
+            priorities, special = self.ACTOR_TYPE_PRIORITIES, self.SPECIAL_ACTOR_TYPES
+        self.actor_type_priorities = priorities
+        self.special_actor_types = special
+        self.override_sources = tuple(
+            self.DEFAULT_OVERRIDE_SOURCES if override_sources is None
+            else override_sources
+        )
+
     def _get_actor_priority(self, code_1):
         """
         Get priority value for an actor code.
@@ -566,7 +927,7 @@ class CodeSelector:
         Returns:
             int: Priority value
         """
-        return self.ACTOR_TYPE_PRIORITIES.get(code_1, 0)
+        return self.actor_type_priorities.get(code_1, 0)
 
     def pick_best_code(self, all_codes, country):
         """
@@ -696,18 +1057,34 @@ class CodeSelector:
                 best['wiki'] = wiki_title
             return best
                 
-        # 4. Check for short description
-        short_desc_codes = [c for c in code_sources if c['source'] == "Wiki short description"]
-        if short_desc_codes:
-            best = short_desc_codes[0]
+        # 4. Check for an overriding evidence source (by default, the
+        # Wikipedia short description). Steps 1-3 have already returned if the
+        # candidates agree, so this branch is reached only when sources
+        # conflict, and it resolves the conflict by source rather than by
+        # code. Configure with CodeSelector(override_sources=...); an empty
+        # sequence falls through to the priority tie-break in step 6.
+        override_codes = [c for c in code_sources
+                          if c['source'] in self.override_sources]
+        if override_codes:
+            best = override_codes[0]
             if best['code_1'] == "IGO":
                 best['country'] = "IGO"
             else:
                 best['country'] = best_country
-            best['best_reason'] = "Picking Wiki short description"
+            best['best_reason'] = f"Picking {best['source']}"
             return best
             
-        # 5. Check for pre-wiki lookup codes
+        # 5. Check for pre-wiki lookup codes.
+        #
+        # NOTE: this branch is currently dead. Nothing in the codebase assigns
+        # the source "BERT matching on non-entity text" any more, so the list
+        # is always empty and control falls through to the priority sort in
+        # step 6. It matters because step 4 above is now configurable: with
+        # override_sources=[], conflicts that used to be settled by step 4
+        # reach step 6. If this source is ever reinstated, those conflicts
+        # would silently start being settled here instead, under different
+        # semantics -- decide deliberately at that point which of the two
+        # should run first.
         pre_wiki_codes = [
             c for c in all_codes 
             if c.get('source') == "BERT matching on non-entity text" and c.get('country') and c.get('code_1')
@@ -785,7 +1162,7 @@ class CodeSelector:
             best['country'] = ""
             
         # Handle actor types that should be treated as countries
-        if best.get('code_1') in self.SPECIAL_ACTOR_TYPES:
+        if best.get('code_1') in self.special_actor_types:
             best['country'] = best['code_1']
             best['code_1'] = ""
             
@@ -827,6 +1204,9 @@ class ActorResolver:
                 wiki_sort_method="neural",
                 gpu=False,
                 es_client: None | Elasticsearch = None,
+                agents_file: None | str = None,
+                priorities_file: None | str = None,
+                override_sources: None | list | tuple = None,
                 ):
         """
         Initialize the ActorResolver with the necessary models and data.
@@ -836,6 +1216,23 @@ class ActorResolver:
             save_intermediate: Whether to save intermediate results
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
+            agents_file: Path to a custom PLOVER/CAMEO-format agents file. The
+                default None uses the PLOVER agents file shipped in
+                ngec.assets. A custom file lets a user code actors into their
+                own ontology without changing any code; the same matcher is
+                used both for the raw text and for Wikipedia short
+                descriptions, so a custom file applies to both paths.
+            priorities_file: Path to a custom actor-priority CSV, in the format
+                of ngec.assets/PLOVER_priorities.csv. The default None uses the
+                PLOVER priorities. Pass this whenever you pass a custom
+                agents_file: codes absent from the priority table all tie at 0,
+                so the tie-break in pick_best_code() silently degenerates to
+                source order.
+            override_sources: Evidence sources that win outright in
+                pick_best_code(), bypassing the priority tie-break. The default
+                None keeps the historical behaviour, in which a Wikipedia short
+                description beats the span-text match whenever the two
+                disagree. Pass `[]` to let priorities_file arbitrate instead.
         """
         # TODO: #26, make it possible to override models
         # This impacts all the other related classes here
@@ -855,6 +1252,7 @@ class ActorResolver:
         # Initialize agent matcher
         self.agent_matcher = AgentMatcher(
             self.trf, 
+            agents_file=agents_file,
             device=self.device, 
         )
         
@@ -872,11 +1270,30 @@ class ActorResolver:
         )
         
         # Initialize code selector
-        self.code_selector = CodeSelector()
+        self.code_selector = CodeSelector(priorities_file=priorities_file,
+                                          override_sources=override_sources)
         
         # Store configuration
         self.save_intermediate = save_intermediate
         self.wiki_sort_method = wiki_sort_method
+
+    def _country_from_context(self, text, context, window=200):
+        """
+        Return the country *name* mentioned nearest to `text` in `context`.
+
+        Looks at `window` characters on either side of the first occurrence
+        of the mention (or the first 2*window characters if the mention is not
+        found verbatim), mirroring how the wiki ranker's training data was
+        built. Returns "" if no country or nationality is mentioned.
+        """
+        mention = re.sub(r"\s+", " ", text).strip()
+        pos = context.find(mention)
+        if pos >= 0:
+            passage = context[max(0, pos - window): pos + len(mention) + window]
+        else:
+            passage = context[: 2 * window]
+        country, _ = self.country_detector.search_nat(passage, use_name=True)
+        return country or ""
 
     def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term="") -> dict | None:
         """
@@ -884,6 +1301,9 @@ class ActorResolver:
         
         Args:
             text: Text mention of the actor to resolve
+            doc: Unused, kept for signature compatibility. The span is parsed
+                below, after nationality stripping, which is the only parse
+                this function needs.
             context: Additional context to help with disambiguation
             query_date: Date to use when determining current offices
             known_country: Country code if already known
@@ -892,15 +1312,21 @@ class ActorResolver:
         Returns:
             dict or None: Actor code information or None if resolution fails
         """
-        # Check cache first
-        cache_key = text + "_" + str(query_date)
+        # Check cache first. The key includes the context and country because
+        # the same mention ("the Liberal Party") resolves differently in
+        # different documents; keying on the mention alone would return the
+        # first document's answer for every later one.
+        cache_key = "_".join([text, str(query_date), known_country,
+                              str(hash(context)) if context else ""])
         cached_result = self.cache_manager.get(cache_key)
         if cached_result:
             logger.debug("Returning from cache")
             return cached_result
         
-        if doc is None:
-            doc = self.nlp(text)
+        # NB: `doc` is not used. The span has to be re-parsed below anyway,
+        # after nationality stripping changes it, so parsing `text` here was
+        # a spaCy call per mention whose result was thrown away. The argument
+        # is kept because it is part of the public signature.
 
         # TODO: replace this with the new entity splitter
 
@@ -919,9 +1345,29 @@ class ActorResolver:
                 'actor_wiki_job': "",
                 "query": text
             }
+            # A span that search_nat swallows whole is usually a nationality
+            # ("Israeli"), but it can also be an organisation that happens to
+            # be one of the country patterns: "U.N.", "DPRK", "UWSA",
+            # "European Union". Those have Wikipedia articles, and returning
+            # here used to throw them away before retrieval even started, so
+            # look the organisation-like ones up and attach the page. The
+            # code itself stays country-only.
+            if span_looks_like_organisation(text):
+                logger.debug(f"Country-only span '{text}' looks like an organisation. Trying Wikipedia.")
+                if not known_country and context:
+                    known_country = self._country_from_context(text, context)
+                wiki = self.wiki_matcher.query_wiki(
+                    query_term=text,
+                    country=known_country,
+                    context=context,
+                    limit_term=search_limit_term
+                )
+                if wiki:
+                    logger.debug(f"Wikipedia page found for country-only span: {wiki['title']}")
+                    code_full_text['wiki'] = wiki['title']
             self.cache_manager.set(cache_key, code_full_text)
             return self.code_selector.clean_best(code_full_text)
-            
+
         # Parse entities in text
         # TODO: all of this probably goes away with the new entity splitter
         try:
@@ -934,33 +1380,86 @@ class ActorResolver:
         except IndexError:
             # Usually caused by a mismatch between token and embedding
             logger.info(f"Token alignment error on {trimmed_text}")
+            doc = None
             non_ent_text = trimmed_text
             token_level_ents = ['']
             ent_text = ""
             ents = []
             
         # Try direct matching first
+        code_full_text = None
         if trimmed_text:
             logger.debug(f"Trying direct matching on: {trimmed_text}")
             code_full_text = self.agent_matcher.trf_agent_match(trimmed_text, country=country)
-            
+
             if code_full_text:
                 logger.debug(f"Direct match found: {code_full_text}")
                 code_full_text['source'] = "BERT matching full text"
                 code_full_text['wiki'] = ""
                 code_full_text['actor_wiki_job'] = ""
-                
-                # Return without Wikipedia lookup in certain high-confidence cases
-                if (code_full_text['conf'] > 0.6 and not ents or
-                    code_full_text['conf'] > THRESHOLD_HIGH_CONFIDENCE and trimmed_text == trimmed_text.lower() or
-                    code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE):
-                    logger.debug("High confidence match. Skipping Wikipedia lookup.")
-                    code_full_text = self.code_selector.clean_best(code_full_text)
-                    self.cache_manager.set(cache_key, code_full_text)
-                    return code_full_text
             else:
                 logger.debug(f"No direct match found for {trimmed_text}")
-                
+
+        # The policy: a mention gets a role code and no Wikipedia page only if
+        # it names a category of people rather than an actor ("police",
+        # "protesters"), or if the agent matcher is nearly certain about a span
+        # that names nothing in particular. A generically-worded institution --
+        # "the interior ministry", "the supreme court", "the central bank" --
+        # names one body in one country and goes to the linker.
+        #
+        # This used to be three confidence clauses, and the two loosest ones
+        # swallowed almost every institution mention in the corpus: 164 of 173
+        # institution probes never reached the linker, because "the defence
+        # ministry" is lowercase, multi-word, and a very good agent match.
+        # Detect the country from the passage around the mention when the
+        # caller did not supply one, falling back to a country named in the
+        # span itself ("Norway's central bank"). The wiki ranker's
+        # country_match feature and the "Title (Country)" retrieval variants
+        # need it, and the gate below only sends a generically named
+        # institution to the linker when there is a country to disambiguate
+        # with: "the defence ministry" with no context has no right answer.
+        if not known_country and context:
+            known_country = self._country_from_context(text, context)
+            logger.debug(f"Country detected from context: {known_country!r}")
+        if not known_country and country:
+            known_country = self.country_detector.search_nat(text, use_name=True)[0] or ""
+
+        skip_wiki_reason = ""
+        if trimmed_text and doc is not None and span_is_generic_collective(doc):
+            skip_wiki_reason = "generic collective"
+        elif trimmed_text and doc is not None and span_is_unlinkable_reference(doc):
+            skip_wiki_reason = "unlinkable reference"
+        elif (code_full_text and doc is not None
+                and not ents
+                and not (span_names_an_institution(doc) and known_country)
+                and (code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
+                     # With no context and no country there is nothing to
+                     # disambiguate a title like "Defense Minister" with, so
+                     # a merely confident agent match settles it, as before.
+                     or (not context and not known_country
+                         and code_full_text['conf'] > THRESHOLD_CONFIDENT_NO_CONTEXT))):
+            skip_wiki_reason = "high-confidence agent match"
+
+        if skip_wiki_reason:
+            logger.debug(f"Skipping Wikipedia lookup for '{trimmed_text}': {skip_wiki_reason}")
+            if not code_full_text and not country:
+                # Nothing to return: no role code, no country, and no page.
+                self.cache_manager.set(cache_key, None)
+                return None
+            skipped_code = code_full_text if code_full_text else {
+                "country": country,
+                "code_1": "",
+                "code_2": "",
+                "query": trimmed_text,
+            }
+            if not code_full_text:
+                skipped_code['source'] = skip_wiki_reason
+            skipped_code['wiki'] = ""
+            skipped_code['actor_wiki_job'] = ""
+            skipped_code = self.code_selector.clean_best(skipped_code)
+            self.cache_manager.set(cache_key, skipped_code)
+            return skipped_code
+
         # Extract core entity and role from the span using NER
         # This handles noisy spans like "Republican Senator Pat Roberts of Kansas"
         # --> core_query="Pat Roberts", actor_desc="Republican Senator"
@@ -982,6 +1481,12 @@ class ActorResolver:
                 after = trimmed_text[best_ent.end_char:].strip().strip(',').strip()
                 desc_parts = [p for p in [before, after] if p]
                 actor_desc = ' '.join(desc_parts)
+        # Guard against NER handing back a core entity that is a worse query
+        # than the span it came from ("House Judiciary" -> "House").
+        if core_query != trimmed_text and core_query_is_degenerate(core_query, trimmed_text):
+            logger.debug(f"Core entity '{core_query}' is degenerate; searching on '{trimmed_text}' instead")
+            core_query = trimmed_text
+            actor_desc = ""
         if core_query != trimmed_text:
             logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
 
@@ -992,6 +1497,16 @@ class ActorResolver:
         # Sometimes they also should be expanded, but can also replace the correct name with something worse.
         # Just do allow expansion for single-word entities (e.g. okay to expand "Robertson", but will also expand "Hamas").
         ner_extracted_specific = (core_query != trimmed_text and len(core_query.split()) >= 2)
+        # The other surface forms of this same mention: the raw span, and the
+        # span after nationality stripping but before NER cut it down. The
+        # matcher searches the first one that differs from the main term and
+        # merges the two candidate lists, because the form the article is
+        # titled under is often not the one the pipeline settled on.
+        raw_span = re.sub(r"['’]s\s*$", "", text).strip()
+        alt_query_terms = []
+        for term in [raw_span, trimmed_text, core_query]:
+            if term and term != core_query and term not in alt_query_terms:
+                alt_query_terms.append(term)
         wiki = self.wiki_matcher.query_wiki(
             query_term=core_query,
             country=known_country,
@@ -999,6 +1514,7 @@ class ActorResolver:
             actor_desc=actor_desc,
             limit_term=search_limit_term,
             skip_expansion=ner_extracted_specific,
+            alt_query_terms=alt_query_terms,
         )
 
         if wiki:
@@ -1028,7 +1544,7 @@ class ActorResolver:
                 wiki_codes = self.wiki_parser.wiki_to_code(wiki, query_date)
                 
         # Combine all possible codes
-        code_full_text_list = [code_full_text] if 'code_full_text' in locals() and code_full_text else []
+        code_full_text_list = [code_full_text] if code_full_text else []
         all_codes = wiki_codes + code_full_text_list
         all_codes = [c for c in all_codes if c]
         
@@ -1109,7 +1625,20 @@ class ActorResolver:
                     if actor in exclude:
                         continue
 
-                    res = self.actor_to_code(actor, query_date=query_date)
+                    # Pass the story text as context: it drives NER-based query
+                    # expansion and the context-similarity features the wiki
+                    # ranker was trained with. The demo and the ECAV evaluation
+                    # already pass it; the pipeline path was silently omitting it.
+                    #
+                    # TODO: this re-parses the whole story with spaCy once per
+                    # mention. The parse happens in WikiMatcher._expand_query,
+                    # which is reached through query_wiki and has no way to
+                    # accept a pre-parsed document, so fixing it means adding a
+                    # doc argument there. A story with eight actor mentions is
+                    # parsed eight times.
+                    res = self.actor_to_code(actor,
+                                             context=event.get("event_text", ""),
+                                             query_date=query_date)
                     # actor_to_code can return None, this will break the code below
                     if res is None:
                         res = {}
