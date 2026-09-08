@@ -1,0 +1,1 @@
+{"type": "array", "items": {"type": "object", "properties": {"event_type": {"type": "string"}, "anchor_quote": {"type": "string"}, "actor": {"type": "string"}, "recipient": {"type": "string"}, "date": {"type": "string"}, "location": {"type": "string"}}, "required": ["event_type", "anchor_quote", "actor", "recipient", "date", "location"]}}
