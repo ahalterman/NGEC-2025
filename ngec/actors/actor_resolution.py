@@ -961,25 +961,66 @@ class ActorResolver:
             else:
                 logger.debug(f"No direct match found for {trimmed_text}")
                 
+        # Extract core entity and role from the span using NER
+        # This handles noisy spans like "Republican Senator Pat Roberts of Kansas"
+        # --> core_query="Pat Roberts", actor_desc="Republican Senator"
+        # Prefer PERSON over ORG (most queries are people)
+        # Use the longest match (NOT the first match as before: this caused problems).
+        core_query = trimmed_text
+        actor_desc = ""
+        if ents:
+            persons = [e for e in ents if e.label_ == 'PERSON']
+            orgs = [e for e in ents if e.label_ == 'ORG']
+            best_ent = None
+            for candidates in [persons, orgs]:
+                if candidates:
+                    best_ent = max(candidates, key=lambda e: len(e.text))
+                    break
+            if best_ent:
+                core_query = best_ent.text
+                before = trimmed_text[:best_ent.start_char].strip().strip(',').strip()
+                after = trimmed_text[best_ent.end_char:].strip().strip(',').strip()
+                desc_parts = [p for p in [before, after] if p]
+                actor_desc = ' '.join(desc_parts)
+        if core_query != trimmed_text:
+            logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
+
         # Try Wikipedia lookup for better resolution
-        logger.debug(f"Trying Wikipedia lookup with: {trimmed_text}")
+        logger.debug(f"Trying Wikipedia lookup with: {core_query}")
         wiki_codes = []
+        # Skip _expand_query when NER already extracted a specific multi-word entity.
+        # Sometimes they also should be expanded, but can also replace the correct name with something worse.
+        # Just do allow expansion for single-word entities (e.g. okay to expand "Robertson", but will also expand "Hamas").
+        ner_extracted_specific = (core_query != trimmed_text and len(core_query.split()) >= 2)
         wiki = self.wiki_matcher.query_wiki(
-            query_term=trimmed_text, 
-            country=known_country, 
+            query_term=core_query,
+            country=known_country,
             context=context,
-            limit_term=search_limit_term
+            actor_desc=actor_desc,
+            limit_term=search_limit_term,
+            skip_expansion=ner_extracted_specific,
         )
-        
+
         if wiki:
             logger.debug(f"Wikipedia page found: {wiki['title']}")
             wiki_codes = self.wiki_parser.wiki_to_code(wiki, query_date)
+        elif core_query != trimmed_text:
+            # Try with full text if core entity search failed
+            logger.debug(f"Core entity search failed. Trying full text: {trimmed_text}")
+            wiki = self.wiki_matcher.query_wiki(
+                query_term=trimmed_text,
+                country=known_country,
+                context=context,
+                limit_term=search_limit_term
+            )
+            if wiki:
+                wiki_codes = self.wiki_parser.wiki_to_code(wiki, query_date)
         elif ent_text:
             # Try again with just entity text if original lookup failed
             logger.debug(f"No wiki results. Trying with entity text: {ent_text}")
             wiki = self.wiki_matcher.query_wiki(
-                query_term=ent_text, 
-                country=known_country, 
+                query_term=ent_text,
+                country=known_country,
                 context=context,
                 limit_term=search_limit_term
             )
@@ -1028,13 +1069,14 @@ class ActorResolver:
         Examples:
             >>> input = [
                 {"pub_date": "2007-07-01",
-                 # attribute model output, but only minimal subset needed here
+                 # attribute model output: one event per record, 'attributes' is a dict
                  "attributes": {
-                    'actor': ['President Macron', 'Chancellor Angel Merkel'], 
-	                'recipient': ['N/A']
-                }},
+                    'actor': ['President Macron', 'Chancellor Angel Merkel'],
+                    'recipient': ['N/A']
+                 }},
             ]
             >>> ar.process(input)
+            # each event gains top-level 'actor' and 'recipient' (coded)
 
 
         """
@@ -1042,15 +1084,20 @@ class ActorResolver:
         event_list = deepcopy(event_list)
 
         for event in track(event_list, description="Resolving actors..."):
-            
+
             # Get the date from the event
             query_date = event.get('pub_date', "today")
 
+            # 'attributes' is a single dict (one event per record). .get() guards
+            # against a record with no attributes.
+            attributes = event.get("attributes", {})
+
             # We need to go through both 'actor' and 'recipient'
             for attribute_key in ["actor", "recipient"]:
-                actor_list = event["attributes"][attribute_key]
+                # .get(): the model may omit a key entirely
+                actor_list = attributes.get(attribute_key, [])
 
-                # We are going to put the resolved actor info back in the event,
+                # We put the resolved actor info at the top level of the event,
                 # under the relevant key ('actor' or 'recipient'); so basically
                 # moving one up from event["attributes"]
                 event[attribute_key] = []
@@ -1061,7 +1108,7 @@ class ActorResolver:
                     exclude = ["N/A"]
                     if actor in exclude:
                         continue
-                    
+
                     res = self.actor_to_code(actor, query_date=query_date)
                     # actor_to_code can return None, this will break the code below
                     if res is None:
@@ -1074,24 +1121,24 @@ class ActorResolver:
 
                     this_actor['wiki'] = res.get('wiki', "")
                     this_actor['actor_wiki_job'] = res.get('actor_wiki_job', "")
-                    
+
                     # Add code lists
                     this_actor['all_code1s'] = res.get('all_code1s', [])
                     this_actor['all_code2s'] = res.get('all_code2s', [])
-                    
+
                     # Add country and codes
                     this_actor['country'] = res.get('country', "")
                     this_actor['code_1'] = res.get('code_1', "")
                     this_actor['code_2'] = res.get('code_2', "")
-                    
+
                     # Add query and pattern information
                     this_actor['actor_role_query'] = res.get('query', "")
                     this_actor['actor_resolved_pattern'] = res.get('description', "")
-                    
+
                     # Add confidence and reason
                     this_actor['actor_pattern_conf'] = float(res.get('conf', 0))
                     this_actor['actor_resolution_reason'] = res.get('best_reason', "")
-                
+
                     # Other stuff
                     this_actor['description'] = res.get('description', "")
                     this_actor['source'] = res.get('source', "")
@@ -1185,7 +1232,7 @@ if __name__ == "__main__":
 
     es_client = setup_es_client()
 
-    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': 789, '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': [{'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}]}
+    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': '789_0', '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': {'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}}
     agent_matcher = AgentMatcher()
     actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
     #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}

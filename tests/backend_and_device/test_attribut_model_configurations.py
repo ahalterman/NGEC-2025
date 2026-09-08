@@ -43,6 +43,19 @@ def has_mps():
     return torch.backends.mps.is_available()
 
 
+def llamacpp_server_available(url="http://127.0.0.1:8080"):
+    """Check if a llama-server is reachable at the configured URL."""
+    import os
+    import urllib.request
+
+    url = os.environ.get("NGEC_LLAMACPP_URL", url)
+    try:
+        urllib.request.urlopen(f"{url}/health", timeout=2)
+        return True
+    except Exception:
+        return False
+
+
 VLLM_AVAILABLE = has_package("vllm")
 MLX_AVAILABLE = has_package("mlx")
 TRANSFORMERS_AVAILABLE = has_package("transformers")
@@ -90,3 +103,19 @@ def test_vllm_cpu(sample_attribute_model_input):
     am = AttributeModel(silent=True, gpu=False, backend="vllm")
     output = am.process(sample_attribute_model_input)
     assert output is not None
+
+
+def test_llamacpp(sample_attribute_model_input):
+    from ngec.attribute_model import AttributeModel
+
+    if not llamacpp_server_available():
+        pytest.skip("No llama-server reachable; set NGEC_LLAMACPP_URL or start one "
+                    "(see DEVELOPING.md).")
+
+    am = AttributeModel(silent=True, gpu=False, backend="llamacpp")
+    output = am.process(sample_attribute_model_input)
+
+    assert len(output) == 1
+    attributes = output[0]["attributes"]
+    assert attributes["event_type"]
+    assert isinstance(attributes["actor"], list)

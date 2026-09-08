@@ -6,10 +6,15 @@ import re
 import json
 import logging
 
+from collections import Counter
 from importlib import resources
 from tqdm import tqdm
-from transformers import AutoTokenizer, pipeline
+from transformers import AutoTokenizer
 from typing import Any, cast, Literal, TypedDict, NotRequired
+
+from .attributes.schema import ATTRIBUTE_SCHEMA, parse_response
+from .llm.base import Conversation, GenerationEngine
+from .utilities import explode_events
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +32,76 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 #   of input the AttributeModel expects and what kind of output it produces.
 #
 
-BackendType = Literal["vllm", "transformers", "mlx"]
+BackendType = Literal["vllm", "transformers", "mlx", "llamacpp"]
+
+# Which model to extract attributes with, and the prompt format it was trained
+# on. The two are not independent: a model produces markedly worse spans when
+# prompted in a format it never saw, and the difference is quiet — valid JSON
+# with worse contents, not an error. So they are chosen together here rather
+# than being two knobs a caller can mismatch.
+#
+#   legacy  the format `ahalt/event-attribute-extractor` was trained on:
+#           a terse system prompt, and a user message of
+#           `### Document: … ### Event: **TYPE**: …` with the sub-event and
+#           special instructions on their own `###` lines, then a closing
+#           "Extract the attributes…" instruction.
+#   v5      the format of the 2026 retraining (exp5.1): a system prompt that
+#           states the output format and the extraction rules, and a user
+#           message of `## Document: … ## Event Type: <whole definition>` with
+#           the sub-event and instructions inline in that definition, and no
+#           closing instruction. Reproduced from `eval_unified.py` in
+#           train_NGEC_2026, which is what produced that model's reported
+#           numbers.
+PromptFormat = Literal["legacy", "v5"]
+
+# ahalt/qwen3-event-extraction-exp5.1 is the 2026 retraining (see
+# setup/hf_release/) — ~18pp better than the original ahalt/event-attribute-extractor
+# on actor/location exact match. It replaced the original as the default once
+# uploaded; the original stays published under its own name since it is still a
+# valid (if worse) model and may be referenced elsewhere by that name.
+DEFAULT_MODEL = "ahalt/qwen3-event-extraction-exp5.1"
+
+# Models whose prompt format is known. A path or name that is not listed falls
+# back to "legacy" with a warning, because guessing silently is how a model ends
+# up being evaluated in a format it was never trained on.
+#
+# A Hugging Face id ("namespace/name") also resolves via the basename branch of
+# resolve_prompt_format below, since os.path.basename("ahalt/foo") == "foo" — so
+# "ahalt/qwen3-event-extraction-exp5.1" matches the local-directory-style key
+# "qwen3-event-extraction-exp5.1" without a separate entry. It is listed
+# explicitly anyway, so the mapping this actually depends on is visible here
+# rather than relying on that basename coincidence.
+KNOWN_PROMPT_FORMATS: dict[str, PromptFormat] = {
+    "ahalt/event-attribute-extractor": "legacy",
+    "ahalt/qwen3-event-extraction-exp5.1": "v5",
+    "qwen3-event-extraction-exp5.1": "v5",
+    "qwen3-event-extraction-exp5.2": "v5",
+}
+
+
+def resolve_prompt_format(model_name: str) -> PromptFormat:
+    """The prompt format a model was trained on, by name or directory name."""
+    if model_name in KNOWN_PROMPT_FORMATS:
+        return KNOWN_PROMPT_FORMATS[model_name]
+    # Local models are given as paths; match on the directory name.
+    basename = os.path.basename(str(model_name).rstrip("/"))
+    if basename in KNOWN_PROMPT_FORMATS:
+        return KNOWN_PROMPT_FORMATS[basename]
+    logger.warning(
+        f"Unknown attribute model '{model_name}'; assuming the 'legacy' prompt "
+        "format. If this model was trained on a different format, pass "
+        "prompt_format= explicitly — a mismatch degrades extraction quietly "
+        "rather than raising. Add it to KNOWN_PROMPT_FORMATS in attribute_model.py."
+    )
+    return "legacy"
 
 class Attributes(TypedDict):
     """
-    Dictionary representing extracted attributes for an event.
+    Dictionary representing the extracted attributes of a single event.
+
+    The model may extract more than one event from a document; each becomes its
+    own event record (via ``explode_events``) with one of these as its
+    ``attributes`` value.
     """
     event_type: str
     anchor_quote: str
@@ -56,19 +126,19 @@ class AttributeModelInput(TypedDict):
     event_text: str  # Required
     event_type: str  # Required
     event_mode: NotRequired[str]  # Optional
-    attributes: NotRequired[Attributes]  # Right now the code writes to the input list
+    attributes: NotRequired[Attributes]  # A single extracted event (after exploding)
     # Any other keys are allowed
 
 
-# The AM output writes attributes to the input list, so there is no distinction
-# between what is returned and what is input; maybe in the future it changes
+# Each output record carries a single 'attributes' dict. Note the output list is
+# NOT the same object as the input list: process() explodes multi-event records
+# and drops empty ones, so callers must use the returned list.
 class AttributeModelOutput(AttributeModelInput):
     """
     Dictionary representing output from AttributeModel processing.
 
-    The input list of dicts is augmented with an 'attributes' key for each
-    event.
-    
+    Each record has an 'attributes' key holding a single extracted event.
+
     """
     pass
 
@@ -115,7 +185,7 @@ OUTPUT FORMAT:
     "event_type": "EVENT_TYPE",
     "anchor_quote": "quote from text",
     "actor": "who performed action OR N/A",
-    "recipient": "who was targeted OR N/A", 
+    "recipient": "who was targeted OR N/A",
     "date": "when occurred OR N/A",
     "location": "where occurred OR N/A"
   }
@@ -124,7 +194,40 @@ OUTPUT FORMAT:
 Return valid JSON only. Empty array [] if no events."""
     return system_content_short
 
-def _load_vllm_sampling_params():
+
+def _make_system_content_v5():
+    """The system prompt the 2026 models were evaluated with.
+
+    Copied verbatim from `eval_unified.py::_make_prompt` in train_NGEC_2026 —
+    that script produced the model's reported numbers, so this string is part of
+    the measurement and should not be edited for style. It is longer than the
+    legacy prompt because the rules moved out of the training data and into the
+    prompt.
+    """
+    return """Given the event type definition below, find all instances of that event in the document and extract their attributes as JSON.
+
+OUTPUT FORMAT:
+[
+  {
+    "event_type": "EVENT_TYPE",
+    "anchor_quote": "exact 5-15 word quote from text",
+    "actor": "who performed action OR N/A",
+    "recipient": "who was targeted OR N/A",
+    "date": "when occurred OR N/A",
+    "location": "where occurred OR N/A"
+  }
+]
+
+RULES:
+- All values must be exact spans copied from the text. Do not rephrase.
+- ACTOR: The person, group, or entity who performed the action. Use N/A only if truly unknown/unstated. Descriptions like "gunman" or "suicide bomber" ARE valid actors.
+- LOCATION: Use the most specific named place (city > region > country).
+- Use short, concise spans. Omit articles (a/an/the) and unnecessary context.
+- Multiple values: separate with semicolons.
+- Return [] if no events of the specified type are present.
+- Follow any Special Instructions provided with the event type definition."""
+
+def _load_vllm_sampling_params(max_tokens=1024):
     """
     Load the sampling parameters for the vLLM model.
     """
@@ -140,7 +243,7 @@ def _load_vllm_sampling_params():
         presence_penalty=1.5,  # Recommended for quantized models
         min_p=0.0,
         #guided_decoding=guided_decoding_params, # Optionally, set a JSON schema for contrained decoding
-        max_tokens=1024,
+        max_tokens=max_tokens,
     )
     return sampling_params
 
@@ -157,7 +260,11 @@ class AttributeModel:
                  base_path=None,
                  max_gpu_memory=0.8,
                  vllm_model=None,
-                 backend: BackendType="vllm"
+                 backend: BackendType="vllm",
+                 llamacpp_url: str | None = None,
+                 model_name: str | None = None,
+                 prompt_format: PromptFormat | None = None,
+                 seed: int | None = None
                  ):
         """
         Initialize the attribute model
@@ -181,10 +288,38 @@ class AttributeModel:
         vllm_model : vllm.LLM, optional
             Pre-initialized vLLM model to use
         backend: BackendType="vllm"
-            Which backend to use: "vllm", "mlx", or "transformers"
+            Which backend to use: "vllm", "transformers", "mlx", or "llamacpp"
+        model_name : str, optional
+            A Hugging Face model name or a path to a local model directory.
+            Defaults to DEFAULT_MODEL, or to the NGEC_ATTRIBUTE_MODEL
+            environment variable if that is set. Note that the llamacpp backend
+            loads its weights from whatever `llama-server` was started with —
+            this only selects the tokenizer there, so the two have to be kept in
+            step by hand.
+        prompt_format : {"legacy", "v5"}, optional
+            The prompt format the model was trained on. Defaults to looking
+            `model_name` up in KNOWN_PROMPT_FORMATS. Only pass this for a model
+            that is not listed there; a mismatch does not raise, it just makes
+            the extractions worse.
+        seed : int, optional
+            Seed the sampler, making a run repeatable on one machine. Decoding
+            samples rather than being greedy (greedy decoding sends Qwen into
+            repetition loops), so an unseeded run can return a different span --
+            or N/A instead of a span -- for the same document. Useful for tests
+            and for reproducing a reported extraction; leave it unset otherwise.
+            Currently honoured only by backends that go through an engine.
         """
         self.silent=silent
         self.backend = backend
+        self.model_name = (model_name
+                           or os.environ.get("NGEC_ATTRIBUTE_MODEL")
+                           or DEFAULT_MODEL)
+        self.prompt_format: PromptFormat = (prompt_format
+                                            or resolve_prompt_format(self.model_name))
+        # The v5 models were evaluated with a 2048-token ceiling; the legacy one
+        # has always run at 1024. A document with many events can hit the lower
+        # limit, and a truncated response is dropped as unparseable JSON.
+        self.max_output_tokens = 2048 if self.prompt_format == "v5" else 1024
 
         if gpu:
             self.device="cuda"
@@ -193,6 +328,12 @@ class AttributeModel:
         if not self.silent:
             logger.info(f"Device: {self.device}")
             logger.info(f"Backend: {self.backend}")
+            logger.info(f"Model: {self.model_name} (prompt format: {self.prompt_format})")
+
+        # None until a backend has been ported to the engine interface; the
+        # others still generate through call_llm_batch(). process() branches on
+        # this, so it has to be set for every backend, not just the ported ones.
+        self.engine: GenerationEngine | None = None
 
         # Load model based on backend
         if self.backend == "vllm":
@@ -208,24 +349,26 @@ class AttributeModel:
             if vllm_model:
                 self.model = vllm_model
             else:
-                self.model = LLM(model="ahalt/event-attribute-extractor",
+                self.model = LLM(model=self.model_name,
                                  enable_prefix_caching=True,
                                  max_model_len=8000,
                                  gpu_memory_utilization=max_gpu_memory)
-            self.sampling_params = _load_vllm_sampling_params()
-            self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
+            self.sampling_params = _load_vllm_sampling_params(self.max_output_tokens)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         elif self.backend == "transformers":
-            if not self.silent: 
-                logger.debug("Loading transformers model")
-            # Use transformers pipeline
-            device_id = 0 if self.device == "cuda" else -1
-            self.model = pipeline(
-                "text-generation",
-                model="ahalt/event-attribute-extractor",
-                device=device_id,
-                torch_dtype="auto" if self.device == "cuda" else None,
+            from .llm import GenerationConfig
+            from .llm.transformers import TransformersEngine
+            self.engine = TransformersEngine(
+                model_name=self.model_name,
+                device=self.device,
+                config=GenerationConfig(max_tokens=self.max_output_tokens,
+                                        seed=seed),
+                silent=self.silent,
             )
-            self.tokenizer = AutoTokenizer.from_pretrained("ahalt/event-attribute-extractor")
+            # Keep the attribute alive for make_prompt() and the demo; delete when
+            # the last backend becomes an engine.
+            self.tokenizer = self.engine.tokenizer
+
         elif self.backend == "mlx":
             try:
                 from mlx_lm import load, generate
@@ -236,7 +379,7 @@ class AttributeModel:
             if not self.silent: 
                 logger.debug("Loading MLX model")
             # MLX doesn't use device parameter the same way as PyTorch
-            self.model, self.tokenizer = load("ahalt/event-attribute-extractor")
+            self.model, self.tokenizer = load(self.model_name)
             # Store the generate function and create sampler
             self.mlx_generate = generate
             self.sampler = make_sampler(
@@ -246,28 +389,81 @@ class AttributeModel:
                 min_p=0.0,          # minimum probability
                 min_tokens_to_keep=1,
             )
+        elif self.backend == "llamacpp":
+            # Talks to a running `llama-server` over HTTP rather than loading a
+            # model in-process. This is the fast path on CPU: the model is
+            # served quantized, which cuts the weight bytes that dominate
+            # decode. On an AVX2 desktop, Q8_0 measured ~4x faster per call than
+            # the transformers backend in float32, and the server's prompt cache
+            # also reuses the shared document prefix across the several event
+            # types extracted from one document.
+            #
+            # Start the server separately, e.g.
+            #   llama-server -m attr-q8.gguf --port 8080 -c 8192
+            # and point NGEC_LLAMACPP_URL at it. See DEVELOPING.md.
+            from .llm import GenerationConfig
+            from .llm.llamacpp import LlamaCppServerEngine
+            self.engine = LlamaCppServerEngine(
+                model_name=self.model_name,
+                url=llamacpp_url,
+                config=GenerationConfig(max_tokens=self.max_output_tokens,
+                                        seed=seed),
+                silent=self.silent,
+            )
+            # Keep the attribute alive for make_prompt() and the demo; delete when
+            # the last backend becomes an engine.
+            self.tokenizer = self.engine.tokenizer
         else:
-            raise ValueError(f"Unknown backend: {self.backend}. Must be 'vllm', 'transformers', or 'mlx'")
+            raise ValueError(
+                f"Unknown backend: {self.backend}. "
+                "Must be 'vllm', 'transformers', 'mlx', or 'llamacpp'"
+            )
 
         self.batch_size=batch_size
         self.save_intermediate=save_intermediate
-        self.system_prompt = _make_system_content_short()
+        self.system_prompt = (_make_system_content_v5()
+                              if self.prompt_format == "v5"
+                              else _make_system_content_short())
         if event_definitions_file is None:
             event_definitions_file = "PLOVER_structured_codebook_updated.csv"
         self.event_definitions = _load_event_definitions(event_definitions_file, base_path)
 
 
-    # TODO (customization): add informative errors if the question info is not available for a 
-    # event type or mode or whatever
+    # TODO (customization): add an informative error when a *mode* is missing
+    # from the definitions file, as is now done below for the event type.
     def _get_event_info(self, event):
         """
         Convert an event dict to a message for the model.
+
+        The definition normally comes from the event definitions file, looked up
+        by event type. A record may instead carry its own ``event_def`` (and
+        optionally ``mode_def`` and ``extraction_notes``), in which case no
+        lookup happens. That is the path for an event type outside the codebook:
+        the model reads a definition rather than recognising a fixed list of
+        labels, so a new event type needs a definition written for it, not a
+        retrained model. See the "event types the model has never seen" section
+        of the demo's attribute-extraction page.
         """
         mode_def = None
         extraction_notes = None
         doc = event['event_text']
         event_type = event['event_type']
+
+        if event.get('event_def'):
+            return (doc, event_type, event['event_def'],
+                    event.get('mode_def') or None,
+                    event.get('extraction_notes') or None)
+
         event_rows = self.event_definitions.loc[self.event_definitions['event'] == event_type]
+        if len(event_rows) == 0:
+            known = ", ".join(sorted(self.event_definitions['event'].unique()))
+            raise KeyError(
+                f"No definition for event type '{event_type}'. The definitions file "
+                f"loaded by this AttributeModel contains: {known}. Either point "
+                f"`event_definitions_file=` at a codebook that defines it, or give "
+                f"the record its own 'event_def' key (with optional 'mode_def' and "
+                f"'extraction_notes') and it will be used as-is."
+            )
         event_def = event_rows['event_def'].values[0]
         # Get mode definition and extraction notes if they exist
         if 'event_mode' in event:
@@ -296,6 +492,10 @@ class AttributeModel:
         ## Special Instructions: NOTE: Protests (including protests making requests) are coded under a separate PROTEST category. Protest DO NOT fall under this category.'
         """
 
+        if self.prompt_format == "v5":
+            return self._make_user_message_v5(doc, event, event_def, mode_def,
+                                              extraction_notes)
+
         user_message = f"### Document:\n\n{doc}\n\n"
         user_message += f"### Event: **{event}**: {event_def}\n"
         if mode_def:
@@ -306,24 +506,47 @@ class AttributeModel:
         user_message += "Extract the attributes of the given event in JSON format."
         return user_message
 
+    def _make_user_message_v5(self,
+                              doc,
+                              event,
+                              event_def,
+                              mode_def=None,
+                              extraction_notes=None):
+        """The user message the 2026 models were trained and evaluated with.
+
+        Two differences from the legacy format matter, and both are easy to
+        miss. The whole event definition — type, sub-event and special
+        instructions — is a single inline string after `## Event Type:`, not
+        three separate `###` sections; and there is no closing "Extract the
+        attributes" instruction, because the system prompt carries it.
+
+        The definition string is assembled to match the `event_def` field of the
+        v5 training data:
+
+            ## Event: **ACCUSE**: <definition> ## Specific Sub-Event: <mode>
+            ## Special Instructions: <notes>
+        """
+        definition = f"## Event: **{event}**: {event_def}"
+        if mode_def:
+            definition += f" ## Specific Sub-Event: {mode_def}"
+        if extraction_notes and not pd.isna(extraction_notes):
+            definition += f" ## Special Instructions: {extraction_notes}"
+        return f"## Document: {doc}\n\n## Event Type: {definition}"
+
+    def _build_conversation(self, event) -> Conversation:
+        doc, event_type, event_def, mode_def, notes = self._get_event_info(event)
+        return [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": self._make_user_message(
+                doc, event_type, event_def, mode_def, notes)},
+        ]
+
     def make_prompt(self, event):
-        doc, event_type, event_def, mode_def, event_specific_notes = self._get_event_info(event)
-        user_message = self._make_user_message(doc, 
-                                               event_type, 
-                                               event_def,
-                                               mode_def,
-                                               event_specific_notes)
-        messages = [
-                    {"role": "system", "content": self.system_prompt},
-                    {"role": "user", "content": user_message}
-                    ]
-        prompt = self.tokenizer.apply_chat_template(
-                    messages, 
-                    tokenize=False, 
-                    add_generation_prompt=True,
-                    enable_thinking=False
-                )
-        return prompt
+        """Templated prompt string. Legacy backends consume this; engines take
+        _build_conversation() and template internally."""
+        return self.tokenizer.apply_chat_template(
+            self._build_conversation(event),
+            tokenize=False, add_generation_prompt=True, enable_thinking=False)
     
     def call_llm_batch(self, prompts):
         if type(prompts) is not list:
@@ -334,22 +557,25 @@ class AttributeModel:
             outputs = self.model.generate(prompts, sampling_params=self.sampling_params)
             responses = [i.outputs[0].text.strip() for i in outputs]
         elif self.backend == "transformers":
-            # Transformers pipeline backend
-            responses = []
-            for prompt in prompts:
-                output = self.model(
-                    prompt,
-                    max_new_tokens=1024,
-                    temperature=0.5,
-                    top_p=0.8,
-                    top_k=20,
-                    do_sample=True,
-                    return_full_text=False,
-                    pad_token_id=self.tokenizer.eos_token_id,
-                )
-                # Extract the generated text
-                generated_text = output[0]["generated_text"].strip()
-                responses.append(generated_text)
+            # This backend generates through TransformersEngine now, so there is
+            # no self.model here to call. process() never reaches this branch;
+            # it exists to give a direct caller a real message instead of an
+            # AttributeError on a half-migrated object.
+            raise RuntimeError(
+                "The transformers backend generates through TransformersEngine, "
+                "not call_llm_batch(). Use process(), or "
+                "self.engine.generate([self._build_conversation(event)])."
+            )
+        elif self.backend == "llamacpp":
+            # This backend generates through LlamaCppServerEngine now, so there
+            # is no HTTP call here. process() never reaches this branch; it
+            # exists to give a direct caller a real message instead of an
+            # AttributeError on a half-migrated object.
+            raise RuntimeError(
+                "The llamacpp backend generates through LlamaCppServerEngine, "
+                "not call_llm_batch(). Use process(), or "
+                "self.engine.generate([self._build_conversation(event)])."
+            )
         elif self.backend == "mlx":
             # MLX backend
             responses = []
@@ -359,7 +585,7 @@ class AttributeModel:
                     model=self.model,
                     tokenizer=self.tokenizer,
                     prompt=prompt,
-                    max_tokens=1024,
+                    max_tokens=self.max_output_tokens,
                     sampler=self.sampler,
                     verbose=False,
                 )
@@ -408,10 +634,21 @@ class AttributeModel:
 
         Returns
         -----
-        event_list: list of dicts
-          Adds 'attributes', which looks like: {'ACTOR': [{'text': 'Mario Abdo Benítez', 'score': 0.19762}], 
-                                                'RECIP': [{'text': 'Fernando Lugo', 'score': 0.10433}], 
-                                                'LOC': [{'text': 'Paraguay', 'score': 0.24138}]}
+        event_list: list of dicts (a NEW list, not the input)
+          The model may extract zero, one, or several events from a single
+          document. Each extracted event becomes its own record (via
+          ``explode_events``) with a single 'attributes' dict:
+            {'event_type': 'PROTEST',
+             'anchor_quote': '...',
+             'actor': ['a group of Hindu nationalists'],
+             'recipient': ['Muslim shops'],
+             'date': ['last week'],
+             'location': ['Dehli']}
+          Records for which the model extracted no event are dropped from the
+          returned list (reported via a warning and written to a separate file),
+          so the output never contains empty-attribute junk. Because records are
+          exploded and dropped, the returned list is not the input list -- use
+          the return value.
         """
         # Step 1: further lengthen the data to generate separate elements
         # for each attribute/question, so we have unique (ID, event_cat, attribute) 
@@ -420,11 +657,35 @@ class AttributeModel:
         # Create a list of prompts
         if not self.silent: 
             print("Making prompts...")
-        prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
-        final_attributes = self.call_llm_batch(prompts)
+        if self.engine is not None:
+            conversations = [self._build_conversation(e)
+                            for e in tqdm(event_list, desc="Making prompts", disable=self.silent)]
+            schema = ATTRIBUTE_SCHEMA if self.engine.capabilities.schema else None
+            raw = self.engine.generate(conversations, schema=schema)
+            final_attributes = []
+            failures = []
+            for text in raw:
+                events, failure = parse_response(text)
+                if failure:
+                    failures.append(failure)
+                    logger.debug(f"Parse failure ({failure}): {text!r}")
+                final_attributes.append(events)
+            # Reported in aggregate at INFO, matching what call_llm_batch logs
+            # below: an unparseable response becomes a dropped event rather than
+            # an error, so the rate is the only sign that anything is wrong.
+            if failures:
+                reasons = ", ".join(f"{reason}: {count}" for reason, count
+                                    in Counter(failures).most_common())
+                logger.info(f"Number of parse failures: {len(failures)} of "
+                            f"{len(raw)} ({reasons})")
+        else:
+            prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
+            final_attributes = self.call_llm_batch(prompts)
 
-        # Post-processing (split the ; separated attributes into lists)
-
+        # Post-processing (split the ; separated attributes into lists).
+        # Redundant on the engine path -- parse_response has already split these
+        # -- but harmless, since the loop below re-strips a list unchanged.
+        # Delete it once the last backend generates through an engine.
 
         # Now, at the very end, put the results back into the event list.
         for n, i in enumerate(event_list):
@@ -438,8 +699,8 @@ class AttributeModel:
             #      'location': 'Dehli',
             #      'recipient': 'Muslim shops'}]
             #i['attributes'] = final_attributes[n]
-            for event in attributes:
-                for key, value in event.items():
+            for sub_event in attributes:
+                for key, value in sub_event.items():
                     if key in ['actor', 'date', 'recipient', 'location']:
                         # If the value is a string, split it by semicolon and strip whitespace
                         if isinstance(value, str):
@@ -449,22 +710,55 @@ class AttributeModel:
                             value = [v.strip() for v in value]
                         else:
                             continue
-                        # Update the event with the cleaned value
-                        event[key] = value
-            event_list[n]['attributes'] = attributes[0]
+                        # Update the sub-event with the cleaned value
+                        sub_event[key] = value
+            # Temporarily store the full list of extracted sub-events; explode_events
+            # (below) turns each into its own record with a single 'attributes' dict.
+            event_list[n]['attributes'] = attributes
+
+        # Lengthen the data so each extracted event is its own record, and set
+        # aside records where the model found no event (attributes == []).
+        event_list, dropped = explode_events(event_list)
+        if dropped:
+            self._report_dropped(dropped)
 
         if self.save_intermediate:
             fn = time.strftime("%Y_%m_%d-%H") + "_attribute_output.jsonl"
             with jsonlines.open(fn, "w") as f:
                 f.write_all(event_list)
 
-        # The way this works currently, process() mutates the input lists and 
-        # dicts, so technically there isn't really a need to return anything. 
-        # An alternative would be to explicitly copy the input and return a new
-        # list. Pros: probably more intuitive. Cons: more memory usage.
-        # Or, just return a list of attributes, but add a shared key to both
-        # the input list and output list to link them. 
         return cast(list[AttributeModelOutput], event_list)
+
+    def _report_dropped(self, dropped):
+        """
+        Report events the model produced no extraction for. These are kept OUT of
+        the main output (people are bad at filtering downstream, so we don't emit
+        empty-attribute junk), but we warn loudly about how many were dropped and
+        their event-type distribution.
+
+        The dropped records are also written to a JSONL file, but only under
+        ``save_intermediate`` -- the same switch the other components use for
+        their per-step debugging dumps. It used to be unconditional, which is
+        fine for a one-off corpus run and wrong for anything long-lived: an
+        interactive app coding a document per visitor accumulated one timestamped
+        file per interaction in its working directory.
+        """
+        distribution = Counter(event.get('event_type') for event in dropped)
+        dist_str = ", ".join(f"{event_type}: {count}"
+                             for event_type, count in distribution.most_common())
+        message = (f"Dropped {len(dropped)} event(s) with no extracted attributes and "
+                   f"excluded them from the main output. By event type: {dist_str}.")
+
+        if self.save_intermediate:
+            fn = time.strftime("%Y_%m_%d-%H%M%S") + "_dropped_events.jsonl"
+            with jsonlines.open(fn, "w") as f:
+                f.write_all(dropped)
+            message += f" The dropped events were written to {os.path.abspath(fn)}."
+        else:
+            message += (" Pass save_intermediate=True to write them to a "
+                        "*_dropped_events.jsonl file for inspection.")
+
+        logger.warning(message)
 
 
 if __name__ == "__main__":
@@ -510,15 +804,16 @@ if __name__ == "__main__":
     gc.collect()
 
 
-    #event_list[0]
-    #{'event_text': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
-    # 'id': 123, 
-    # '_doc_position': 0, 
-    # 'event_type': 'PROTEST', 
-    # 'event_mode': 'riot', 
-    # 'attributes': [{'event_type': 'PROTEST: Violent riot', 
-    #               'anchor_quote': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.', 
-    #               'actor': ['a group of Hindu nationalists'], 
-    #               'recipient': ['Muslim shops'], 
-    #               'date': ['last week'], 
-    #               'location': ['Dehli']}]}
+    # all_outputs[0]  (one record per extracted event; 'attributes' is a dict,
+    # and the id has an appended sub-event index)
+    #{'event_text': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.',
+    # 'id': '123_0',
+    # '_doc_position': 0,
+    # 'event_type': 'PROTEST',
+    # 'event_mode': 'riot',
+    # 'attributes': {'event_type': 'PROTEST: Violent riot',
+    #                'anchor_quote': 'A group of Hindu nationalists rioted in Dehli last week, burning Muslim shops.',
+    #                'actor': ['a group of Hindu nationalists'],
+    #                'recipient': ['Muslim shops'],
+    #                'date': ['last week'],
+    #                'location': ['Dehli']}}

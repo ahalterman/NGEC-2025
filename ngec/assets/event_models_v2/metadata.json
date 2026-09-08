@@ -1,0 +1,840 @@
+{
+  "encoder": "all-mpnet-base-v2",
+  "chunked": true,
+  "features": "chunked mean-pooled embeddings + L1-penalized tf-idf",
+  "annotation": "codebook-LLM (Sonnet) screen-then-verify over VOA articles",
+  "event_types": [
+    "ACCUSE",
+    "AGREE",
+    "AID",
+    "ASSAULT",
+    "COERCE",
+    "CONCEDE",
+    "CONSULT",
+    "COOPERATE",
+    "MOBILIZE",
+    "PROTEST",
+    "REJECT",
+    "REQUEST",
+    "RETREAT",
+    "SANCTION",
+    "SUPPORT",
+    "THREATEN"
+  ],
+  "metrics": {
+    "ACCUSE": {
+      "f1": 0.8134715025906736,
+      "precision": 0.839572192513369,
+      "recall": 0.7889447236180904,
+      "threshold": 0.6500000000000001,
+      "C": 10.0,
+      "n_labeled": 2123,
+      "n_positive": 992,
+      "n_features_selected": 685
+    },
+    "AGREE": {
+      "f1": 0.5954198473282443,
+      "precision": 0.5571428571428572,
+      "recall": 0.639344262295082,
+      "threshold": 0.6000000000000001,
+      "C": 1.0,
+      "n_labeled": 2137,
+      "n_positive": 303,
+      "n_features_selected": 79
+    },
+    "AID": {
+      "f1": 0.5319148936170213,
+      "precision": 0.5,
+      "recall": 0.5681818181818182,
+      "threshold": 0.6500000000000001,
+      "C": 1.0,
+      "n_labeled": 2142,
+      "n_positive": 221,
+      "n_features_selected": 86
+    },
+    "ASSAULT": {
+      "f1": 0.7937743190661478,
+      "precision": 0.7906976744186046,
+      "recall": 0.796875,
+      "threshold": 0.55,
+      "C": 10.0,
+      "n_labeled": 2137,
+      "n_positive": 639,
+      "n_features_selected": 454
+    },
+    "COERCE": {
+      "f1": 0.689922480620155,
+      "precision": 0.6357142857142857,
+      "recall": 0.7542372881355932,
+      "threshold": 0.5,
+      "C": 3.0,
+      "n_labeled": 2125,
+      "n_positive": 588,
+      "n_features_selected": 292
+    },
+    "CONCEDE": {
+      "f1": 0.43902439024390244,
+      "precision": 0.3333333333333333,
+      "recall": 0.6428571428571429,
+      "threshold": 0.5,
+      "C": 3.0,
+      "n_labeled": 2140,
+      "n_positive": 68,
+      "n_features_selected": 139
+    },
+    "CONSULT": {
+      "f1": 0.73224043715847,
+      "precision": 0.7052631578947368,
+      "recall": 0.7613636363636364,
+      "threshold": 0.55,
+      "C": 3.0,
+      "n_labeled": 2138,
+      "n_positive": 442,
+      "n_features_selected": 196
+    },
+    "COOPERATE": {
+      "f1": 0.5882352941176471,
+      "precision": 0.5128205128205128,
+      "recall": 0.6896551724137931,
+      "threshold": 0.7000000000000001,
+      "C": 1.0,
+      "n_labeled": 2145,
+      "n_positive": 145,
+      "n_features_selected": 84
+    },
+    "MOBILIZE": {
+      "f1": 0.647887323943662,
+      "precision": 0.7419354838709677,
+      "recall": 0.575,
+      "threshold": 0.7500000000000001,
+      "C": 3.0,
+      "n_labeled": 2145,
+      "n_positive": 199,
+      "n_features_selected": 205
+    },
+    "PROTEST": {
+      "f1": 0.8,
+      "precision": 0.8059701492537313,
+      "recall": 0.7941176470588235,
+      "threshold": 0.35000000000000003,
+      "C": 10.0,
+      "n_labeled": 2135,
+      "n_positive": 342,
+      "n_features_selected": 365
+    },
+    "REJECT": {
+      "f1": 0.5228758169934641,
+      "precision": 0.5,
+      "recall": 0.547945205479452,
+      "threshold": 0.6000000000000001,
+      "C": 1.0,
+      "n_labeled": 2138,
+      "n_positive": 364,
+      "n_features_selected": 73
+    },
+    "REQUEST": {
+      "f1": 0.7410071942446043,
+      "precision": 0.7152777777777778,
+      "recall": 0.7686567164179104,
+      "threshold": 0.5,
+      "C": 3.0,
+      "n_labeled": 2132,
+      "n_positive": 671,
+      "n_features_selected": 302
+    },
+    "RETREAT": {
+      "f1": 0.475,
+      "precision": 0.41304347826086957,
+      "recall": 0.5588235294117647,
+      "threshold": 0.5,
+      "C": 10.0,
+      "n_labeled": 2142,
+      "n_positive": 169,
+      "n_features_selected": 374
+    },
+    "SANCTION": {
+      "f1": 0.5494505494505495,
+      "precision": 0.6097560975609756,
+      "recall": 0.5,
+      "threshold": 0.7000000000000001,
+      "C": 1.0,
+      "n_labeled": 2133,
+      "n_positive": 250,
+      "n_features_selected": 73
+    },
+    "SUPPORT": {
+      "f1": 0.5913978494623656,
+      "precision": 0.4954954954954955,
+      "recall": 0.7333333333333333,
+      "threshold": 0.4,
+      "C": 3.0,
+      "n_labeled": 2104,
+      "n_positive": 373,
+      "n_features_selected": 291
+    },
+    "THREATEN": {
+      "f1": 0.5393258426966292,
+      "precision": 0.5217391304347826,
+      "recall": 0.5581395348837209,
+      "threshold": 0.6500000000000001,
+      "C": 1.0,
+      "n_labeled": 2141,
+      "n_positive": 216,
+      "n_features_selected": 113
+    }
+  },
+  "mode_metrics": {
+    "ACCUSE-disapprove": {
+      "f1": 0.6451612903225806,
+      "precision": 0.7142857142857143,
+      "recall": 0.5882352941176471,
+      "threshold": 0.7000000000000001,
+      "C": 10.0,
+      "n_labeled": 404,
+      "n_positive": 170
+    },
+    "ACCUSE-investigate": {
+      "f1": 0.6976744186046512,
+      "precision": 0.6,
+      "recall": 0.8333333333333334,
+      "threshold": 0.35000000000000003,
+      "C": 10.0,
+      "n_labeled": 404,
+      "n_positive": 92
+    },
+    "ACCUSE-allege": {
+      "f1": 0.8613138686131386,
+      "precision": 0.7662337662337663,
+      "recall": 0.9833333333333333,
+      "threshold": 0.1,
+      "C": 10.0,
+      "n_labeled": 404,
+      "n_positive": 298
+    },
+    "ASSAULT-abduct": {
+      "f1": 0.7,
+      "precision": 0.5833333333333334,
+      "recall": 0.875,
+      "threshold": 0.25,
+      "C": 10.0,
+      "n_labeled": 368,
+      "n_positive": 42
+    },
+    "ASSAULT-beat": {
+      "f1": 0.5517241379310345,
+      "precision": 0.4444444444444444,
+      "recall": 0.7272727272727273,
+      "threshold": 0.4,
+      "C": 3.0,
+      "n_labeled": 368,
+      "n_positive": 55
+    },
+    "ASSAULT-torture": {
+      "f1": 0.8,
+      "precision": 0.8,
+      "recall": 0.8,
+      "threshold": 0.45,
+      "C": 0.3,
+      "n_labeled": 368,
+      "n_positive": 23
+    },
+    "ASSAULT-sexual": {
+      "f1": 0.9767441860465116,
+      "precision": 1.0,
+      "recall": 0.9545454545454546,
+      "threshold": 0.4,
+      "C": 1.0,
+      "n_labeled": 368,
+      "n_positive": 111
+    },
+    "ASSAULT-assassinate": {
+      "f1": 0.4,
+      "precision": 0.2857142857142857,
+      "recall": 0.6666666666666666,
+      "threshold": 0.25,
+      "C": 10.0,
+      "n_labeled": 368,
+      "n_positive": 30
+    },
+    "ASSAULT-destroy": {
+      "f1": 0.4,
+      "precision": 0.2727272727272727,
+      "recall": 0.75,
+      "threshold": 0.45,
+      "C": 3.0,
+      "n_labeled": 368,
+      "n_positive": 40
+    },
+    "ASSAULT-primitive": {
+      "f1": 0.43478260869565216,
+      "precision": 0.3333333333333333,
+      "recall": 0.625,
+      "threshold": 0.45,
+      "C": 3.0,
+      "n_labeled": 368,
+      "n_positive": 38
+    },
+    "ASSAULT-firearms": {
+      "f1": 0.7368421052631579,
+      "precision": 0.7,
+      "recall": 0.7777777777777778,
+      "threshold": 0.6000000000000001,
+      "C": 10.0,
+      "n_labeled": 368,
+      "n_positive": 90
+    },
+    "ASSAULT-explosives": {
+      "f1": 0.6153846153846154,
+      "precision": 0.8,
+      "recall": 0.5,
+      "threshold": 0.6000000000000001,
+      "C": 3.0,
+      "n_labeled": 368,
+      "n_positive": 42
+    },
+    "ASSAULT-suicide-attack": {
+      "f1": 0.8,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "threshold": 0.6000000000000001,
+      "C": 1.0,
+      "n_labeled": 368,
+      "n_positive": 17
+    },
+    "ASSAULT-aerial": {
+      "f1": 0.75,
+      "precision": 1.0,
+      "recall": 0.6,
+      "threshold": 0.6000000000000001,
+      "C": 10.0,
+      "n_labeled": 368,
+      "n_positive": 27
+    },
+    "ASSAULT-heavy-weapons": {
+      "f1": 0.5882352941176471,
+      "precision": 0.5,
+      "recall": 0.7142857142857143,
+      "threshold": 0.5,
+      "C": 10.0,
+      "n_labeled": 368,
+      "n_positive": 36
+    },
+    "ASSAULT-crowd-control": {
+      "f1": 0.8888888888888888,
+      "precision": 1.0,
+      "recall": 0.8,
+      "threshold": 0.6500000000000001,
+      "C": 3.0,
+      "n_labeled": 368,
+      "n_positive": 23
+    },
+    "ASSAULT-massacre": {
+      "f1": 0.5909090909090909,
+      "precision": 0.5,
+      "recall": 0.7222222222222222,
+      "threshold": 0.3,
+      "C": 10.0,
+      "n_labeled": 368,
+      "n_positive": 90
+    },
+    "COERCE-seize": {
+      "f1": 0.3333333333333333,
+      "precision": 1.0,
+      "recall": 0.2,
+      "threshold": 0.7000000000000001,
+      "C": 1.0,
+      "n_labeled": 315,
+      "n_positive": 23
+    },
+    "COERCE-restrict": {
+      "f1": 0.6938775510204082,
+      "precision": 0.6296296296296297,
+      "recall": 0.7727272727272727,
+      "threshold": 0.5,
+      "C": 3.0,
+      "n_labeled": 315,
+      "n_positive": 110
+    },
+    "COERCE-ban": {
+      "f1": 0.8,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "threshold": 0.6000000000000001,
+      "C": 3.0,
+      "n_labeled": 315,
+      "n_positive": 43
+    },
+    "COERCE-censor": {
+      "f1": 0.6666666666666666,
+      "precision": 0.6666666666666666,
+      "recall": 0.6666666666666666,
+      "threshold": 0.25,
+      "C": 10.0,
+      "n_labeled": 315,
+      "n_positive": 31
+    },
+    "COERCE-curfew": {
+      "f1": 0.6,
+      "precision": 0.5,
+      "recall": 0.75,
+      "threshold": 0.45,
+      "C": 3.0,
+      "n_labeled": 315,
+      "n_positive": 21
+    },
+    "COERCE-arrest": {
+      "f1": 0.8333333333333334,
+      "precision": 0.7692307692307693,
+      "recall": 0.9090909090909091,
+      "threshold": 0.25,
+      "C": 10.0,
+      "n_labeled": 315,
+      "n_positive": 167
+    },
+    "COERCE-deport": {
+      "f1": 0.4,
+      "precision": 1.0,
+      "recall": 0.25,
+      "threshold": 0.7500000000000001,
+      "C": 1.0,
+      "n_labeled": 315,
+      "n_positive": 18
+    },
+    "COERCE-withhold": {
+      "f1": 0.5,
+      "precision": 0.6666666666666666,
+      "recall": 0.4,
+      "threshold": 0.8,
+      "C": 3.0,
+      "n_labeled": 315,
+      "n_positive": 25
+    },
+    "COERCE-cyber": {
+      "f1": 0.5,
+      "precision": 1.0,
+      "recall": 0.3333333333333333,
+      "threshold": 0.7000000000000001,
+      "C": 3.0,
+      "n_labeled": 315,
+      "n_positive": 13
+    },
+    "CONSULT-visit": {
+      "f1": 0.7761194029850746,
+      "precision": 0.8387096774193549,
+      "recall": 0.7222222222222222,
+      "threshold": 0.55,
+      "C": 10.0,
+      "n_labeled": 356,
+      "n_positive": 180
+    },
+    "CONSULT-third-party": {
+      "f1": 0.7272727272727273,
+      "precision": 0.6666666666666666,
+      "recall": 0.8,
+      "threshold": 0.3,
+      "C": 10.0,
+      "n_labeled": 356,
+      "n_positive": 49
+    },
+    "CONSULT-multilateral": {
+      "f1": 0.7878787878787878,
+      "precision": 0.7027027027027027,
+      "recall": 0.896551724137931,
+      "threshold": 0.4,
+      "C": 3.0,
+      "n_labeled": 356,
+      "n_positive": 144
+    },
+    "CONSULT-phone": {
+      "f1": 0.625,
+      "precision": 0.5555555555555556,
+      "recall": 0.7142857142857143,
+      "threshold": 0.5,
+      "C": 3.0,
+      "n_labeled": 356,
+      "n_positive": 33
+    },
+    "MOBILIZE-troops": {
+      "f1": 0.8787878787878788,
+      "precision": 0.8055555555555556,
+      "recall": 0.9666666666666667,
+      "threshold": 0.35000000000000003,
+      "C": 3.0,
+      "n_labeled": 199,
+      "n_positive": 151
+    },
+    "MOBILIZE-weapons": {
+      "f1": 0.7857142857142857,
+      "precision": 0.6470588235294118,
+      "recall": 1.0,
+      "threshold": 0.45,
+      "C": 3.0,
+      "n_labeled": 199,
+      "n_positive": 55
+    },
+    "MOBILIZE-police": {
+      "f1": 0.6666666666666666,
+      "precision": 0.5454545454545454,
+      "recall": 0.8571428571428571,
+      "threshold": 0.25,
+      "C": 10.0,
+      "n_labeled": 199,
+      "n_positive": 34
+    },
+    "PROTEST-demo": {
+      "f1": 0.9107142857142857,
+      "precision": 0.8793103448275862,
+      "recall": 0.9444444444444444,
+      "threshold": 0.45,
+      "C": 1.0,
+      "n_labeled": 342,
+      "n_positive": 266
+    },
+    "PROTEST-riot": {
+      "f1": 0.8169014084507042,
+      "precision": 0.7435897435897436,
+      "recall": 0.90625,
+      "threshold": 0.35000000000000003,
+      "C": 3.0,
+      "n_labeled": 342,
+      "n_positive": 159
+    },
+    "PROTEST-strike": {
+      "f1": 0.8,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "threshold": 0.55,
+      "C": 0.3,
+      "n_labeled": 342,
+      "n_positive": 30
+    },
+    "PROTEST-obstruct": {
+      "f1": 0.6428571428571429,
+      "precision": 0.5625,
+      "recall": 0.75,
+      "threshold": 0.4,
+      "C": 10.0,
+      "n_labeled": 342,
+      "n_positive": 60
+    },
+    "REJECT-assist": {
+      "f1": 0.375,
+      "precision": 0.3,
+      "recall": 0.5,
+      "threshold": 0.4,
+      "C": 3.0,
+      "n_labeled": 198,
+      "n_positive": 32
+    },
+    "REJECT-change": {
+      "f1": 0.6285714285714286,
+      "precision": 0.4782608695652174,
+      "recall": 0.9166666666666666,
+      "threshold": 0.45,
+      "C": 3.0,
+      "n_labeled": 198,
+      "n_positive": 59
+    },
+    "REJECT-meet": {
+      "f1": 0.5333333333333333,
+      "precision": 0.5714285714285714,
+      "recall": 0.5,
+      "threshold": 0.6000000000000001,
+      "C": 10.0,
+      "n_labeled": 198,
+      "n_positive": 42
+    },
+    "REQUEST-assist": {
+      "f1": 0.6666666666666666,
+      "precision": 1.0,
+      "recall": 0.5,
+      "threshold": 0.8,
+      "C": 10.0,
+      "n_labeled": 325,
+      "n_positive": 12
+    },
+    "REQUEST-change": {
+      "f1": 0.8,
+      "precision": 0.6666666666666666,
+      "recall": 1.0,
+      "threshold": 0.45,
+      "C": 1.0,
+      "n_labeled": 325,
+      "n_positive": 198
+    },
+    "REQUEST-yield": {
+      "f1": 0.8,
+      "precision": 0.8,
+      "recall": 0.8,
+      "threshold": 0.55,
+      "C": 1.0,
+      "n_labeled": 325,
+      "n_positive": 26
+    },
+    "REQUEST-meet": {
+      "f1": 0.3333333333333333,
+      "precision": 1.0,
+      "recall": 0.2,
+      "threshold": 0.7500000000000001,
+      "C": 3.0,
+      "n_labeled": 325,
+      "n_positive": 23
+    },
+    "RETREAT-withdraw": {
+      "f1": 0.8571428571428571,
+      "precision": 0.9,
+      "recall": 0.8181818181818182,
+      "threshold": 0.6500000000000001,
+      "C": 10.0,
+      "n_labeled": 169,
+      "n_positive": 53
+    },
+    "RETREAT-release": {
+      "f1": 0.782608695652174,
+      "precision": 0.6923076923076923,
+      "recall": 0.9,
+      "threshold": 0.45,
+      "C": 3.0,
+      "n_labeled": 169,
+      "n_positive": 50
+    },
+    "RETREAT-ceasefire": {
+      "f1": 0.8,
+      "precision": 1.0,
+      "recall": 0.6666666666666666,
+      "threshold": 0.5,
+      "C": 1.0,
+      "n_labeled": 169,
+      "n_positive": 16
+    },
+    "RETREAT-resign": {
+      "f1": 0.8571428571428571,
+      "precision": 0.8571428571428571,
+      "recall": 0.8571428571428571,
+      "threshold": 0.3,
+      "C": 10.0,
+      "n_labeled": 169,
+      "n_positive": 36
+    },
+    "SANCTION-convict": {
+      "f1": 0.875,
+      "precision": 1.0,
+      "recall": 0.7777777777777778,
+      "threshold": 0.6000000000000001,
+      "C": 1.0,
+      "n_labeled": 250,
+      "n_positive": 43
+    },
+    "SANCTION-expel": {
+      "f1": 0.4,
+      "precision": 0.2777777777777778,
+      "recall": 0.7142857142857143,
+      "threshold": 0.2,
+      "C": 10.0,
+      "n_labeled": 250,
+      "n_positive": 33
+    },
+    "SANCTION-withdraw": {
+      "f1": 0.8,
+      "precision": 0.8,
+      "recall": 0.8,
+      "threshold": 0.7500000000000001,
+      "C": 3.0,
+      "n_labeled": 250,
+      "n_positive": 23
+    },
+    "SANCTION-discontinue": {
+      "f1": 0.9367088607594937,
+      "precision": 0.9024390243902439,
+      "recall": 0.9736842105263158,
+      "threshold": 0.1,
+      "C": 10.0,
+      "n_labeled": 250,
+      "n_positive": 191
+    },
+    "THREATEN-restrict": {
+      "f1": 0.36363636363636365,
+      "precision": 0.3333333333333333,
+      "recall": 0.4,
+      "threshold": 0.5,
+      "C": 10.0,
+      "n_labeled": 216,
+      "n_positive": 27
+    },
+    "THREATEN-arrest": {
+      "f1": 0.6666666666666666,
+      "precision": 1.0,
+      "recall": 0.5,
+      "threshold": 0.8,
+      "C": 10.0,
+      "n_labeled": 216,
+      "n_positive": 20
+    },
+    "THREATEN-relations": {
+      "f1": 0.2,
+      "precision": 0.14285714285714285,
+      "recall": 0.3333333333333333,
+      "threshold": 0.4,
+      "C": 3.0,
+      "n_labeled": 216,
+      "n_positive": 13
+    },
+    "THREATEN-violence": {
+      "f1": 0.7924528301886793,
+      "precision": 0.7241379310344828,
+      "recall": 0.875,
+      "threshold": 0.35000000000000003,
+      "C": 10.0,
+      "n_labeled": 216,
+      "n_positive": 120
+    }
+  },
+  "skipped": [
+    {
+      "target": "ASSAULT-execute",
+      "n": 368,
+      "n_pos": 10
+    },
+    {
+      "target": "ASSAULT-drone",
+      "n": 368,
+      "n_pos": 10
+    },
+    {
+      "target": "ASSAULT-cleansing",
+      "n": 368,
+      "n_pos": 4
+    },
+    {
+      "target": "ASSAULT-unconventional",
+      "n": 368,
+      "n_pos": 5
+    },
+    {
+      "target": "COERCE-misinformation",
+      "n": 315,
+      "n_pos": 10
+    },
+    {
+      "target": "MOBILIZE-militia",
+      "n": 199,
+      "n_pos": 11
+    },
+    {
+      "target": "PROTEST-hunger",
+      "n": 342,
+      "n_pos": 3
+    },
+    {
+      "target": "PROTEST-boycott",
+      "n": 342,
+      "n_pos": 11
+    },
+    {
+      "target": "REJECT-yield",
+      "n": 198,
+      "n_pos": 9
+    },
+    {
+      "target": "RETREAT-return",
+      "n": 169,
+      "n_pos": 0
+    },
+    {
+      "target": "RETREAT-disarm",
+      "n": 169,
+      "n_pos": 6
+    },
+    {
+      "target": "RETREAT-access",
+      "n": 169,
+      "n_pos": 0
+    },
+    {
+      "target": "THREATEN-ban",
+      "n": 216,
+      "n_pos": 4
+    },
+    {
+      "target": "THREATEN-rights",
+      "n": 216,
+      "n_pos": 8
+    },
+    {
+      "target": "THREATEN-expel",
+      "n": 216,
+      "n_pos": 1
+    },
+    {
+      "target": "THREATEN-territory",
+      "n": 216,
+      "n_pos": 8
+    }
+  ],
+  "screen_error_rates": {
+    "AID": {
+      "rate": 0.09615384615384616,
+      "n_audited": 52
+    },
+    "PROTEST": {
+      "rate": 0.02,
+      "n_audited": 50
+    },
+    "REQUEST": {
+      "rate": 0.1111111111111111,
+      "n_audited": 54
+    },
+    "THREATEN": {
+      "rate": 0.0196078431372549,
+      "n_audited": 51
+    },
+    "RETREAT": {
+      "rate": 0.058823529411764705,
+      "n_audited": 51
+    },
+    "ACCUSE": {
+      "rate": 0.36,
+      "n_audited": 50
+    },
+    "AGREE": {
+      "rate": 0.08,
+      "n_audited": 50
+    },
+    "SANCTION": {
+      "rate": 0.2631578947368421,
+      "n_audited": 57
+    },
+    "COOPERATE": {
+      "rate": 0.0784313725490196,
+      "n_audited": 51
+    },
+    "ASSAULT": {
+      "rate": 0.13725490196078433,
+      "n_audited": 51
+    },
+    "SUPPORT": {
+      "rate": 0.14,
+      "n_audited": 50
+    },
+    "COERCE": {
+      "rate": 0.1346153846153846,
+      "n_audited": 52
+    },
+    "CONCEDE": {
+      "rate": 0.07142857142857142,
+      "n_audited": 56
+    },
+    "REJECT": {
+      "rate": 0.07407407407407407,
+      "n_audited": 54
+    },
+    "CONSULT": {
+      "rate": 0.16981132075471697,
+      "n_audited": 53
+    },
+    "MOBILIZE": {
+      "rate": 0.03773584905660377,
+      "n_audited": 53
+    }
+  }
+}

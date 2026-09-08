@@ -9,8 +9,9 @@ import unidecode
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
-import spacy
 from spacy.language import Language
+
+from ..models import load_spacy
 
 
 # Constants
@@ -57,7 +58,7 @@ class ModelManager:
             spaCy model: Loaded language model
         """
         if 'spacy' not in self.models:
-            self.models['spacy'] = spacy.load("en_core_web_lg")
+            self.models['spacy'] = load_spacy("en_core_web_lg")
         return self.models['spacy']
 
 

@@ -6,13 +6,18 @@ import pandas as pd
 import os
 import logging
 
+from importlib import resources
+
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
 
-def country_name_dict(base_path):
-    file = os.path.join(base_path, "countries.csv")
+def country_name_dict(base_path=None):
+    if base_path is None:
+        file = str(resources.files('ngec').joinpath("assets", "countries.csv"))
+    else:
+        file = os.path.join(base_path, "countries.csv")
     countries = pd.read_csv(file)
     country_name_dict = {i:j for i, j in zip(countries['CCA3'], countries['Name'])}
     country_name_dict.update({"": ""})
@@ -21,18 +26,37 @@ def country_name_dict(base_path):
 
 
 class GeolocationModel:
-    def __init__(self, 
-                geo_model="/Users/ahalterman/MIT/Geolocation/mordecai3_scratch/mordecai3/mordecai_new.pt",
-                nlp=None, 
-                base_path = "NGEC/assets/",
-                geo_path = "../mordecai3/mordecai3/assets/",
+    def __init__(self,
+                geo_model=None,
+                nlp=None,
+                base_path=None,
+                geo_path=None,
+                es_client=None,
                 save_intermediate=False,
                 quiet=False):
-        self.geo = Geoparser(geo_model, 
+        """
+        Wrapper around the mordecai3 geoparser.
+
+        Parameters
+        ----------
+        geo_model: path to a mordecai3 model file. If None (default), mordecai3
+            uses the model shipped inside the mordecai3 package.
+        nlp: a loaded spaCy model with the "token_tensors" pipe (i.e. the one
+            returned by ngec.utilities.load_nlp). Passing the pipeline's own
+            spaCy model avoids mordecai3 loading a second copy of
+            en_core_web_trf.
+        base_path: directory holding countries.csv. If None (default), the copy
+            in ngec/assets/ is used.
+        geo_path: directory holding mordecai3's geo assets. If None (default),
+            mordecai3 uses the assets shipped inside the package.
+        es_client: an Elasticsearch client. If None, mordecai3 connects to
+            localhost:9200 itself.
+        """
+        self.geo = Geoparser(model_path=geo_model,
                             geo_asset_path=geo_path,
                             nlp=nlp,
-                            event_geoparse=False, 
-                            trim=True, 
+                            es_client=es_client,
+                            trim=True,
                             debug=False)
         self.quiet = quiet
         self.save_intermediate = save_intermediate

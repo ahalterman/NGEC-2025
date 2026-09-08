@@ -1,0 +1,397 @@
+---
+author: "Andy Halterman"
+bibliography: "/Users/ahalterman/MIT/MIT.bib"
+---
+
+# Extracting Attributes {#sec-attributes}
+
+At this point in the pipeline, we've identified which event types are reported in each document. The next step is to extract information about the event's *attributes*: who did the event? toward whom was it directed? where and when did it occur?^[In computational linguistics and natural language processing, this task is usually referred to as "event argument extraction".]
+
+In contrast to the previous step, where we classified documents as a whole, here we're *extracting* information from within a document. In other words, rather than obtaining a label for a document, we'll obtain *spans* of text extracted from within the document itself. Remember: this is an *extraction* step, in contrast to event detection's *classification*, and later chapters' *resolution/disambiguation*.
+
+@fig-attribute shows a toy example of this step. From the previous step, we've identified that this document reports a meeting event (`CONSULT`) and an attack event (`ASSAULT`). Now we need to extract the "attributes" of those two events: the actors, recipients, dates, and locations of each event.
+
+![Attributes are defined for each event in a document](figs/attribute_figure3.png "Diagram illustrating that the same text passage yields different attribute extractions depending on which event is being coded. The sentence 'President Obama and Emmanuel Macron met Tuesday in Paris to discuss the ongoing war in Syria. The meeting follows a chemical weapons attack last week against Syrian civilians in Aleppo carried out by the Damascus regime' appears twice, separated by a dotted line. In the top panel, labeled CONSULT, colored boxes highlight the attributes of the CONSULT event: 'President Obama' (blue, ACTOR), 'Emmanuel Macron' (blue, RECIPIENT), 'Paris' (green, LOCATION), and 'Tuesday' (orange, DATE). In the bottom panel, labeled ASSAULT, the same text is annotated for the assault event instead: 'the Damascus regime' (blue, ACTOR), 'Syrian civilians' (red, RECIPIENT), 'Aleppo' (green, LOCATION), and 'last week' (orange, DATE). The figure shows that event attribute extraction is not a single pass over the text but must be performed separately for each detected event, with different spans filling each role depending on the event type."){#fig-attribute width=75%}
+
+The figure above illustrates a couple important points. First, attributes are defined *per-event*. This is pretty obvious, but it has major implications for how we go about extracting attribute information. Asking "who is the actor in this document" is not a well posed question. We need to know *which* event we're asking about, since the `CONSULT` and `ASSAULT` events have different actors. Second, not all attributes will have a single answer. For example, the PLOVER ontology represents bilateral meetings with two actors and no recipient. Similarly, if the document omitted the phrase "carried out by the Damascus regime", the actor for the `ASSAULT` event would be unknown and the actor attribute would be blank. Our model needs the ability to return "None" or "N/A".
+
+Event attribute extraction is potentially the hardest step in event extraction and the technology for doing it has evolved dramatically in the past forty years (and past 6 months). The History section below (@sec-history-attributes) discusses older approaches and alternative techniques.
+
+## A model for structured attribute extraction
+
+We'll use a conceptually straightforward approach to extracting the attributes: using an LLM to extract all the attributes for a given event type in one structured JSON output.
+
+
+
+### Attribute model output format
+
+A convenient way to represent the attributes of an event is as a JSON object (or, a Python dictionary), with each attribute represented as a key-value pair. This allows us to capture all the relevant information in a structured format that is easy to parse and validate and allows for multiple instances of the same event type to be represented in a single document.
+
+The core PLOVER schema includes four universal attributes that apply across all event types:
+
+- **actor**: The entity who initiates, carries out, or perpetrates the event
+- **recipient**: The target, victim, receiver, or "patient" of the event  
+- **date**: When the event occurred (preserving original format from text)
+- **location**: Where the event took place
+
+Although not part of the event ontology itself, it's also useful to include:
+
+- **anchor_quote**: A direct quote from the document that describes this specific event instance
+
+Including a quote helps anchor the model's extraction and also provides a reference for downstream users to identify the event in question. It also makes it possible to identify multiple instances of the same event type.
+
+For each detected event type, the attribute model outputs a JSON array containing all instances of that event type found in the document, with each event represented as a dictionary of attributes. Going back to the example in @fig-attribute, the JSON output for the two events would look like something like this:
+
+```json
+[
+  {
+    "event_type": "CONSULT",
+    "anchor_quote": "President Obama and Emmanuel 
+                     Macron met Tuesday in Paris",
+    "actor": ["President Obama", "Emmanuel Macron"],
+    "recipient": "N/A", 
+    "date": ["Tuesday"],
+    "location": ["Paris"]
+  },
+  {
+    "event_type": "ASSAULT", 
+    "anchor_quote": "chemical weapons attack last week 
+                     against Syrian civilians",
+    "actor": ["Damascus regime"],
+    "recipient": ["Syrian civilians"],
+    "date": ["last week"], 
+    "location": ["Aleppo"]
+  }
+]
+```
+
+
+### The attribute model at a high level
+
+So how do we get this attribute information from the text? We can follow what's now a familiar process and prompt an LLM to simply generate the answer. Specifically, we can provide an LLM with the document, the event we've identified in the previous step along with its definition, and a set of instructions for how to extract the event's attributes. As long as we provide the right instructions and we have correctly identified the event type in the previous step, this is a task that LLMs can do with fairly good accuracy.
+
+For example, at this point in the pipeline, our event record might look like this:
+
+```json
+{
+    "event_text": "Turkish forces and Turkish-backed militias 
+                   battled with YPG militants in Syria.",
+    "id": 789,
+    "_doc_position": 2,
+    "event_type": "ASSAULT",
+    "event_mode": ""
+}
+```
+
+The important parts here are the `event_text`, which is the text of the document that contains the event, and the `event_type`, which is the type of event we want to extract attributes for. In this case, we don't have a "mode" (sub-event type) for the `ASSAULT` event, so we leave that blank. The `id` and `_doc_position` are used to keep track of the document and event instance and aren't important here.
+
+Importantly, we also provide the model with a mini-definition of the event, taken from our codebook:
+
+```
+### Event: **ASSAULT**: ASSAULT events are deliberate actions which
+can potentially result in substantial physical harm, including violence, 
+battles, or assaults.
+```
+
+In other cases, this can include "extraction notes", like "For a `CONSULT` event, the entities who meet are *both* actors, not recipients."
+
+We can then prompt the model to identify each of the attributes of the event and to answer in our desired format (more on this below), and the model might return something that looks like the following JSON object:
+
+```json
+{
+    "event_text": "Turkish forces and Turkish-backed militias battled 
+       with YPG militants in Syria.",
+    "id": 789,               # Used by the broader pipeline to keep track of docs
+    "_doc_position": 2,      # 
+    "event_type": "ASSAULT", # From our previous detection step
+    "event_mode": "",        # Optional, but can help with extraction
+    "attributes": [
+        {"event_type": "ASSAULT", 
+        "anchor_quote": "Turkish forces and Turkish-backed militias battled 
+           with YPG militants in Syria.", 
+        "actor": ["Turkish forces", "Turkish-backed militias"], 
+        "recipient": ["YPG militants"], 
+        "date": ["N/A"], 
+        "location": ["Syria"]}]}
+```
+
+Some things to note about this output.
+The `attributes` key contains a list of dictionaries, each representing an event instance with its attributes. This is important, because up to this point, all we've been able to identify is that a document contains (*at least one*) event of a given type. Now we can identify multiple instances of the same event type in a single document. 
+The `anchor_quote` is helpful for the model to keep track of which instances of each event it's extracting attributes for. It also provides a reference for downstream users to identify the event in question.
+Finally, The attribute fields themselves, `actor`, `recipient`, `date`, and `location`, are lists of strings. This allows multiple actors or recipients to be extracted for the same event instance, which is important for events that involve multiple parties (e.g., a protest with multiple groups involved). We can see that with the event here, where the ASSAULT event has two actors: "Turkish forces" and "Turkish-backed militias".
+
+### A custom attribute model
+
+A fairly inexpensive pretrained commercial LLM^[At the time of writing, something like Claude Haiku, GPT mini, or Qwen3-14B+.] is quite capable of doing this task, but will require a large amount of detailed prompting to obtain the correct output. For instance, the model needs to be told in the prompt what constitutes an "actor" and a "recipient", that the "location" should be the most precise named location, that multiple actors and recipients can be valid, that null attributes should be reported as N/As, that the extracted spans should be exact quotes, that different instances of the same event type should be reported as separate records, that the output should be valid JSON without any other text etc. etc. The prompt can become quite long! Moreover, large LLMs impose replicability, cost, and speed constraints, which can make them infeasible for coding potentially millions of event records in a way that's compatible with social science replicability standards.
+
+An appealing alternative is to use a specific, tailored, smaller LLM that has been specifically fine-tuned to do this task.  @sec-train-attribute-model goes into the details of how to train an attribute model, but the high level concept is simple. By fine-tuning a smaller LLM on (document, event definition, output) examples, we can optimize the model to answer in the format we want, with the rules we would have provided in the prompt baked into the weights of the LLM itself. This trades some up front training time for a model that is vastly more efficient and easily replicable. @halterman2026creating report that the small, fine-tuned attribute model they introduce is around 100x as fast at coding attributes as a larger off-the-shelf LLM on the same hardware.
+
+<!--
+::: {.callout-tip}
+## Quick History Note/Model Discussion
+
+The @sec-history-attributes section below goes into more depth on ways to approach this task, but it's worth doing a quick preview here.
+
+If we think that an event's attributes are exact spans of text extracted from the document, shouldn't we use a model that can directly extract those spans? That is, shouldn't we use a BERT-type model that identifies the tokens that correspond to each attribute? Extractive question-answering models can take a document and a question ("Who met with someone?"), and return the span of text that answers the question ("President Obama"). 
+
+While this extractive QA technique was the best approach for a few years, we'll instead use a generative large language model to faux-extract the attributes (=generate the spans of text) in a structured JSON format.
+
+There are a few advantages to using a generative model:
+
+**Efficiency**: Rather than asking four separate questions per event (Who was the actor? Who was the recipient? When did it happen? Where did it happen?), we extract all attributes in a single model pass. This is dramatically more efficient computationally.
+
+**Actor-recipient coherence**: One of the persistent problems in older question-answering approaches was "actor flipping"---correctly identifying the entities involved in the event but assigning them to the wrong roles. By extracting actor and recipient together, the model can better maintain the directional relationship of the event.
+
+**Multiple event handling**: The JSON array format naturally handles cases where the same event type occurs multiple times in a document (e.g., two separate protests on different dates).
+
+**Structured validation**: We can apply JSON schema validation to catch malformed outputs. In some cases, we can modify the generation code to force the output to be valid JSON.
+
+**Taking advantage of other people's work**: Simple extractive question-answering models aren't being developed as extensively as generative LLMs. Using generative models lets us build on the rapid advances in LLMs.
+:::
+-->
+
+### Using the model with new event types
+
+The model we will use in this chapter, introduced in @halterman2026creating, is trained to work across a broad set of event types, meaning that in most cases, you will not need to retrain the model to code new event types.
+
+If you want, you can definitely retrain the attribute model on your own data. But unless you really need to extract a new attribute, you probably won't need to retrain the model. Instead, you'll just need to change the event definitions and the prompt that you use to extract attributes.
+
+The reason that the model can handle new event types is that the model's output is conditioned on the event definition we provide it at inference time, not just on the event types it happened to see during training. To extract a new event type, you write a definition for it (as you'll already have done in the @sec-codebook chapter.) The LLM has learned the general task of reading a definition and pulling the actor, recipient, date, and location out of the text, so a new event type just requires a new definition, rather than a new model. It may not perform quite as well on an event type it never saw in training as on one it did (more on that below), but for many projects this is the whole customization you'll need.
+
+![Example of event definitions used in the attribute model](figs/event_defs.png "Table showing event type definitions used in the attribute extraction model. Each row defines an event type (such as AGREE, CONSULT, or SUPPORT), an optional subtype or mode (such as 'visit,' 'third-party,' or 'multilateral' for CONSULT), a general definition, a specific example or scenario, and optional coding notes. For instance, the CONSULT 'visit' subtype is defined as a political actor visiting another actor who is hosting, with the coding note 'the visitor is the ACTOR; host is RECIPIENT.' The table illustrates the hierarchical structure of event definitions: broad categories are subdivided into modes, each with precise definitions and attribute-coding guidance."){#fig-attribute-model-event-types width=95%}
+
+## Evaluation
+
+Before you decide whether the off-the-shelf model is good enough or whether you need to train your own, you need to know how well it actually performs on your task. Evaluating attribute extraction requires metrics that capture both the accuracy of individual attributes and the coherence of complete event extractions. Unfortunately, this evaluation is slightly more complicated than the document classification metrics we discussed in @sec-detection, in part because we want to give partial credit for equivalent, but not identical, extracted spans.
+
+Some useful metrics to include are:
+
+**Exact match**: The predicted span exactly matches the gold standard annotation. This is the strictest metric, and it's harsh: "four Nepali students" and "Nepali students" describe the same actor, but they don't match exactly.
+
+**Token overlap (Intersection over Union)**: For overlapping but not identical spans, we can measure the token-level overlap between the predicted and gold spans by looking at the shared tokens between the predicted span and gold span, divided by the total tokens across both. This is more forgiving, and it accommodates the differences in articles, modifiers, and span boundaries that don't actually change which entity you've identified. You can tune the threshold to different levels to capture things like:
+
+- IoU > 0.8: Very close match
+- IoU > 0.5: Reasonable overlap
+- IoU > 0.1: The predicted span is in the right place, but isn't close to the gold span
+
+Keep in mind, though, that this overlap is comparing just the shared tokens, not the importance of the tokens or the location of the words within the document. In a bad case, the model prediction of "the" [students] would have 0.5 IoU with the gold span "the president".
+
+**Anti-flip metric**: Some errors, specifically flipping the extracted actor and recipient, are especially consequential. For example, extracting "Doctors Without Borders attacks local soldiers" is worse than failing to extract the event at all. The anti-flip metric captures this by penalizing cases where the model confuses the actor and recipient roles.
+
+**LLM-as-judge accuracy**: Finally, you can use a larger LLM to assess the accuracy of the extracted spans. You can provide the document, event definition, and candidate extraction from the small attribute model to a larger, more capable LLM. You can then prompt the larger LLM to evaluate the extraction on a set of criteria. This gives you a more holistic assessment, but still relies on the judgement of the larger LLM, which can anchor on the small LLM's output and may not evaluate the output in the way that you would like.
+
+### Aggregate evaluation
+
+**Event-level F1**: Treat each complete event extraction (all attributes correct) as a unit for precision/recall calculation.
+
+**Attribute-level accuracy**: Report accuracy for each attribute type separately. Some attributes are simply easier than others---dates tend to be reported in straightforward ways, while recipients are especially difficult.
+
+**Cascading error analysis**: Since attribute extraction depends on event detection, measure how event detection errors affect downstream performance. An attribute extracted for an event that wasn't really there is wrong no matter how good the extraction model is.
+
+
+What you find from these evaluations can be useful signal about how the model is working or not.
+
+- **Token overlap is high; exact match is lower.** The model usually finds the right entity and the right span of text, but it disagrees with annotators about exactly where the boundaries are ("the Pentagon" vs. "officials at the Pentagon"). Whether that gap matters depends on your downstream use. For most aggregate analyses it doesn't, since the next step resolves the span to a canonical entity anyway. 
+- **Dates are easiest, recipients hardest.** Dates are reported formulaically and the model tends to do well on them. Recipients require the model to read the direction of the event correctly and are much less accurate.
+- **Flipping should be rare.** On our expert-labeled data the actor-recipient flip rate should be close to zero, since this is the error that does the most damage to downstream analysis.
+
+
+### Evaluation data
+
+As with the event classifier, it's tempting to evaluate on held-out synthetic data, since you generated plenty of it (more on the synthetic approach below) and it's free to obtain. This is a useful check, but evaluating on synthetic data is likely to badly overestimate the performance of your model. Any synthetic evaluation data comes from the same process with the same stylistic quirks as the training data, and this data is not a perfect fit for the way real text is written. This means that at least some high quality hand-annotated real text is required for evaluation.
+
+::: {.callout-tip}
+The recommended train-on-synthetic-evaluate-on-real approach has implications for how you should spend your scarce annotation budget. If you were training on real examples, you might prioritize annotating as many training examples as possible. However, if you're using the data for evaluation, then getting very high quality annotations becomes paramount. You should plan to spend your budget on getting multiple annotations of the same document and carefully combining them to get a smaller number of gold standard annotations.
+:::
+
+## Do you need to train your own attribute model?
+
+In most cases, you will not need to retrain your own attribute model. The attribute model that's included in the NGEC pipeline is intended to work with many event types, and can also be used to extract attributes it was not explicitly trained on, because it's a fine-tune of a general LLM. However, there are some circumstances when you should consider retraining an attribute model.
+
+- The off-the-shelf model doesn't perform well on a *new event type*. The NGEC attribute model is meant to perform well across many event types, but it will probably not perform as well on a new event type as it does on one it's seen during training. You might want to further train the model examples of your specific event type to improve its performance.
+- You'd like to extract a *different attribute*. The NGEC attribute model is focused on the generic PLOVER attributes that are shared by almost all event types: the actors and recipients involved, the date, and location. But there are obvious event-specific attributes that someone might want to extract: 
+    - *how many* people were arrested?
+    - What was the *target* of the airstrike as distinct from its *victims*?
+    - When a country provides aid to another country, *how much* aid (in dollars) did they provide?
+    - When someone is sentenced, *what was their sentence*?
+  It's likely that the model can already extract some of these attributes with high accuracy, but if the model does not, you should consider training it on new examples.
+- It's a Tuesday and there's a *new, better LLM*. The NGEC attribute model is a fine-tune of a small, remarkably capable base model,^[Qwen3-0.6B] but within a couple months of writing this, a better one will almost certainly be available. Retraining the attribute model on a new base LLM might increase performance.
+
+::: {.callout-tip}
+## Discussion Question
+
+If the LLM can accurately extract the event's attributes, why mess around with training another, custom model? Why not just use the original LLM?
+
+**Maybe you should just use the LLM!** If you have a small enough number of documents, you might just want to use a larger LLM directly. The whole reason to distill a small model (below) is to run cheaply at scale. If you have a small number of documents (<100,000), you may just want to use a larger LLM.
+
+However, for larger projects, or if you don't have access to a GPU for inference, using the smaller model will be preferable.
+:::
+
+
+## Training the attribute model {#sec-train-attribute-model}
+
+To train a new attribute model, you can apply the training script supplied in the accompanying notebook, which is based on the process described in @halterman2026creating. 
+
+Annotating attributes is *unbelievably* annoying---it's very tedious and humans require a large amount of training and re-training to be consistent. Because of that, we'll draw very heavily on a synthetic data approach to generating training data. Another major advantage of the synthetic approach is that the synthetic data is not copyrighted, so it can be freely shared.
+
+We'll rely heavily on a distillation approach: we use a large, capable "teacher" LLM to generate (synthetic) training data, then fine-tune a much smaller "student" model to imitate it [@halterman2025synthetically]. The student is cheap enough to run at scale and small enough to run on consumer hardware, while inheriting most of the teacher's accuracy on this narrow task.
+
+### Training Stage 1: Obtain documents
+
+We begin by collecting a corpus of documents with known event types. Ideally, we would use a set real documents that have been hand-annotated with their event types. But an easier way, though it imposes potential accuracy hits, is to generate synthetic documents with target event types, just as we did in @sec-synth-events.
+
+In addition to the tricks described in @sec-synth-events to increase the diversity of the text, we can also vary the position of the event in the news story, the number of words in the story, whether the event is the story's main focus or just briefly mentioned, and how *complete* the reporting is (sometimes the actor or recipient should be omitted to teach the model to abstain). You can even ask for *implicit* descriptions that report an event only through its consequences ("the square emptied of crowds after security forces arrived in force" rather than "police attacked protesters"), which teaches the model to extract the attributes of events that aren't spelled out.
+
+The stories should mostly^[It's actually fine if not all the stories contain the event you prompt. In fact, this can be really useful: we want the attribute model to refuse to identify spans that aren't answerable in the text.] contain the event type you're interested in. 
+
+### Training Stage 2: Annotate attribute spans
+
+For each document-event, we then identify the spans of text corresponding to each attribute. As above, the ideal data here is carefully hand-annotated real documents. However, annotating attributes is extremely time consuming, and you'll likely want to reserve your precious hand-annotated examples for validation.
+
+Instead, to obtain training data, you can use a large, capable LLM (either a commercial LLM such as GPT, Gemini, or Claude) or a fairly large (14B+) "local" model (e.g., Llama, Qwen, Mistral) to extract attributes from your synthetic documents. You'll prompt this "teacher" model to generate the correct attribute extraction for the given event type. The accompanying notebook includes an example, but the prompt might need to include details beyond what's present in your codebook, including event-specific guidance (e.g., bilateral meetings have two actors and no recipients.), that "non-concrete" entities like laws or abstract concepts cannot be recipients, or edge cases where locations can also be recipients (e.g., the target of an airstrike). 
+
+The output of this "teacher" LLM should be the complete output you want your eventual model to produce. I recommend having the model produce JSON, as we discuss earlier in this chapter. We can then treat this output as "silver-standard" data (that we'll pretend is gold standard).^[In fact, I think that the LLM output might actually be higher quality, and certainly more consistent, than human annotations. And generating thousands of these annotations is dramatically cheaper than paying for human annotation.]
+
+You can clean the output of the teacher model by checking that its extracted spans are indeed direct quotes from the text and discarding any that aren't. You'll also want examples of documents where the event is *not* present and other examples where some attributes are not reported. This teaches the model that abstentions are allowed.
+
+Ideally, you will also have documents that contain multiple instances of the same event type:
+
+```json
+[
+    {
+      "event_type": "PROTEST",
+      "actor": "students",
+      "date": "Monday",
+      "location": "university campus"
+    },
+    {
+      "event_type": "PROTEST",
+      "actor": "faculty union", 
+      "date": "Tuesday",
+      "location": "downtown"
+    }
+]
+```
+
+This is helpful! Up until now, we've just known that a document contains *at least one* event of a given type. Now we can identify multiple instances of the same event type in a single document. And the JSON array format allows us to represent these multiple instances naturally, with the "anchor" quote providing context for each instance.
+
+### Training Stage 3: Fine-tune the attribute model
+
+Using your (document, event, output) training data, you can then fine-tune a smaller, efficient model. This model becomes your production attribute extractor. The training process is a standard LLM fine-tuning script (see accompanying materials): it consists of a standard supervised fine-tune of a small generative LLM, masking the loss on the input text so that the model is only scored on the JSON it produces. On a single consumer GPU this takes under an hour, which is much faster than generating the synthetic training data will take.
+
+The distillation also lets us shrink the prompt. The teacher needs a long, detailed prompt to reason its way to a good answer, but because the distilled student has been trained on so many examples, it can handle a much shorter prompt:
+
+```
+Extract political events as JSON.
+
+OUTPUT FORMAT:
+[
+    {"event_type": "EVENT_TYPE",
+    "anchor_quote": "quote from text",
+    "actor": "who performed action OR N/A",
+    "recipient": "who was targeted OR N/A",
+    "date": "when occurred OR N/A",
+    "location": "where occurred OR N/A"}
+]
+
+Return valid JSON only. Empty array [] if no events.
+```
+
+Advice on specific models and training libraries risks becoming outdated in a book, so I've deferred the specific details on which libraries to use and how to do the training to the accompanying notebook.
+
+::: {.callout-tip}
+## A note on reproducibility
+
+You might want to use a closed-source commercial LLM as the teacher that generates your training data. The benefits of this are that it dramatically lowers the hardware you need, and a closed-weight LLMs' higher quality output will translate into a better attribute model. However, using a closed-weight LLM comes with replicability costs [@palmer2024using]: you will not be able to access the same model in a year. However, you can still release your entire training corpus and training pipeline. This means that training your model will be replicable, but the process of generating the training data will not be. 
+:::
+
+@halterman2026creating report a specific implementation of this training approach, including specific models  used as teachers and student, how many synthetic documents to generated, and the exact training settings. Those are useful as a template to work from, but the specific models and training techniques are likely to go stale.
+
+
+
+## Custom event attributes
+
+The base PLOVER schema focuses on four attributes that apply broadly across event types. However, many research applications require event-specific attributes that capture domain-relevant details. Adding one is the main reason why someone would retrain the model.
+
+
+### Example: Extending PROTEST events
+
+Consider extending the PROTEST event type with additional attributes:
+
+```json
+{
+    "event_type": "PROTEST",
+    "anchor_quote": "thousands marched against the new tax law",
+    "actor": "labor unions",
+    "recipient": "government",
+    "date": "Monday", 
+    "location": "downtown Berlin",
+    "participant_count": "thousands",
+    "protest_method": "march", 
+    "demands": "repeal of new tax law",
+    "police_response": "none reported"
+}
+```
+
+The additional attributes (`participant_count`, `protest_method`, `demands`, `police_response`) provide useful protest-specific information, but may require more training data and validation. (And some of these blur the line between attributes and event types---"police response" could be a separate event type, or it could be an attribute of the `PROTEST` event.)
+
+To train the model to extract these, you'd add them to the schema in your Stage 2 extraction prompt, regenerate silver annotations, and fine-tune as above.
+
+
+## Exercises
+
+1. *(Applied)* Write an attribute-extraction prompt for an event type outside PLOVER (e.g., ELECTION_INTERFERENCE) with the same attributes as the pretrained model. Evaluate the extraction qualitatively against a small set of documents. Does the pretrained model handle the event type?
+2. *(Applied)* Extend PROTEST with new attribute types `participant_count` and `source` (the source identified in the text that reports the event). Use the pretrained attribute model to extract these new attributes. How does the pretrained model handle attributes it never saw in training? Characterize the failures (hallucination, near-miss, clear error, etc.)
+3. *(Applied — span verification)* Write a validator that checks every extracted span against the source document and flags violations. What fraction of extractions fail verification? Take care with multi-span attribute extractions. Are failures concentrated in particular attributes or document styles? Implement one mitigation (re-prompting, fuzzy matching with a threshold, or abstention) and measure its effect.
+4. *(Diagnosis — anti-flip)* Write 15 documents by hand where you think the actor and recipient could be easily confused (passive voice, reciprocal violence, complicated grammatical structures like "military sources claimed that they came under attack by rebels..."). Run the attribute model, compute the anti-flip metric, and for each flip, identify the linguistic construction responsible. Which constructions should worry you most for your substantive application?
+5. *(No-compute — the build/buy decision)* You have 80,000 documents and need attributes for three event types. Estimate total cost and wall-clock time for: (a) a commercial LLM API on every document; (b) generating 15k silver annotations with the commercial LLM and distilling into a small local model; (c) hand annotation. Use current prices and the throughput figures in this chapter and state your assumptions. At what corpus size does (b) dominate (a)?
+6. *(Conceptual)* @li2021document suggest a clever trick: when using an LLM to generate event attributes (or, in their terminology, event arguments), we can constrain the LLM's output to only include tokens seen in the prompt, to avoid hallucinations. Is this a good idea here? How might this help? How might it go wrong? Advanced: implement this approach in your LLM generation code.^[Most libraries have an option for modifying token probabilities. Hint: you can set a token probability to 0 by setting its pre-softmax logit to $-\infty$.] Do you see lower rates of non-verbatim text? Do you see speed improvements?
+    
+
+## History {#sec-history-attributes}
+
+Event attribute extraction has evolved dramatically over the past several decades, reflecting both advances in NLP technology and lessons learned from large-scale event coding projects.
+
+### Dictionary-based approaches (1980s-2000s)
+
+Early event coding projects like WEIS and CAMEO relied on extensive hand-crafted dictionaries that mapped text patterns to event attributes. 
+
+**Advantages**: Transparent, interpretable, could incorporate domain expertise directly.
+
+**Problems**: 
+
+- Required enormous manual effort to create comprehensive dictionaries
+- Brittle to new linguistic patterns
+- Poor coverage of the diverse ways events are described
+- Difficulty handling context-dependent interpretations
+
+### Hybrid dictionary--dependency parse methods
+
+This approach, which you can work through in my [blog post](https://andrewhalterman.com/post/event-data-in-30-lines-of-python/), offered more precision but still struggled with linguistic complexity.
+
+
+### Question-answering approaches (2021--2023)
+
+The rise of machine reading comprehension led to QA-based attribute extraction [@li2021document]. For each event, systems would ask separate questions:
+
+1. "Who carried out the airstrike?"
+2. "Who was the target of the airstrike?"
+3. "When did the airstrike occur?"
+4. "In what geographic location did the event take place?"
+
+A particularly good implementation of this approach is ConfliBERT [@hu2022conflibert] (@fig-conflibert).
+
+![[Demo of](https://huggingface.co/spaces/eventdata-utd/ConfliBERT-GUI-v2) ConfliBERT's Question-Answering Abilities](figs/conflibert.png "Screenshot of the ConfliBERT web demo interface developed by the University of Texas at Dallas, showing the 'Question Answering' task selected from a dropdown menu. The Context field contains a news article about a Nigerian military raid on a suspected Islamist hideout in Gashua, in which four people were killed and four arrested. The Question field asks 'Who was the target of the raid?' After submitting, the model returns the answer 'Islamists,' highlighted in green below the Submit button."){#fig-conflibert}
+
+This approach was an improvement over dictionary-based approaches, but had some serious limitations:
+
+- **Computational inefficiency**: Required *at least* 4× calls per event
+- **Actor flipping**: Models would correctly identify relevant entities but assign them to wrong roles. To get around this, we experimented with multiple passes (e.g., asking first about the actor, then injecting the actor text into the question about the recipient), or asking many versions of the same question and selecting the most common answer.
+- **Inconsistency**: Separately extracted attributes could contradict each other
+- **Poor multiple event handling**: Difficult to handle multiple events of the same type
+- **Poor non-contiguous multiple actor extraction**: the "classic" BERT-style question-answering models trained on the SQuAD dataset and similar [@rajpurkar2016squad; @rajpurkar2018know] could only handle a single, contiguous span of text as the answer. Later encoder-decoder models, such as Flan-T5, could return multiple spans, but these models aren't as capable as current decoder LLMs.
+- **Limited accuracy**: the simple question-answering models were relatively small and struggled with ambiguity, inferring event types, and general accuracy.
+
+
+
+{{< pagebreak >}}

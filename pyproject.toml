@@ -17,11 +17,12 @@ classifiers = [
     "Operating System :: OS Independent",
 ]
 dependencies = [
-    'dateparser>=1.2.0,<2.0',
-    'einops>=0.8.1', # Required for HF model download, but not installed if vllm is not installed
+    'click>=8.0,<9',
+    'dateparser>=1.4.0,<1.5',
+    'einops>=0.8.1,<1.0', # Required for HF model download, but not installed if vllm is not installed
     'elasticsearch==7.17.9',
     'elasticsearch-dsl==7.4.1',
-    'hf-xet>=1.2.0',
+    'hf-xet>=1.2.0,<2.0',
     'jsonlines>=4.0.0,<5.0',
     'mordecai3>=3.4.0',
     'numpy>=2.0.0,<3.0',
@@ -38,18 +39,66 @@ dependencies = [
     'torch>=2.6.0,<3.0',
     'transformers>=4.53.3,<5.0',
     'Unidecode>=1.4.0,<2.0',
-    "xgboost>=3.1.1",
+    # The wiki ranker in assets/ is a saved xgboost model, so a major bump risks
+    # a load failure or changed predictions.
+    "xgboost>=3.1.1,<4.0",
 ]
 
+[project.scripts]
+ngec = "ngec.cli:main"
+ngec-doctor = "ngec.doctor:main"
+
 [project.optional-dependencies]
-models = [
-    'en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl',
-    'en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl',
+# --- Which PyTorch build to install -----------------------------------------
+# Pick exactly one of `cpu`, `cu12` or `cu13`. They all install the same
+# PyTorch; what differs is which build of it, because a build compiled against
+# one CUDA version does not run on a driver that is too old for it. Run
+# `nvidia-smi` and read the "CUDA Version" in the top right:
+#
+#   no NVIDIA GPU, or macOS   -> cpu
+#   CUDA Version 12.x         -> cu12
+#   CUDA Version 13.x         -> cu13   (but use cu12 if you also want vllm)
+#
+# Without one of these, pip and uv install the default PyPI build of PyTorch,
+# which is compiled against CUDA 13 and silently falls back to the CPU on an
+# older driver. The redirection to the right PyTorch index is in
+# [tool.uv.sources] below, so these extras only do their job under uv.
+cpu = [
+    'torch>=2.6.0,<3.0',
 ]
+cu12 = [
+    'torch>=2.6.0,<3.0',
+]
+cu13 = [
+    'torch>=2.6.0,<3.0',
+]
+
+# The two spaCy models the pipeline needs are deliberately not an extra; they are
+# the `models` dependency group below. An extra can only name them by URL, since
+# they are not on PyPI, and that URL is published in the wheel metadata, where
+# pip refuses to resolve it. See the group for the rest.
 
 # vLLM backend (probably needs to be manually installed on macOS)
 vllm = [
-    'vllm>=0.10.0,<1.0',
+    # Upper bound is deliberate, and it is about CUDA rather than about vLLM's
+    # own API. vLLM 0.20.0 moved to torch 2.11 and started publishing wheels
+    # built against CUDA 13: its compiled extension links `libcudart.so.13` and
+    # so needs an NVIDIA driver of roughly 580 or newer. 0.19.1 is the last
+    # CUDA 12 build (`libcudart.so.12`), and a CUDA 12 binary runs on CUDA 13
+    # drivers too, so this ceiling is what makes the extra installable on the
+    # widest set of machines. See the vLLM section of RUNNING.md.
+    'vllm>=0.19.0,<0.20',
+    # vLLM only asks for xgrammar>=0.2.0, and uv locks the newest match. But
+    # xgrammar 0.2.4 dropped Python 3.13 wheels and 0.2.5 ships 3.10 only, so
+    # the unconstrained lock can't be installed. 0.2.3 has wheels for every
+    # Python we support. Revisit when xgrammar publishes wheels again.
+    'xgrammar<0.2.4',
+    # vLLM pins exact versions of these two. They are listed here (rather than
+    # left to vLLM) so that [tool.uv.sources] can send them to the same CUDA 12
+    # index as torch: they are compiled against torch and have to match the
+    # build of it that is actually installed.
+    'torchvision',
+    'torchaudio',
 ]
 
 # MLX backend (macOS only)
@@ -72,14 +121,97 @@ ngec = [
     "assets/actor_sim_model2/eval/*"
 ]
 
+[tool.uv]
+# `cpu`, `cu12` and `cu13` install the same packages from different indexes, so
+# only one can be active at a time and uv needs to be told that. vllm appears
+# here as well, because it only runs against one of the three: the wheels it
+# pins are CUDA 12 builds (see the vllm extra above), which rules out both the
+# CUDA 13 PyTorch and the CPU-only one. Declaring these means a wrong
+# combination is refused when you run `uv sync`, rather than installing and then
+# failing when the model loads.
+conflicts = [
+    [{ extra = "cpu" }, { extra = "cu12" }, { extra = "cu13" }],
+    [{ extra = "cu13" }, { extra = "vllm" }],
+    [{ extra = "cpu" }, { extra = "vllm" }],
+]
+
+# Groups installed by a bare `uv sync`. This replaces uv's default of ["dev"],
+# so dev has to be named again to keep it. `models` is here because a group that
+# is not in the sync target gets *pruned* from the environment by the next sync,
+# which for the spaCy models looks exactly like a code bug: the pipeline starts
+# reporting a missing model that was working an hour ago.
+default-groups = ["dev", "models"]
+
+# The CUDA-specific builds of PyTorch are not on PyPI; they live on PyTorch's
+# own indexes. `explicit = true` means nothing is fetched from these indexes
+# unless a [tool.uv.sources] entry below sends it there.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu12"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu13"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
 [tool.uv.sources]
-en-core-web-lg = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" }
-en-core-web-trf = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl" }
-mordecai3 = { git = "https://github.com/ahalterman/mordecai3" }
+# Send torch (and the two companion packages vllm pulls in) to whichever index
+# matches the extra that was selected. cu129 covers every 12.x driver: CUDA's
+# minor version compatibility means a 12.9 build runs on any driver from 525 on.
+torch = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu12", extra = "cu12" },
+    { index = "pytorch-cu13", extra = "cu13" },
+]
+# torchvision and torchaudio only come in with vllm, which is CUDA 12 only, so
+# they have a single destination rather than one per extra.
+torchvision = [
+    { index = "pytorch-cu12", extra = "vllm" },
+]
+torchaudio = [
+    { index = "pytorch-cu12", extra = "vllm" },
+]
+# Pinned to a specific commit, not to the default branch. mordecai3 is installed
+# from git and its Geoparser signature has changed under us before (which breaks
+# ngec/geolocation.py); since uv.lock is not committed, this rev is the only
+# thing recording which version the pipeline was run and tested against.
+mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "bc62487930793c059f34b92f0426a68dbd6ef5ff" }
 
 [dependency-groups]
+# The spaCy models, as a dependency group rather than an extra, because a group
+# is a property of this source tree and never reaches the published metadata:
+# `pip install "ngec @ git+..."` does not see it and so is never asked to
+# resolve a URL outside PyPI. Working from a checkout, `uv sync` installs the
+# models and (being a default group) never prunes them again. Anyone installing
+# ngec rather than cloning it gets them from `ngec download-models` instead,
+# which is also the way back if they do go missing.
+models = [
+    'en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl',
+    'en-core-web-trf @ https://github.com/explosion/spacy-models/releases/download/en_core_web_trf-3.8.0/en_core_web_trf-3.8.0-py3-none-any.whl',
+]
 demo-app = [
     "streamlit>=1.55.0",
+    # Only used by the demo's "Against a frontier LLM" page, which runs the same
+    # document through a one-shot prompt for comparison. The page degrades to an
+    # explanation when no API key is set, but the import has to resolve.
+    # 0.120 is what this was tested against; the page uses output_config.format,
+    # which older clients do not accept.
+    "anthropic>=0.120.0",
+]
+# Building the offline `wiki` and `geonames` Elasticsearch indices from source
+# dumps. Not needed to *use* NGEC -- most users download a prebuilt index.
+# See elasticsearch/README.md.
+es-build = [
+    "lxml>=5.0.0,<7.0",
+    "mwparserfromhell>=0.6.3,<1.0",
+    "plac>=1.4.0,<2.0",
+    "redis>=4.1.0,<7.0",
 ]
 dev = [
     "dotenv>=0.9.9",

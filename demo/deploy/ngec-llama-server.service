@@ -1,0 +1,63 @@
+[Unit]
+# The attribute model, served as a quantized GGUF through llama.cpp. The demo
+# talks to it over HTTP (NGEC_DEMO_BACKEND=llamacpp), which is what makes the
+# pipeline run at ~12s/document instead of ~60s on a CPU host.
+#
+# Install as a *user* unit — it needs no root, and the model files live in the
+# user's home directory:
+#
+#     mkdir -p ~/.config/systemd/user
+#     cp demo/deploy/ngec-llama-server.service ~/.config/systemd/user/
+#     systemctl --user daemon-reload
+#     systemctl --user enable --now ngec-llama-server
+#     loginctl enable-linger $USER     # so it survives logout and starts at boot
+#
+#     systemctl --user status ngec-llama-server
+#     journalctl --user -u ngec-llama-server -f
+#
+# Without `enable-linger` the unit stops when the last session ends, which puts
+# it back in the same position as running it from a shell.
+Description=llama-server for the NGEC attribute model
+Documentation=https://github.com/ahalterman/NGEC-2025
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=%h/ngec-llamacpp
+
+# The build here is CPU-only and links against the ggml libraries next to the
+# binary rather than anything installed system-wide.
+Environment=LD_LIBRARY_PATH=%h/ngec-llamacpp/bin
+
+# -t 16 on a 24-thread box leaves room for the rest of the pipeline (spaCy, the
+# classifiers, Elasticsearch queries), which run in the Streamlit process while
+# generation is in flight. -c 8192 covers the ~1,300-token extraction prompt with
+# room for the server's prompt cache, which the several event types extracted
+# from one document all hit.
+#
+# Q8_0 rather than Q4_K_M is deliberate: Q4 is faster but diverged from the F16
+# reference on every one of 12 test prompts where Q8_0 matched 5. See DESIGN.md.
+#
+# attr-exp5.1-*.gguf is the 2026 retraining (ahalt/qwen3-event-extraction-exp5.1,
+# the current default); attr-*.gguf without the suffix is the original
+# ahalt/event-attribute-extractor. They take different prompt formats, and the
+# format is chosen by the *tokenizer* the Python side loads — so if you change
+# the model here, change NGEC_ATTRIBUTE_MODEL to match. Nothing checks that they
+# agree.
+ExecStart=%h/ngec-llamacpp/bin/llama-server \
+    --model %h/ngec-llamacpp/attr-exp5.1-q8.gguf \
+    --host 127.0.0.1 \
+    --port 8080 \
+    --ctx-size 8192 \
+    --threads 16
+
+Restart=on-failure
+RestartSec=5
+
+# Loading a 600 MB model and warming up takes a few seconds; give it room before
+# systemd calls the start a failure.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=default.target

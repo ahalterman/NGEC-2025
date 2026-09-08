@@ -55,23 +55,28 @@ def es_is_available(es_config: ESConfig | dict) -> tuple[bool, str]:
     if isinstance(es_config, ESConfig):
         es_config = asdict(es_config)
 
+    # Pulled out of the f-strings below so they don't need nested double quotes,
+    # which are a syntax error before Python 3.12.
+    host = es_config.get("hosts")
+    port = es_config.get("port", 9200)
+
     try:
         client = Elasticsearch(**es_config)
-        
+
         # Test connection
         if not client.ping():
-            return False, f"Ping failed to {es_config.get("hosts")}:{es_config.get("port")}"
-        
+            return False, f"Ping failed to {host}:{port}"
+
         # Get cluster info
         info = client.info()
         cluster_name = info.get("name", "unknown")
         version = info.get("version", {}).get("number", "unknown")
-        
+
         client.close()
-        return True, f"Connected to '{cluster_name}' (v{version}) at {es_config.get("hosts")}:{es_config.get("port", 9200)}"
-        
+        return True, f"Connected to '{cluster_name}' (v{version}) at {host}:{port}"
+
     except (NewConnectionError, ConnectionRefusedError) as e:
-        return False, f"Connection failed to {es_config.get("hosts")}:{es_config.get("port", 9200)}: {str(e)}"
+        return False, f"Connection failed to {host}:{port}: {str(e)}"
     except TransportError as e:
         return False, f"Authentication/transport error: {str(e)}"
     except Exception as e:
