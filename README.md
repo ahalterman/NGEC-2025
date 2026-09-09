@@ -10,6 +10,29 @@ Note that NGEC depends on ElasticSearch indices derived from Wikipedia and GeoNa
 
 The recommended installation is with `uv`, and also using `uv` for virtual environment/dependency management.
 
+### Before you start: the setup doctor
+
+Installing NGEC means choosing a PyTorch build for your driver, downloading two
+spaCy models and an LLM, and standing up an Elasticsearch node with two large
+indices in it. Several of those can be wrong without anything raising an error.
+The setup doctor probes this machine and prints what is missing, with the exact
+command to fix each one:
+
+```shell
+python3 setup/doctor/ngec_doctor.py
+```
+
+It is a single standard-library file, so it runs before NGEC is installed and on
+any Python 3.8 or newer — including a conda base that cannot import `ngec`.
+`--json` gives the same report machine-readably, and `--serve` opens a local page
+that runs each command for you and re-checks afterwards. See
+[`setup/doctor/README.md`](setup/doctor/README.md). (This is a different tool
+from `ngec-doctor`, [below](#checking-your-installation), which runs *inside* the
+installed environment.)
+
+Working with Claude Code, the `ngec-setup` skill drives the same loop
+conversationally.
+
 ### (optional) Install PyTorch
 
 Installing ngec if PyTorch is not already installed will install whatever PyTorch version is the default for your platform. For performance reasons, you might want to change that, see https://pytorch.org/get-started/locally/ and [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md).
@@ -40,12 +63,26 @@ pip install "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
 
 NGEC needs two Elasticsearch indices: `wiki` (actor resolution) and `geonames` (geocoding). Both live in a single data directory served by one Elasticsearch node. The easiest setup is to download the prebuilt data directory and run Elasticsearch over it in Docker. Expect >10 GB on disk.
 
+The quick version is below. [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md) is
+the full recipe — what each `docker run` flag is for, how to tell a wrong volume
+path from a half-loaded index, and how to reuse the `wiki` index in an unrelated
+project — plus the alternative of building both indices yourself.
+
 **1. Install Docker.** See https://www.docker.com/get-started/.
 
 **2. Download and unpack the prebuilt index.**
 
+> ⚠️ **There is currently no working download URL.** The address this README
+> used to give,
+> `https://andrewhalterman.com/files/geonames_wiki_index_2023-03-02.tar.gz`,
+> returns HTTP 404 (checked 2026-09-09), and the copy committed at
+> `setup/geonames_wiki_index_2023-03-02.tar.gz` is a truncated 14 MB fragment
+> of a ~10 GB archive, not a usable index. Until a URL is published, the
+> options are to get the archive from Andy directly or to build the indices
+> yourself (Path C of [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md)).
+
 ```shell
-curl -LO https://andrewhalterman.com/files/geonames_wiki_index_2023-03-02.tar.gz
+curl -LO <URL of the index archive>
 tar -xzf geonames_wiki_index_2023-03-02.tar.gz
 ```
 
