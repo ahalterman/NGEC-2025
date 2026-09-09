@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from ngec_demo import steps
-from ngec_demo.style import json_block, lede
+from ngec_demo.style import json_block, lede, mode_badge, timing_table
 
 # (label, text, event type, definition override or None). The third is the
 # point of the page: DETAIN is not a PLOVER type and the model has never been
@@ -116,9 +116,14 @@ if result:
         st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     else:
         st.info("The model found no event of this type in the text.")
-    st.caption(f"{result['seconds']:.1f}s · {len(rows)} record(s)")
+    if result.get("error"):
+        st.warning(result["error"])
+    st.caption(f"{result['seconds']:.1f} s · {mode_badge(result['mode'])} · "
+               f"{len(rows)} record(s)")
 
     json_block(result["records"], label="Attributes (JSON)")
     with st.expander("Prompt sent to the model"):
         st.code(result["prompt"] or "(no prompt: the model did not load)",
                 language="text")
+    with st.expander("Timing breakdown"):
+        timing_table(result["timing"])

@@ -5,7 +5,7 @@ import streamlit as st
 
 from ngec_demo import resources as R
 from ngec_demo import steps
-from ngec_demo.style import lede
+from ngec_demo.style import lede, mode_badge, timing_table
 
 # (phrase, publication date) -- a weekday, a relative offset, and an open-ended
 # range, which are the three shapes the resolver has to tell apart.
@@ -35,8 +35,9 @@ st.title("5. When and where?")
 lede("A date phrase is resolved against the story's publication date; place "
      "names are resolved against geonames, then matched to the event's location span.")
 
-health = R.health()
-missing = [name for name, row in health.items() if not row.get("ok")]
+health = R.health(R.current_mode())
+missing = [name for name in ("Elasticsearch", "geonames index")
+           if not health.get(name, {}).get("ok")]
 if missing:
     st.warning(f"Not available: {', '.join(missing)}. Geoparsing needs the "
                "geonames index; date resolution does not.")
@@ -119,7 +120,10 @@ if geo_result:
             st.map(points, latitude="lat", longitude="lon", size=20000)
     else:
         st.info("No place names were resolved in this text.")
-    st.caption(f"{geo_result['seconds']:.1f}s · {len(entities)} place(s)")
+    st.caption(f"{geo_result['seconds']:.1f} s · {mode_badge(geo_result['mode'])} · "
+               f"{len(entities)} place(s)")
+    with st.expander("Timing breakdown"):
+        timing_table(geo_result["timing"])
 
 # --- 5.3 event location ------------------------------------------------------
 
@@ -148,4 +152,5 @@ else:
             }]), hide_index=True, width="stretch")
         else:
             st.info("No geoparsed place was close enough to the span.")
-        st.caption(f"{pick['seconds']:.2f}s · {pick['reason']}")
+        st.caption(f"{pick['seconds']:.2f} s · {mode_badge(pick['mode'])} · "
+                   f"{pick['reason']}")

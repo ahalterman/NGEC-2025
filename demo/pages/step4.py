@@ -7,7 +7,7 @@ import streamlit as st
 
 from ngec_demo import resources as R
 from ngec_demo import steps
-from ngec_demo.style import json_block, lede
+from ngec_demo.style import json_block, lede, mode_badge, timing_table
 
 # One span per route through the coder: a named person only Wikipedia knows, a
 # generic role the actor dictionary matches on its own, and a bare country.
@@ -62,8 +62,9 @@ run = right.button("Code the actor", type="primary")
 st.caption("Codes are as of the query date: Angela Merkel is GOV while in office "
            "and ELI — a former official — after it.")
 
-health = R.health()
-missing = [name for name, row in health.items() if not row.get("ok")]
+health = R.health(R.current_mode())
+missing = [name for name in ("Elasticsearch", "wiki index")
+           if not health.get(name, {}).get("ok")]
 if missing:
     st.warning(f"Not available: {', '.join(missing)}. "
                "This page needs Elasticsearch and the wiki index.")
@@ -101,9 +102,11 @@ if result:
         st.write(result["description"])
     codes = " ".join(f"`{c}`" for c in result["all_code1s"] + result["all_code2s"])
     st.markdown(f"Codes considered: {codes}" if codes else "Codes considered: none")
-    st.caption(f"{result['seconds']:.1f} s")
+    st.caption(f"{result['seconds']:.1f} s · {mode_badge(result['mode'])}")
 
     json_block(result, label="Raw JSON")
+    with st.expander("Timing breakdown"):
+        timing_table(result["timing"])
 
 st.subheader("4.1 Custom agents file")
 lede("Swap in your own actor dictionary: one pattern per line, its code in "
@@ -137,6 +140,7 @@ if custom:
         _codes(custom[key])
         st.caption(f"matched: {custom[key]['description'] or '—'} · "
                    f"source: {custom[key]['source'] or '—'} · "
-                   f"{custom[key]['seconds']:.1f} s")
+                   f"{custom[key]['seconds']:.1f} s · "
+                   f"{mode_badge(custom[key]['mode'])}")
     st.caption("A new file costs one embedding pass over its patterns; the "
                "resolver is then cached per file.")

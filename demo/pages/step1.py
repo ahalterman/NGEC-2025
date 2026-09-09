@@ -5,7 +5,7 @@ import streamlit as st
 
 from ngec_demo import resources as R
 from ngec_demo import steps
-from ngec_demo.style import hbar_chart, lede
+from ngec_demo.style import hbar_chart, lede, mode_badge, timing_table
 
 # (button label, text). One text that fires a single type, one that fires
 # several, and one that should fire nothing at all -- a classifier demo that
@@ -40,7 +40,7 @@ for col, (label, text) in zip(cols, EXAMPLES):
 st.text_area("Text", key="s1_text", height=120)
 if st.button("Classify", type="primary"):
     with st.spinner("Loading the classifiers and scoring…"):
-        _, notes = R.get_classifier()
+        _, notes = R.get_classifier(R.current_mode())
         st.session_state["model_notes"] = notes
         st.session_state["s1_result"] = steps.classify(st.session_state.s1_text)
 
@@ -50,7 +50,8 @@ if result:
     st.altair_chart(hbar_chart(types, "event_type", "probability", "threshold"),
                     width="stretch")
     fired = [row["event_type"] for row in result["types"] if row["fired"]]
-    st.caption(f"{result['seconds']:.2f}s · ticks are each class's threshold · "
+    st.caption(f"{result['seconds']:.2f} s · {mode_badge(result['mode'])} · "
+               "ticks are each class's threshold · "
                + (f"fired: {', '.join(fired)}" if fired else "nothing fired"))
 
     st.subheader("Modes")
@@ -64,6 +65,9 @@ if result:
             hbar_chart(modes, "mode", "probability", "threshold",
                        height=max(70, 20 * len(modes))),
             width="stretch")
+
+    with st.expander("Timing breakdown"):
+        timing_table(result["timing"])
 
 with st.expander("Customizing event classification"):
     st.write("Coming soon: swapping in your own ontology and your own classifiers.")
