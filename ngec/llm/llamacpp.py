@@ -53,11 +53,23 @@ class LlamaCppServerEngine:
         self.url = (url or os.environ.get("NGEC_LLAMACPP_URL")
                    or "http://127.0.0.1:8080")
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        # The server's per-request timings from the last generate() call; see
+        # generate(). Empty until the first call.
+        self.last_timings: list[dict] = []
         if not silent:
             logger.info(f"Using llama-server at {self.url}")
 
     def generate(self, conversations: list[Conversation], *,
                  schema: dict | None = None) -> list[str]:
+        """Generate one response per conversation.
+
+        Also leaves `self.last_timings` holding the server's own `timings`
+        block for each response in this call (`prompt_n`, `prompt_ms`,
+        `predicted_n`, `predicted_ms`, plus `tokens_cached`), which is the only
+        way to see the prefill/decode split from the client side. Reset on
+        every call; a failed request contributes nothing.
+        """
+        self.last_timings = []
         responses = []
         for conversation in conversations:
             prompt = self.tokenizer.apply_chat_template(
@@ -88,6 +100,9 @@ class LlamaCppServerEngine:
             try:
                 with urllib.request.urlopen(request, timeout=300) as resp:
                     payload = json.loads(resp.read())
+                timings = dict(payload.get("timings") or {})
+                timings["tokens_cached"] = payload.get("tokens_cached")
+                self.last_timings.append(timings)
                 responses.append(payload.get("content", "").strip())
             except urllib.error.HTTPError as e:
                 # The server responded but rejected the request -- e.g. this

@@ -1207,6 +1207,7 @@ class ActorResolver:
                 agents_file: None | str = None,
                 priorities_file: None | str = None,
                 override_sources: None | list | tuple = None,
+                device: None | str = None,
                 ):
         """
         Initialize the ActorResolver with the necessary models and data.
@@ -1233,12 +1234,20 @@ class ActorResolver:
                 None keeps the historical behaviour, in which a Wikipedia short
                 description beats the span-text match whenever the two
                 disagree. Pass `[]` to let priorities_file arbitrate instead.
+            device: Explicit torch device ('cpu' or 'cuda') for the sentence
+                encoders. Overrides `gpu`. The default None keeps the old
+                behaviour ('cuda' when gpu=True, otherwise
+                sentence-transformers' own choice, which is CUDA when a card is
+                visible). Pass 'cpu' to hold the encoders on the CPU on a
+                machine that has a GPU -- gpu=False alone does not do that.
         """
         # TODO: #26, make it possible to override models
         # This impacts all the other related classes here
 
-        # Set device for model inference
-        self.device = 'cuda' if gpu else None
+        # Set device for model inference. `device` wins when given, so a
+        # caller can pin the encoders to the CPU; `gpu` alone only ever asks
+        # for CUDA and leaves the choice to sentence-transformers otherwise.
+        self.device = device if device is not None else ('cuda' if gpu else None)
         
         # Initialize utility classes
         self.cache_manager = CacheManager()

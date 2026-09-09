@@ -138,6 +138,11 @@ class PloverSklearnClassifier:
         recorded in metadata.json, which is the one the models were trained on.
     progress_bar : bool
         Whether to show progress bar during batch encoding.
+    device : str, optional
+        Torch device ('cpu' or 'cuda') to put the sentence encoder on. Leave
+        unset to let sentence-transformers choose, which is CUDA when a card is
+        visible; pass 'cpu' to keep the encoder off the GPU on a machine that
+        has one.
 
     Example
     -------
@@ -160,6 +165,7 @@ class PloverSklearnClassifier:
         codebook_path: str | None = None,
         type_model_dir: str | None = None,
         mode_model_dir: str | None = None,
+        device: str | None = None,
     ):
         if type_model_dir is None:
             type_model_dir = str(resources.files("ngec").joinpath("assets/event_models_v2/"))
@@ -203,7 +209,9 @@ class PloverSklearnClassifier:
         self.ontology = load_ontology(codebook_path)
 
         # Load sentence encoder
-        self.encoder = SentenceTransformer(f'sentence-transformers/{self.encoder_name}')
+        self.device = device
+        self.encoder = SentenceTransformer(f'sentence-transformers/{self.encoder_name}',
+                                           device=device)
 
         # Word features, if these models were trained with them. Without the
         # exact vocabulary and IDF weights the vectorizer was fit with, the word

@@ -663,7 +663,7 @@ def load_wiki_ranker_model(model_path: str | Path) -> tuple[XGBClassifier, XGBCl
     return wiki_ranker, wiki_ranker_no_context
 
 
-def load_actor_sim_model(model_dir: str | Path) -> SentenceTransformer:
+def load_actor_sim_model(model_dir: str | Path, device=None) -> SentenceTransformer:
     """
     Load the actor similarity model trained on Wikipedia redirects.
     
@@ -671,12 +671,15 @@ def load_actor_sim_model(model_dir: str | Path) -> SentenceTransformer:
     
     Args:
         model_dir: Directory containing the similarity model
+        device: Torch device ('cpu' or 'cuda') to load it on. The default None
+            leaves the choice to sentence-transformers, which takes CUDA when a
+            card is visible -- pass 'cpu' to keep this model off the GPU.
         
     Returns:
         SentenceTransformer: Loaded similarity model
     """
     model_dir = Path(model_dir)
-    return SentenceTransformer(str(model_dir))
+    return SentenceTransformer(str(model_dir), device=device)
 
 
 class WikiMatcher:
@@ -715,7 +718,8 @@ class WikiMatcher:
             actor_sim_model: Actor similarity model
             ranker_threshold: Minimum ranker probability to accept the top
                 candidate as the article; below it the mention gets no page
-            device: Device to use for inference ('cuda' or None)
+            device: Device to use for inference ('cuda', 'cpu', or None). Passed
+                to the actor-similarity model as well as the query encoder.
             wiki_sort_method: Method to use for sorting results
         """
         # Initialize components or use provided ones
@@ -741,7 +745,7 @@ class WikiMatcher:
         # Actor similarity model 
         if actor_sim_model is None:
             actor_sim_model = Path(str(resources.files("ngec"))) / "assets" / "actor_sim_model2"
-        self.actor_sim = load_actor_sim_model(actor_sim_model)
+        self.actor_sim = load_actor_sim_model(actor_sim_model, device=device)
 
         # Wiki Ranker models (xgboost). The ranker was trained on one encoder's
         # similarity features, so pick the asset that matches the encoder in
