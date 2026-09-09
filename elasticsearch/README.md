@@ -8,9 +8,18 @@ instance. It serves two indices:
 | `wiki`     | actor resolution, entity linking | an English Wikipedia XML dump |
 | `geonames` | location resolution (mordecai3) | the GeoNames gazetteer        |
 
-Most users should **not** build these. Download the pre-built index instead —
-see the main [README.md](../README.md) for quick-start instructions. Building
-the wiki index from scratch takes many hours and tens of GB of scratch space.
+Most users should **not** build these. Get a pre-built index instead — see
+[SETUP.md](SETUP.md), which covers restoring a snapshot archive (path A),
+mounting a pre-built data directory (path B), the build described here (path C),
+and how to package a finished index to hand to someone else. Building the wiki
+index from scratch takes many hours and tens of GB of scratch space.
+
+Note that as of 2026-09-09 there is **no working public download URL** for
+either archive format; see the warning at the top of SETUP.md.
+
+`python3 setup/doctor/ngec_doctor.py` reports which of the two indices this
+machine actually has, with document counts, and prints the command for whichever
+is missing.
 
 The rest of this directory is for the case where you do need to build your own.
 
@@ -46,7 +55,34 @@ reloading anything.
 If the directory is shared with another project, **never run two ES containers
 against it at once** — two nodes on one data dir corrupts it.
 
+### Building somewhere else entirely
+
+The whole procedure below rebuilds *in place*, which means stopping the node
+that is serving. If you'd rather not — you're testing a loader change, or the
+live node is serving a demo — build into a scratch index instead. Nothing is
+shared, so nothing can be corrupted:
+
+```bash
+export NGEC_ES_PORT=9201                       # compose publishes here instead
+export NGEC_ES_DATA=/tmp/scratch-index         # absolute, and its own directory
+export NGEC_ES_URL=http://localhost:9201       # what the loaders talk to
+export NGEC_REDIS_PORT=6380                    # wiki builds only
+docker compose --project-directory . -f elasticsearch/compose-build.yml up -d es
+```
+
+`tools/rebuild_index.sh` is not port-aware and always uses 9200, so this is a
+manual-steps-only route.
+
 ## Scripted rebuild and publish
+
+> **Status (2026-09-09):** the two scripts are still the "not fully working
+> yet" state their commit message describes, and are the one part of this
+> directory that has **not** been run end to end — verifying them means letting
+> them stop whatever holds port 9200, which on the reference box is the live
+> demo. The loaders underneath them are tested and work; see
+> `docs/memos/2026-09-09-demo-review/es_index_verification.md`. Until someone
+> runs them on a machine with nothing to lose, treat the manual steps below as
+> the procedure and the scripts as a convenience to check.
 
 Two scripts automate everything below, and add the guards the manual procedure
 depends on you remembering. Prefer them; the manual steps that follow are the
@@ -127,9 +163,25 @@ prunes anything outside the groups you name, so an unrelated `uv sync` for
 normal work silently removes these again. Pre-fetching with `uv sync --group
 es-build` is fine, it just isn't durable on its own.
 
+> ⚠️ **Pass your install extras too.** `uv sync` is exact about extras as well
+> as groups, so `uv run --group es-build ...` on a machine installed with
+> `--extra cu12 --extra vllm` re-resolves the environment *without* them and
+> replaces your PyTorch build with the default PyPI (CUDA 13) one. On the
+> reference box `uv sync --group es-build --dry-run` reports "would uninstall
+> 146 packages". Repeat whichever extras you installed with, on every command:
+>
+> ```bash
+> uv run --extra cu12 --extra vllm --group es-build python ...
+> ```
+>
+> The extras (`cpu` / `cu12` / `cu13`, plus `models` and `vllm`) are the ones
+> in the repo-root README's install section, and they are mutually exclusive.
+
 ### Update the GeoNames index
 
-Run from the repo root. Takes >30 minutes for the full gazetteer.
+Run from the repo root. Measured 2026-09-09: ~1.5 minutes to download the
+gazetteer and ~23 minutes to load its 13.5M rows, for ~13.3M documents and 2 GB
+on disk. Budget half an hour.
 
 ```bash
 # 0. back up, then stop your normal ES so the build stack can use the data dir

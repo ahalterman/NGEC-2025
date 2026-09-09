@@ -40,6 +40,7 @@ import multiprocessing
 import os
 import pickle
 import re
+import subprocess
 import time
 
 import elasticsearch
@@ -501,6 +502,24 @@ def file_date(path):
         return None
 
 
+def code_commit():
+    """The git commit this loader was run from, or None outside a checkout.
+
+    Two indices built from the same dump by different versions of this script
+    are not interchangeable, so the commit belongs in the provenance alongside
+    the dump date.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=10,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
 def stamp_index_meta(es, index, meta):
     """Record build provenance on the index itself.
 
@@ -585,6 +604,7 @@ def load_es(file, es_batch, threads, drop=False):
             "dump_file": os.path.basename(file),
             "dump_date": file_date(file),
             "build_date": datetime.date.today().isoformat(),
+            "code_commit": code_commit(),
             "doc_count": after_docs,
             "builder": "NGEC elasticsearch/es_wiki/load_wiki_es.py",
         },

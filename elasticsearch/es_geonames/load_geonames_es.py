@@ -23,6 +23,7 @@ The Elasticsearch URL can be overridden with NGEC_ES_URL
 
 import csv
 import os
+import subprocess
 import time
 import zipfile
 from datetime import date, datetime
@@ -261,6 +262,24 @@ def file_date(path):
         return None
 
 
+def code_commit():
+    """The git commit this loader was run from, or None outside a checkout.
+
+    Two indices built from the same gazetteer by different versions of this
+    script are not interchangeable, so the commit belongs in the provenance
+    alongside the dump date.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            capture_output=True, text=True, timeout=10,
+        )
+        return out.stdout.strip() or None
+    except Exception:
+        return None
+
+
 def stamp_index_meta(index, meta):
     """Record build provenance on the index itself.
 
@@ -329,6 +348,14 @@ def load(data_dir):
 @plac.pos("process", "Which stage to run", choices=["download", "recreate", "load", "reload", "all"])
 @plac.opt("data_dir", "Directory for the gazetteer files")
 def main(process="all", data_dir="geonames_data"):
+    # `download` only fetches files. Return before touching Elasticsearch, so
+    # you can fetch the gazetteer in advance without a running node -- asking
+    # for a document count here used to abort the stage with a raw
+    # ConnectionError before a single byte was downloaded.
+    if process == "download":
+        download_gazetteer(data_dir)
+        return
+
     # Captured before `recreate` empties the index, so this reflects the OLD data.
     before = index_count()
     print(f"geonames records before: {before if before is not None else 'no index'}")
@@ -355,6 +382,7 @@ def main(process="all", data_dir="geonames_data"):
                 "gazetteer_file": "allCountries.txt",
                 "dump_date": file_date(os.path.join(data_dir, "allCountries.txt")),
                 "build_date": date.today().isoformat(),
+                "code_commit": code_commit(),
                 "doc_count": after,
                 "builder": "NGEC elasticsearch/es_geonames/load_geonames_es.py",
             },

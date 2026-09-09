@@ -52,10 +52,15 @@ services:
       # The shared live data dir holding both the geonames and wiki indices.
       - ${NGEC_ES_DATA:-./elasticsearch/data/wikigeo_index}:/usr/share/elasticsearch/data
     ports:
-      - "9200:9200"
+      # Defaults to 9200, which is where the loaders and the runtime look. Set
+      # NGEC_ES_PORT (and NGEC_ES_DATA, and the loaders' NGEC_ES_URL) to build
+      # into a scratch index on a side port without stopping a live node --
+      # useful for testing a change to a loader. tools/rebuild_index.sh still
+      # assumes 9200 and is not port-aware.
+      - "${NGEC_ES_PORT:-9200}:9200"
 
   redis:
     image: redis
     container_name: ngec-build-redis
     ports:
-      - "6379:6379"
+      - "${NGEC_REDIS_PORT:-6379}:6379"
