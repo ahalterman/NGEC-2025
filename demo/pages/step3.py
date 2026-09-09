@@ -5,7 +5,8 @@ import streamlit as st
 
 from ngec_demo import resources as R
 from ngec_demo import steps
-from ngec_demo.style import hbar_chart, json_block, lede, mode_badge, timing_table
+from ngec_demo.style import (hbar_chart, json_block, lede, mode_badge, running,
+                             timing_table)
 
 # Two full names, which the ranker resolves with near certainty, and an acronym
 # that is a dozen organisations until the context names a country. A bare
@@ -58,7 +59,7 @@ if missing:
                "This page needs Elasticsearch and the wiki index.")
 
 if run:
-    with st.spinner("Searching Wikipedia and scoring the candidates…"):
+    with running(R.current_mode(), "Searching Wikipedia and scoring the candidates…"):
         st.session_state["s3_asked"] = st.session_state.s3_span
         st.session_state["s3_result"] = steps.resolve_entity(
             st.session_state.s3_span, context=st.session_state.s3_context)

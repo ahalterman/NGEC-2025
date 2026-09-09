@@ -1,7 +1,7 @@
 # NGEC demo
 
-A seven-page Streamlit app: one end-to-end run, one page per pipeline step, and
-a timing page that codes the same document in every mode.
+An eight-page Streamlit app: one end-to-end run, one page per pipeline step, a
+bulk uploader and a timing page.
 
 ## Run it
 
@@ -18,6 +18,29 @@ On a CPU-only box use `--extra cpu` instead of the two above.
 The `env -u LD_LIBRARY_PATH` prefix is for this box, so torch picks up its own
 CUDA libraries.
 
+## Pages
+
+- **NGEC** — a document in, coded event records out.
+- **1**–**4** — classification, attribute extraction, entity resolution, actor
+  coding, one page each, with the timing broken down by call.
+- **5. When and where?** — a date phrase against a free-text publication date,
+  then place names against geonames as a table and raw JSON (no map; the
+  mapping demo lives elsewhere).
+- **Bulk** — a CSV or JSONL of documents in, the coded events out as JSONL or
+  CSV. GPU mode only, since on the CPU path a document takes seconds, and capped
+  at 200 documents because the box is shared.
+- **Timing** — the same document coded in every available mode, component by
+  component, with what runs where and what loading cost.
+
+## Models
+
+Loading the models takes a minute and happens once per process, not per
+visitor. The sidebar's **Load models** button does it deliberately, naming each
+component as it goes, and then says how long it took; otherwise the first click
+on any page pays for it, under a status that says so rather than a spinner that
+looks like a hang. The sidebar's status block says whether the current mode is
+loaded.
+
 ## Modes
 
 The sidebar has a **Compute** toggle: GPU (vllm for the attribute model, the
@@ -31,10 +54,6 @@ On a box with no card the toggle collapses to a CPU caption. **CPU mode needs a
 running `llama-server`** holding the quantized attribute model; without it the
 sidebar says the server is down and step 2 onwards returns nothing. The systemd
 user unit and the model files are described in `deploy/README.md`.
-
-The **Timing** page runs one document through the pipeline in each available
-mode and shows the per-component breakdown side by side, what runs where, and
-what loading and warming up the models cost.
 
 ## Check it
 
@@ -75,10 +94,13 @@ and takes a few minutes; the CPU pass needs `llama-server` up.
 
 ## Layout
 
-- `app.py` — navigation, the compute toggle and the status sidebar.
-- `ngec_demo/resources.py` — cached model loaders, `health()` and the modes.
+- `app.py` — navigation, the compute toggle, the Load models button and the
+  status sidebar.
+- `ngec_demo/resources.py` — cached model loaders, `load_all()`, `health()` and
+  the modes.
 - `ngec_demo/steps.py` — one function per step, all returning JSON-safe dicts.
 - `ngec_demo/timing.py` — the per-component timers the loaders wrap models in.
 - `ngec_demo/examples.py` — the documents and spans the pages open with.
-- `ngec_demo/style.py` — CSS, the bar chart, the timing table, the widgets.
+- `ngec_demo/style.py` — the light theme's CSS, the bar chart, the timing
+  table, the sidebar block and the widgets the pages share.
 - `pages/` — one file per page.

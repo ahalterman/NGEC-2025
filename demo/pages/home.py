@@ -6,7 +6,9 @@ import streamlit as st
 from ngec_demo import resources as R
 from ngec_demo import steps
 from ngec_demo.examples import DOCUMENTS
-from ngec_demo.style import json_block, lede, mode_badge, step_links, timing_table
+from ngec_demo.style import (code_glossary, demo_model_note, event_heading,
+                             field_table, json_block, lede, mode_badge,
+                             role_codes_in, running, step_links, timing_table)
 
 st.title("NGEC")
 lede("Next Generation Event Coder — turns a news story into structured political "
@@ -38,7 +40,7 @@ if missing:
                "The steps that need them will return nothing.")
 
 if run:
-    with st.spinner("Loading models and coding the document…"):
+    with running(mode, "Coding the document…"):
         _, notes = R.get_classifier(mode)
         st.session_state["model_notes"] = notes
         st.session_state["result"] = steps.run_pipeline(text, str(pub_date),
@@ -47,9 +49,32 @@ if run:
 result = st.session_state.get("result")
 if result:
     st.subheader("Events")
-    rows = steps.events_table(result["events"])
-    if rows:
-        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    events = result["events"]
+    if events:
+        # One story can fire an event type under several modes, and each mode is
+        # coded separately, so the records can come back identical apart from
+        # the mode. Say so once rather than leaving the reader to spot it.
+        types = [e.get("event_type", "") for e in events]
+        repeated = sorted({t for t in types if types.count(t) > 1})
+        if repeated:
+            st.caption(f"{', '.join(repeated)} fired under more than one mode, "
+                       "so it appears once per mode; the two records can "
+                       "otherwise be identical.")
+        codes: list[str] = []
+        for i, event in enumerate(events, start=1):
+            fields = steps.event_fields(event)
+            # The type and the mode are the first two rows of the table below,
+            # so the heading only numbers the events.
+            event_heading(i)
+            field_table(fields)
+            codes += [code for name, value in fields if name.endswith("code")
+                      for code in role_codes_in(value)]
+        # Only the codes actually on screen: the full PLOVER list is forty
+        # entries and would bury the three this document produced.
+        glossary = code_glossary(list(dict.fromkeys(codes)))
+        if glossary:
+            st.caption(f"Codes: {glossary}. A code is the actor's country "
+                       "followed by its role.")
     else:
         st.info("No event cleared the classifier's thresholds, or the attribute "
                 "model declined every candidate.")
@@ -60,6 +85,7 @@ if result:
                    + ", ".join(result["dropped"]))
 
     json_block(result["events"], label="Full records (JSON)")
+    demo_model_note()
 
     st.subheader("Timing")
     timing_table(result["breakdown"])

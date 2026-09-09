@@ -160,10 +160,14 @@ def run_mode(mode: str) -> None:
 
     # Load the models before the timed steps rather than inside the first one
     # that happens to need them: vllm's CUDA-graph capture is about a minute,
-    # and that belongs in the load report, not in step 2's stopwatch.
-    R.get_attribute_model(mode)
-    R.get_nlp_trf()
-    R.get_geolocation()
+    # and that belongs in the load report, not in step 2's stopwatch. This is
+    # the same call the sidebar's "Load models" button makes, so checking it
+    # here costs nothing extra -- but it has to come after the cold-vs-warm
+    # check above, which needs one model still cold to mean anything.
+    print("\n[load_all]")
+    seconds = R.load_all(mode, on_step=lambda name: print(f"    loading {name}"))
+    print(f"    {seconds:.1f}s")
+    check("load_all", R.is_loaded(mode), "is_loaded() is False after load_all()")
 
     # --- step 1
     label, text = SHORT_TEXTS[0]
@@ -199,6 +203,55 @@ def run_mode(mode: str) -> None:
               mode=mode)
     if out:
         print(f"    {len(out['records'])} record(s)")
+
+    # The prompt the page shows in "Advanced: edit the prompt", edited by hand
+    # and sent back. The document and definition are the ECAV example from
+    # pages/step2.py -- an ontology from another project -- kept in step with
+    # that page's EXAMPLES by hand.
+    ecav_text = ("Supporters of the opposition Unity Party blocked the main road "
+                 "into Kisumu on Thursday, three days after the parliamentary "
+                 "election, accusing the electoral commission of tampering with "
+                 "the count. Police fired tear gas to disperse the crowd of about "
+                 "2,000, a party spokesman said.")
+    # TODO(andy): replace with the verbatim definition from the ECAV codebook
+    # (Daxecker, Amicarelli & Jung 2019), here and in pages/step2.py. This is a
+    # shortened paraphrase of that page's draft definition and has not been
+    # checked against the codebook.
+    ecav_def = ("Public acts of mobilization, contestation, or coercion by state "
+                "or non-state actors used to affect the electoral process, or "
+                "arising in the context of electoral competition. The party "
+                "carrying out the act is the ACTOR and the party it is directed "
+                "against is the RECIPIENT.")
+    prompt = steps.attribute_prompt(ecav_text, "ELECTORAL_CONTENTION",
+                                    event_def=ecav_def, mode=mode)
+    print(f"\n[attribute_prompt] {len(prompt)} characters")
+    check("attribute_prompt", "ELECTORAL_CONTENTION" in prompt,
+          "the event type is not in the prompt")
+    check("attribute_prompt", ecav_text[:40] in prompt,
+          "the document is not in the prompt")
+
+    anchor = '"location": "where occurred OR N/A"'
+    edited = prompt.replace(
+        anchor, anchor + ',\n    "participant_count": "how many took part OR N/A"')
+    check("attribute_prompt", edited != prompt,
+          "the OUTPUT FORMAT block has moved: the edit changed nothing")
+    out = run("extract_attributes (edited prompt)", steps.extract_attributes,
+              ecav_text, "ELECTORAL_CONTENTION", event_def=ecav_def,
+              prompt_override=edited, mode=mode)
+    if out:
+        check("extract_attributes (edited prompt)", out["prompt"] == edited,
+              "the edited prompt is not the one reported as sent")
+        for record in out["records"]:
+            print("    " + json.dumps({k: v for k, v in record.items()
+                                       if k != "anchor_quote"}))
+        if llm_up:
+            check("extract_attributes (edited prompt)", len(out["records"]) >= 1,
+                  "no events extracted from the ECAV example")
+            # Whether the model honours the added field is its own business
+            # (it usually does), so this is reported rather than checked.
+            extra = sorted({key for record in out["records"] for key in record
+                            if key not in steps.STANDARD_ATTRIBUTES})
+            print(f"    keys beyond the standard six: {extra or 'none'}")
 
     # --- step 3
     span, context = ENTITY_SPANS[0]
@@ -260,13 +313,32 @@ def run_mode(mode: str) -> None:
     check("agents_file kwarg", "agents_file" in AgentMatcher.__init__.__code__.co_varnames)
 
     # --- step 5a
-    for phrase, pub_date in DATE_PHRASES:
+    # The bounded range is the demo page's fourth example: published on a
+    # Friday, so both ends fall earlier in the same week.
+    for phrase, pub_date in DATE_PHRASES + [("between Monday and Wednesday",
+                                             "2024-06-14")]:
         out = run(f"resolve_date ({phrase!r})", steps.resolve_date, phrase,
                   pub_date, mode=mode)
         if out:
             print(f"    {out['resolved_date']} .. {out['date_end']} "
                   f"[{out['date_type']}/{out['granularity']}]")
             check("resolve_date", out["date_type"] is not None, "no date_type")
+
+    # The page's "Published" box is free text, so the same date can be typed
+    # several ways -- and nonsense has to come back as None, not an exception.
+    # Not run through `run()`: this one returns a string, not a step dict.
+    print("\n[parse_pub_date]")
+    for text, expected in [("2024-06-11", "2024-06-11"),
+                           ("June 11, 2024", "2024-06-11"),
+                           ("last Friday", "a date"),
+                           ("banana", None)]:
+        got = steps.parse_pub_date(text)
+        print(f"    {text!r} -> {got}")
+        if expected == "a date":
+            check("parse_pub_date", got is not None, f"{text!r} should parse")
+        else:
+            check("parse_pub_date", got == expected,
+                  f"{text!r} gave {got}, expected {expected}")
 
     # --- step 5b
     doc = DOCUMENTS[0]
@@ -300,6 +372,9 @@ def run_mode(mode: str) -> None:
         print(f"    dropped: {result['dropped']}")
     for row in steps.events_table(result["events"]):
         print("    " + json.dumps(row))
+    # The per-event view the main page draws, from the same records.
+    for event in result["events"]:
+        print("    " + json.dumps(steps.event_fields(event)))
     try:
         json.dumps(result)
     except TypeError as exc:
@@ -385,6 +460,78 @@ def print_load_report() -> None:
               f"{row['load']:>9.2f}{row['warm_up']:>9.2f}")
 
 
+# --- bulk coding -------------------------------------------------------------
+
+def check_bulk(mode: str) -> None:
+    """Three documents through the bulk page's parsing and pipeline.
+
+    The parsing is checked in every mode; the run itself only on the GPU. The
+    bulk page is disabled off the GPU, so coding three documents on the CPU
+    would measure a path nobody can reach and cost minutes doing it.
+    """
+    docs = [{"id": doc.key, "text": doc.text, "pub_date": doc.pub_date}
+            for doc in DOCUMENTS[:3]]
+
+    # The file parsing is pure Python, so it is checked in every mode: the same
+    # three documents written out as a CSV and as a JSONL have to come back the
+    # same way the page hands them to the pipeline.
+    import pandas as pd  # noqa: PLC0415 - only this section needs it
+
+    frame = pd.DataFrame([{"id": doc["id"], "text": doc["text"],
+                           "publication_date": doc["pub_date"]} for doc in docs])
+    parsed, problems = steps.read_documents(frame.to_csv(index=False).encode(),
+                                            "check.csv")
+    check("read_documents", len(parsed) == len(docs),
+          f"parsed {len(parsed)} of {len(docs)} CSV rows ({problems})")
+    jsonl = "\n".join(json.dumps(row) for row in frame.to_dict("records"))
+    from_jsonl, _ = steps.read_documents(jsonl.encode(), "check.jsonl")
+    check("read_documents", from_jsonl == parsed,
+          "the same documents parsed differently as CSV and as JSONL")
+
+    if mode != "gpu":
+        print("\n[run_pipeline_bulk] skipped: bulk coding is GPU-only")
+        return
+    print(f"\n[run_pipeline_bulk] {len(docs)} documents")
+    seen: list[str] = []
+    start = time.time()
+    result = steps.run_pipeline_bulk(docs, mode=mode,
+                                     progress=lambda stage, done, total: seen.append(stage))
+    TIMINGS.append((f"run_pipeline_bulk ({mode})", result["seconds"]))
+    print(f"    {time.time() - start:.1f}s wall; {len(result['events'])} events "
+          f"from {result['n_docs']} documents "
+          f"({result['per_doc_seconds']:.1f}s a document)")
+    if result["dropped"]:
+        print(f"    dropped: {result['dropped']}")
+
+    check("run_pipeline_bulk", result["n_docs"] == len(docs),
+          f"reported {result['n_docs']} documents, not {len(docs)}")
+    check("run_pipeline_bulk", result["mode"] == mode, "wrong mode reported")
+    check("run_pipeline_bulk", list(seen) == list(steps.BULK_STAGES),
+          f"progress reported {seen}, not the six components")
+    try:
+        json.dumps(result)
+    except TypeError as exc:
+        check("run_pipeline_bulk", False, f"not JSON-serialisable: {exc}")
+
+    # Every document should be traceable back through orig_id, and the records
+    # have to be the same shape the single-document page already draws.
+    ids = {doc["id"] for doc in docs}
+    for event in result["events"]:
+        check("run_pipeline_bulk",
+              set(event) >= {"id", "orig_id", "event_type", "event_mode",
+                             "attributes", "event_location", "date_resolved"},
+              f"a record is missing top-level keys: {sorted(event)}")
+        check("run_pipeline_bulk", event.get("orig_id") in ids,
+              f"orig_id {event.get('orig_id')!r} is not one of the documents")
+        check("run_pipeline_bulk", isinstance(event.get("attributes"), dict),
+              "attributes is not a single dict")
+    if R.get_attribute_model(mode) is not None:
+        check("run_pipeline_bulk", bool(result["events"]),
+              "no events from three documents")
+    for row in steps.events_table(result["events"])[:5]:
+        print("    " + json.dumps(row))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", default="all", choices=["gpu", "cpu", "all"],
@@ -403,6 +550,7 @@ def main() -> int:
 
     for mode in modes:
         run_mode(mode)
+        check_bulk(mode)
 
     print("\n--- timings (seconds) ---")
     for name, seconds in TIMINGS:

@@ -34,7 +34,9 @@ Each loader also instruments its model (see `timing.py`) and runs one tiny
 input through it. Warming up matters more than it sounds: vllm captures CUDA
 graphs on its first generate (~60 s) and the encoders initialise lazily, and
 without this that cost would land on whichever step a visitor clicked first.
-The load and warm-up costs are kept in `load_report()` instead.
+The load and warm-up costs are kept in `load_report()` instead. `load_all()`
+does the whole set in one go, which is what the sidebar's "Load models" button
+and the first click of any page run.
 """
 
 from __future__ import annotations
@@ -453,6 +455,62 @@ def _instrument_actor_resolver(resolver) -> None:
     })
 
 
+# --- loading everything at once ----------------------------------------------
+
+# Which modes have been loaded end to end in this process. Loading is
+# per-process, not per-visitor -- `st.cache_resource` caches for the life of the
+# server -- so a module-level set has exactly the same lifetime as the cache it
+# is describing, and a second browser tab correctly sees the models the first
+# one loaded.
+_loaded_modes: set[str] = set()
+
+
+def is_loaded(mode: str) -> bool:
+    """Has everything this mode needs already been loaded in this process?"""
+    return mode in _loaded_modes
+
+
+def load_all(mode: str, on_step=None) -> float:
+    """Load and warm up every model the pipeline uses in `mode`; seconds spent.
+
+    Each loader is cached, so the pages could leave this to happen on the first
+    click -- but then that click sits for a minute with nothing to show for it.
+    Calling this from the sidebar, or as a first labelled phase of a run, turns
+    the wait into something with a name on it. `on_step(name)` is called before
+    each component so the caller can say which one is loading.
+
+    The order is the pipeline's own (see `steps.run_pipeline`), so the load
+    report reads in the order a document is coded. A component whose service is
+    down loads as None and is not retried here; `health()` is where that shows.
+    """
+    start = time.time()
+    stages = [
+        ("Elasticsearch", get_es),
+        ("spaCy", lambda: (get_nlp_trf(), get_nlp_lg())),
+        ("classifier", lambda: get_classifier(mode)),
+        ("geoparser", get_geolocation),
+        ("extractor", lambda: get_attribute_model(mode)),
+        ("encoders", lambda: get_actor_resolver(mode)),
+    ]
+    for name, load in stages:
+        if on_step is not None:
+            on_step(name)
+        load()
+    get_formatter()  # pure Python and instant; not worth announcing
+    _loaded_modes.add(mode)
+    return time.time() - start
+
+
+def load_seconds(mode: str) -> float:
+    """What loading and warming up this mode cost, from `load_report()`.
+
+    The shared models (spaCy, the geoparser) are counted in whichever mode
+    asks, since they were loaded once for both.
+    """
+    return sum(row["load"] + row["warm_up"] for row in load_report()
+               if row["mode"] in (mode, "shared"))
+
+
 # --- what runs where ---------------------------------------------------------
 
 def component_devices(mode: str | None = None) -> dict[str, str]:
@@ -523,10 +581,13 @@ def _llamacpp_health() -> dict:
     # "qwen3-event-extraction-exp5.1" against "attr-exp5.1-q8.gguf": match on
     # the experiment tag, the part that distinguishes the two models.
     tag = expected.split("-")[-1] if expected else ""
+    # llama-server reports the GGUF by the path it was started with; the
+    # sidebar is one column wide, so only the file name is shown.
+    name = os.path.basename(served.rstrip("/"))
     if served and tag and tag not in served:
         return {"ok": False,
-                "detail": f"serving '{served}', but prompting for '{expected}'"}
-    return {"ok": True, "detail": f"{served or 'up'} at {LLAMACPP_URL}"}
+                "detail": f"serving '{name}', but prompting for '{expected}'"}
+    return {"ok": True, "detail": f"{name or 'up'} at {LLAMACPP_URL}"}
 
 
 def health(mode: str | None = None) -> dict[str, dict]:

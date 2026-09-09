@@ -1,13 +1,24 @@
+# The "Pocket Operator" look: white paper, grey chips, black hairlines, one
+# orange. The fonts themselves are pulled in by ngec_demo/style.py, which also
+# carries the widget-level CSS; these keys only tell Streamlit's own components
+# which colours and families to use.
 [theme]
-base = "dark"
-primaryColor = "#F97316"
-backgroundColor = "#0E1117"
-secondaryBackgroundColor = "#171A21"
-textColor = "#E6E6E6"
-font = "sans serif"
+base = "light"
+primaryColor = "#F0521E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F2F2F0"
+textColor = "#2A2A28"
+font = "Space Grotesk, sans-serif"
+headingFont = "Space Grotesk, sans-serif"
+codeFont = "IBM Plex Mono, monospace"
 
 [server]
 runOnSave = true
 
 [browser]
 gatherUsageStats = false
+
+[client]
+# "minimal" hides the Deploy button and trims the top-right menu to what a
+# reviewer can use; the app is not a Streamlit Cloud deployment.
+toolbarMode = "minimal"

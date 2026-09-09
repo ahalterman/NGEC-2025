@@ -6,7 +6,7 @@ import streamlit as st
 from ngec_demo import resources as R
 from ngec_demo import steps
 from ngec_demo.examples import DOCUMENTS
-from ngec_demo.style import lede, mode_badge, timing_table
+from ngec_demo.style import lede, mode_badge, running, timing_table
 
 MODES = R.available_modes()
 
@@ -35,7 +35,7 @@ run = right.button("Time it in every mode", type="primary")
 if run:
     results = {}
     for mode in MODES:
-        with st.spinner(f"Coding the document in {mode_badge(mode)} mode…"):
+        with running(mode, f"Coding the document in {mode_badge(mode)} mode…"):
             results[mode] = steps.run_pipeline(st.session_state.tm_doc,
                                                str(pub_date), mode=mode)
     st.session_state["tm_results"] = results
@@ -60,7 +60,11 @@ st.dataframe(pd.DataFrame([{"component": name,
 st.subheader("Load and warm-up")
 report = R.load_report()
 if report:
-    st.dataframe(pd.DataFrame(report), hide_index=True, width="stretch")
+    # The report's keys are what `check_demo.py` prints; the table gives them
+    # readable headings and says what the numbers are measured in.
+    st.dataframe(pd.DataFrame(report).rename(columns={"load": "load (s)",
+                                                      "warm_up": "warm-up (s)"}),
+                 hide_index=True, width="stretch")
 else:
     st.caption("Nothing has been loaded in this process yet.")
 st.caption(f"CPU mode runs torch on {R.CPU_THREADS} threads, to match the "

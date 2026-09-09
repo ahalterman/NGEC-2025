@@ -7,7 +7,8 @@ import streamlit as st
 
 from ngec_demo import resources as R
 from ngec_demo import steps
-from ngec_demo.style import json_block, lede, mode_badge, timing_table
+from ngec_demo.style import (code_chips, code_metrics, json_block, lede,
+                             mode_badge, running, timing_table)
 
 # One span per route through the coder: a named person only Wikipedia knows, a
 # generic role the actor dictionary matches on its own, and a bare country.
@@ -24,14 +25,20 @@ EXAMPLES: list[tuple[str, str, str]] = [
 
 # The agents-file format: a pattern, then its code in square brackets, with
 # underscores for spaces. ENV is not a PLOVER code -- the point is that a project
-# can invent one. The bundled dictionary codes "climate activists" as CVL and
-# "Extinction Rebellion" as REB (it matches on "rebellion"); the custom file
-# gives both ENV.
+# can invent one. The bundled dictionary (ngec/assets/PLOVER_agents.txt) has no
+# pattern for the Sunrise Movement, so the bundled column codes the span from
+# its Wikipedia article instead and returns some general civil-society code;
+# with this file it is ENV either way. The exact bundled code is whatever the
+# wiki coder makes of the article, so read it off the page's own "Bundled
+# dictionary" row rather than trusting a code written in a comment.
+# "Extinction Rebellion" is worth typing in as a second span: the bundled
+# dictionary has a REBELLION pattern, so it goes somewhere else again.
 CUSTOM_AGENTS = """CLIMATE_ACTIVISTS [ENV]
 CLIMATE_PROTESTERS [ENV]
+SUNRISE_MOVEMENT [ENV]
 EXTINCTION_REBELLION [ENV]
 GREENPEACE [ENV]"""
-CUSTOM_SPAN = "Extinction Rebellion"
+CUSTOM_SPAN = "Sunrise Movement"
 
 TMP_DIR = Path(__file__).resolve().parent.parent / ".tmp"
 
@@ -70,18 +77,24 @@ if missing:
                "This page needs Elasticsearch and the wiki index.")
 
 if run:
-    with st.spinner("Coding the actor…"):
+    with running(R.current_mode(), "Coding the actor…"):
         st.session_state["s4_result"] = steps.categorize_entity(
             st.session_state.s4_span, context=st.session_state.s4_context,
             query_date=str(query_date))
 
 
 def _codes(result: dict) -> None:
-    """The three coded fields, side by side."""
-    one, two, three = st.columns(3)
-    one.metric("code_1", result["code_1"] or "—")
-    two.metric("code_2", result["code_2"] or "—")
-    three.metric("country", result["country"] or "—")
+    """The three coded fields, side by side.
+
+    The role code and the country code are the answer, so they are the largest
+    thing on the page; code_2 is a second role the resolver sometimes adds and
+    is usually empty, and drawing it at the same weight made the answer harder
+    to find than it should be.
+    """
+    code_metrics([("code_1", result["code_1"]),
+                  ("code_2", result["code_2"]),
+                  ("country", result["country"])],
+                 lead=("code_1", "country"))
 
 
 result = st.session_state.get("s4_result")
@@ -100,8 +113,13 @@ if result:
                f"{result['best_reason'] or '—'}")
     if result["description"]:
         st.write(result["description"])
-    codes = " ".join(f"`{c}`" for c in result["all_code1s"] + result["all_code2s"])
-    st.markdown(f"Codes considered: {codes}" if codes else "Codes considered: none")
+    # Every code the resolver weighed, with the one it chose at full contrast:
+    # the list is only interesting next to the answer it produced.
+    considered = list(dict.fromkeys(
+        c for c in result["all_code1s"] + result["all_code2s"] if c))
+    chips = code_chips(considered, winner=result["code_1"])
+    st.markdown(f"Codes considered: {chips}" if chips else "Codes considered: none",
+                unsafe_allow_html=True)
     st.caption(f"{result['seconds']:.1f} s · {mode_badge(result['mode'])}")
 
     json_block(result, label="Raw JSON")
@@ -124,7 +142,8 @@ if run_custom:
     TMP_DIR.mkdir(parents=True, exist_ok=True)
     path = TMP_DIR / "custom_agents.txt"
     path.write_text(st.session_state.s4_agents, encoding="utf-8")
-    with st.spinner("Embedding the custom patterns and coding the span…"):
+    with running(R.current_mode(),
+                 "Embedding the custom patterns and coding the span…"):
         st.session_state["s4_custom"] = {
             "default": steps.categorize_entity(st.session_state.s4_custom_span,
                                                query_date=str(query_date)),
