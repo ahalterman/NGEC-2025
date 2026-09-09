@@ -30,14 +30,18 @@ WorkingDirectory=%h/ngec-llamacpp
 # binary rather than anything installed system-wide.
 Environment=LD_LIBRARY_PATH=%h/ngec-llamacpp/bin
 
-# -t 16 on a 24-thread box leaves room for the rest of the pipeline (spaCy, the
+# -t 4 rather than every core: generation is limited by memory bandwidth, not
+# arithmetic, and stops getting faster at about four threads while adding
+# variance past that (docs/PERFORMANCE.md, "Serving the attribute model on a CPU
+# host"). It also leaves room for the rest of the pipeline (spaCy, the
 # classifiers, Elasticsearch queries), which run in the Streamlit process while
-# generation is in flight. -c 8192 covers the ~1,300-token extraction prompt with
-# room for the server's prompt cache, which the several event types extracted
-# from one document all hit.
+# generation is in flight, and it is what the deployment box is configured with.
+# -c 8192 covers the ~1,300-token extraction prompt with room for the server's
+# prompt cache, which the several event types extracted from one document all
+# hit.
 #
 # Q8_0 rather than Q4_K_M is deliberate: Q4 is faster but diverged from the F16
-# reference on every one of 12 test prompts where Q8_0 matched 5. See DESIGN.md.
+# reference on every one of 12 test prompts where Q8_0 matched 5. See demo_old/DESIGN.md.
 #
 # attr-exp5.1-*.gguf is the 2026 retraining (ahalt/qwen3-event-extraction-exp5.1,
 # the current default); attr-*.gguf without the suffix is the original
@@ -50,7 +54,7 @@ ExecStart=%h/ngec-llamacpp/bin/llama-server \
     --host 127.0.0.1 \
     --port 8080 \
     --ctx-size 8192 \
-    --threads 16
+    --threads 4
 
 Restart=on-failure
 RestartSec=5
