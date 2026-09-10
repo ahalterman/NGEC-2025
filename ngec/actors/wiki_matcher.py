@@ -401,13 +401,17 @@ class WikiClient:
             {"match_phrase": {"alternative_names": {"query": query_term, "boost": alternative_names_boost}}},
             # Looser bag-of-words matches
             {"match": {"title": {"query": query_term, "boost": title_fuzzy_boost}}},
-            # Folded (ASCII-normalized + stemmed) title match
-            {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
             {"match": {"redirects": {"query": query_term, "boost": redirects_fuzzy_boost}}},
-            # Folded redirects match (handles diacritics + plurals)
-            {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
             {"match": {"alternative_names": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
-            {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
+            # Accent-folded `.folded` sub-fields on title/redirects/alternative_names
+            # exist in wiki indices built from 2026-09 on (see
+            # elasticsearch/es_wiki/wiki_mapping.json). Clauses querying them used
+            # to sit here, but no index has ever had the sub-field, so they were
+            # never live and contributed nothing to any published result. Turning
+            # them on is a deliberate ranking change -- it roughly doubles the
+            # title-fuzzy contribution and moves every raw_es_score -- so it needs
+            # to be evaluated with setup/train_wiki_model (and the ranker
+            # retrained) before it is switched on.
             {"match": {"intro_para": {"query": query_term, "boost": intro_para_boost}}},
             {"match": {"short_desc": {"query": query_term, "boost": short_desc_boost}}}
         ]

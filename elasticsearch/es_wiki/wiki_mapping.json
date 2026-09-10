@@ -1,19 +1,64 @@
 {
-    "settings" : {
-        "number_of_shards" : 1,
-        "number_of_replicas" : 0
+    "settings": {
+        "number_of_shards": 1,
+        "number_of_replicas": 0,
+        "analysis": {
+            "analyzer": {
+                "folded": {
+                    "type": "custom",
+                    "tokenizer": "standard",
+                    "filter": ["lowercase", "asciifolding"]
+                }
+            },
+            "normalizer": {
+                "lowercase_folded": {
+                    "type": "custom",
+                    "filter": ["lowercase", "asciifolding"]
+                }
+            }
+        }
     },
-    "mappings" : {
-        "properties" : {
-          "categories" : {"type" : "keyword", "index": "true"},
-          "intro_para" : {"type" : "text"},
-          "title" : {"type" : "text"},
-          "alternative_names" : {"type" : "text", "similarity" : "BM25",
-                                "norms": true},
-	  "redirects" : {"type" : "text", "similarity" : "boolean",
-                                "norms": true},
-          "box_type" : {"type" : "keyword", "index":  "true"},
-	  "infobox": {"type": "flattened"}
-          }
-       }
+    "mappings": {
+        "_meta": {
+            "schema_version": 2
+        },
+        "properties": {
+            "categories": {"type": "keyword", "index": "true"},
+            "intro_para": {"type": "text"},
+            "title": {
+                "type": "text",
+                "fields": {
+                    "folded": {"type": "text", "analyzer": "folded"},
+                    "keyword": {"type": "keyword", "normalizer": "lowercase_folded", "ignore_above": 256}
+                }
+            },
+            "alternative_names": {
+                "type": "text", "similarity": "BM25", "norms": true,
+                "fields": {
+                    "folded": {"type": "text", "analyzer": "folded"},
+                    "keyword": {"type": "keyword", "normalizer": "lowercase_folded", "ignore_above": 256}
+                }
+            },
+            "redirects": {
+                "type": "text", "similarity": "boolean", "norms": true,
+                "fields": {
+                    "folded": {"type": "text", "analyzer": "folded"},
+                    "keyword": {"type": "keyword", "normalizer": "lowercase_folded", "ignore_above": 256}
+                }
+            },
+            "box_type": {"type": "keyword", "index": "true"},
+            "infobox": {"type": "flattened"},
+
+            "short_desc": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}
+            },
+            "affiliated_people": {
+                "type": "text",
+                "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}
+            },
+            "update": {"type": "date"},
+            "redirect_count": {"type": "integer"}
+        }
+    }
 }

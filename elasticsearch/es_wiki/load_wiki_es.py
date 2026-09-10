@@ -81,6 +81,30 @@ ESTIMATED_PAGES = 25_700_000
 
 REDIRECT_PATTERN = re.compile(r"#?(REDIRECT|redirect|Redirect)")
 
+# Everything the indexer keeps from an article's body -- the intro paragraph,
+# the bold alternative names, the short description and the infobox -- comes
+# from the lead section, i.e. the text before the article's first heading.
+# Handing mwparserfromhell the whole article to get it is where essentially all
+# of load_es's CPU goes (see README, "Speed"), so cut the wikitext at the first
+# heading and parse only that prefix. A heading is a line that starts with two
+# or more "="; `re.M` lets it match at the very start of the text too.
+#
+# This is a plain text scan, so unlike mwparserfromhell it does not know about
+# <!-- comments --> or <nowiki>: a "==heading==" line hidden inside one of those
+# ends the lead here but would not in MediaWiki. On the 3,090-page benchmark
+# slice that never happened; what did happen, five times, is the opposite --
+# mwparserfromhell missed real headings and returned the *whole article* as the
+# lead. See README.
+LEAD_CUT_PATTERN = re.compile(r"^={2,}[^=]", re.M)
+
+# Categories are the one field that lives below the lead, at the end of the
+# article. Rather than parse the rest of the wikitext to reach them, find them
+# in the raw text: [[Category:Name]], the lowercase [[category:Name]] spelling,
+# and the [[Category:Name|sortkey]] form. The name is captured exactly as
+# written, with no whitespace normalisation, because that is what the previous
+# strip_code()-based extraction stored.
+CATEGORY_PATTERN = re.compile(r"\[\[[Cc]ategory:([^\]|]*)")
+
 
 # ---------------------------------------------------------------------------
 # Dump parsing
@@ -246,7 +270,8 @@ def read_clean_redirects():
     del_list = []
     for k in list(redirect_dict.keys()):
         if k.lower() in redirect_dict and k.lower() != k:
-            redirect_dict[k] = list(set(redirect_dict[k] + redirect_dict[k.lower()]))
+            # sorted(), not list(), so the dict written to Redis is reproducible.
+            redirect_dict[k] = sorted(set(redirect_dict[k] + redirect_dict[k.lower()]))
             del_list.append(k.lower())
     for d in del_list:
         redirect_dict.pop(d, None)
@@ -279,7 +304,10 @@ def clean_names(name_list):
     # Drop weird leftovers like "son:"
     name_list = [i for i in name_list if not i.endswith(":")]
     de_accent = [remove_accents(i) for i in name_list]
-    return list(set(name_list + de_accent))
+    # sorted(), not list(): Python randomises string hashing per process, so
+    # list(set(...)) would order these differently on every run and two builds
+    # of the same dump would never be byte-identical. See README.
+    return sorted(set(name_list + de_accent))
 
 
 # Titles for non-article namespaces / maintenance pages we never want to index.
@@ -317,6 +345,26 @@ def _should_skip_title(title):
     return False
 
 
+# One Redis client per process, built on first use.
+#
+# parse_wiki_article used to construct a redis.StrictRedis inside the function,
+# so a full run built one throwaway client per article -- ~25 million of them.
+# It runs inside a multiprocessing worker, so a client created at import time
+# (i.e. before the fork) would be shared by every worker, which redis-py does
+# not support. Creating it lazily gives each worker exactly one client and
+# leaves the lookups themselves unchanged.
+_redis_db = None
+
+
+def _redis_client():
+    global _redis_db
+    if _redis_db is None:
+        _redis_db = redis.StrictRedis(
+            host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True
+        )
+    return _redis_db
+
+
 def parse_wiki_article(title=None, text=None, use_redis=True):
     """
     Format a single Wikipedia article into the document structure the actor
@@ -330,9 +378,14 @@ def parse_wiki_article(title=None, text=None, use_redis=True):
     - infobox / box_type
     - affiliated_people (infobox leaders / founders)
     - categories
+    - redirect_count (how many redirects the page has)
 
     Returns None for pages that should be skipped (redirects, disambiguation
     pages, maintenance pages, etc.).
+
+    Only the article's lead section is handed to mwparserfromhell; the
+    categories are read out of the raw wikitext with a regex. See
+    LEAD_CUT_PATTERN and CATEGORY_PATTERN.
     """
     if not title or not text:
         return None
@@ -340,7 +393,14 @@ def parse_wiki_article(title=None, text=None, use_redis=True):
         logger.debug(f"Skipping non-article title: {title}")
         return None
 
-    wikicode = mwparserfromhell.parse(str(text))
+    text = str(text)
+    # Parse only the lead section (see LEAD_CUT_PATTERN). get_sections()[0] is
+    # still what defines the lead, exactly as before -- it just now runs over a
+    # few kilobytes instead of the whole article.
+    cut = LEAD_CUT_PATTERN.search(text)
+    lead_wikitext = text[: cut.start()] if cut else text
+
+    wikicode = mwparserfromhell.parse(lead_wikitext)
     raw_intro = wikicode.get_sections()[0]
     intro_para = raw_intro.strip_code()
     # Remove stray links/thumbs/parentheses that slip through strip_code().
@@ -373,10 +433,7 @@ def parse_wiki_article(title=None, text=None, use_redis=True):
 
     redirects = []
     if use_redis:
-        redis_db = redis.StrictRedis(
-            host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True
-        )
-        redirects = redis_db.get(title)
+        redirects = _redis_client().get(title)
         redirects = redirects.split(";") if redirects else []
 
     try:
@@ -395,8 +452,13 @@ def parse_wiki_article(title=None, text=None, use_redis=True):
         "affiliated_people": [],
         "box_type": None,
     }
+    # How many pages redirect here, after clean_names() has deduplicated them.
+    # A cheap proxy for how prominent an article is. Nothing reads it yet; it is
+    # stored now so the wiki ranker's importance feature (use_importance in
+    # ngec/actors/wiki_matcher.py) can be switched on without another rebuild.
+    params["redirect_count"] = len(params["redirects"])
 
-    for template in wikicode.get_sections()[0].filter_templates():
+    for template in raw_intro.filter_templates():
         if re.search(r"[Ii]nfobox", template.name.strip()):
             params["infobox"] = {
                 p.name.strip(): p.value.strip_code().strip() for p in template.params
@@ -423,9 +485,9 @@ def parse_wiki_article(title=None, text=None, use_redis=True):
         # The map blob is huge and never queried.
         params["infobox"].pop("map", None)
 
-    raw_categories = wikicode.get_sections()[-1].strip_code()
-    # Match end-of-string too, so the final category (no trailing newline) is kept.
-    params["categories"] = re.findall(r"Category:(.+?)(?:\n|$)", raw_categories)
+    # Categories, from the raw wikitext of the whole article (see
+    # CATEGORY_PATTERN) -- the one thing we still need from below the lead.
+    params["categories"] = CATEGORY_PATTERN.findall(text)
     params["update"] = datetime.date.today().isoformat()
 
     logger.debug(f"Good article: {title}")
@@ -607,6 +669,11 @@ def load_es(file, es_batch, threads, drop=False):
             "code_commit": code_commit(),
             "doc_count": after_docs,
             "builder": "NGEC elasticsearch/es_wiki/load_wiki_es.py",
+            # Which set of mapping sub-fields this index has. wiki_mapping.json
+            # declares it at index-creation time, but put_mapping replaces
+            # _meta wholesale, so the stamp at the end of the build would
+            # otherwise drop it. Keep the two in step.
+            "schema_version": 2,
         },
     )
 
