@@ -83,6 +83,7 @@ and takes a few minutes; the CPU pass needs `llama-server` up.
 
 | Variable | Default | What it does |
 | --- | --- | --- |
+| `NGEC_DEMO_PASSWORD` | unset | A shared password asked for before any page renders; unset, there is no gate |
 | `NGEC_DEMO_MODE` | first available (`gpu` when there is a card) | Mode the app opens in, and the mode outside Streamlit |
 | `NGEC_DEMO_CPU_THREADS` | `4` | Torch threads in CPU mode — the deployment box's core count |
 | `NGEC_DEMO_CPU_BACKEND` | `llamacpp` | Attribute-model backend in CPU mode (`transformers` runs it in-process) |

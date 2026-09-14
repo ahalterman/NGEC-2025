@@ -13,7 +13,9 @@ thing in the same view.
 
 from __future__ import annotations
 
+import hmac
 import html
+import os
 from contextlib import contextmanager
 
 import altair as alt
@@ -259,6 +261,41 @@ hr, [data-testid="stDivider"] {{
 def inject_css() -> None:
     """Apply the theme. `app.py` calls it once, before the page runs."""
     st.markdown(_CSS, unsafe_allow_html=True)
+
+
+def gate() -> None:
+    """Ask for the shared password before anything else renders.
+
+    The demo is served on a public IP so that a reviewer can be sent a link, and
+    the pages hand visitor-supplied text to a language model and to
+    Elasticsearch. A single shared password is the smallest thing that keeps a
+    link shareable while stopping the demo being open to whoever finds the
+    address; it is not an account system and is not meant to be one.
+
+    Set `NGEC_DEMO_PASSWORD` to switch it on. Unset -- the case when the app is
+    run on a laptop -- this returns immediately and the demo behaves as it always
+    has, so nothing about local development changes.
+    """
+    expected = os.environ.get("NGEC_DEMO_PASSWORD")
+    if not expected or st.session_state.get("_unlocked"):
+        return
+
+    st.markdown("### This demo is password-protected")
+    st.write("It accompanies *Creating Custom Event Data Without Dictionaries: "
+             "A Bag of Tricks*. The password is in the response to reviewers.")
+
+    with st.form("_gate"):
+        given = st.text_input("Password", type="password")
+        # `compare_digest` rather than `==`: the comparison is over the network,
+        # and a constant-time one costs nothing here.
+        if st.form_submit_button("Enter", type="primary"):
+            if hmac.compare_digest(given, expected):
+                st.session_state["_unlocked"] = True
+                st.rerun()
+            else:
+                st.error("That is not the password.")
+
+    st.stop()
 
 
 def lede(text: str) -> None:

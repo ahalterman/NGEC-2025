@@ -16,7 +16,7 @@ import streamlit as st
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ngec_demo import resources as R  # noqa: E402
-from ngec_demo.style import (health_sidebar, inject_css,  # noqa: E402
+from ngec_demo.style import (gate, health_sidebar, inject_css,  # noqa: E402
                              load_models_button, mode_badge)
 
 
@@ -24,6 +24,10 @@ def main() -> None:
     st.set_page_config(page_title="NGEC", page_icon=":material/schema:",
                        layout="centered")
     inject_css()
+
+    # Before the navigation is built, so that no page runs for a visitor
+    # who has not entered the password.
+    gate()
 
     # No icons: the step pages are already numbered, and a rail of emoji is the
     # first thing that breaks the deadpan look.
