@@ -898,7 +898,14 @@ def check_models():
                           "Models", level="ok" if present else "warn",
                           fix=None if present else fix(
                               "hf-" + repo_id.replace("/", "-"),
-                              "uv run hf download " + repo_id,
+                              # --no-sync, emphatically: a bare `uv run` re-resolves
+                              # the environment to whatever extras it was given, and
+                              # this command is given none. That drops the cpu/cu12
+                              # extra (leaving the default PyPI CUDA build of torch)
+                              # and every non-default group, so downloading a 130 MB
+                              # model would rebuild the venv around it. Fetching a
+                              # file needs no environment changes at all.
+                              "uv run --no-sync hf download " + repo_id,
                               "Used by " + used_by + ". It downloads on first use anyway; "
                               "fetching it now means the first pipeline run is not also a "
                               "download.", download_estimate(size))))
