@@ -357,13 +357,19 @@ def resolve_entity(span: str, context: str = "", query_date: str = "today",
                    mode: str | None = None) -> dict:
     """Search Wikipedia for a span and score every candidate with the ranker.
 
-    Mirrors `WikiMatcher.query_wiki` right up to the ranker -- possessive
-    strip, NER expansion of the query against the context, and the second
-    search over an alternative surface form -- and then, instead of returning
-    only the winner, keeps the whole scored table so the page can show why the
-    winner won. Skipping the expansion used to make this page disagree with
-    step 4 on any bare surname: "Johnson" searched literally returns 200
-    Johnsons, none of them the prime minister.
+    Mirrors `ActorResolver.actor_to_code` right up to the ranker: the mention
+    is taken apart with the pipeline's own `split_mention` (country stripped
+    off, NER core entity separated from the description around it), the core
+    is searched with the description and country feeding the ranker, the query
+    is expanded from the context and a second surface form searched as
+    `WikiMatcher.query_wiki` does it, and the pipeline's retries run when the
+    first search finds nothing. Then, instead of returning only the winner, it
+    keeps the whole scored table so the page can show why the winner won.
+
+    Skipping any of this used to make this page disagree with step 4:
+    "Johnson" searched literally returns 200 Johnsons, none of them the prime
+    minister, and "former US Secretary of State Colin Powell" searched whole
+    scored 0.6 where "Colin Powell" scores 0.999.
 
     Returns
     -------
@@ -371,15 +377,16 @@ def resolve_entity(span: str, context: str = "", query_date: str = "today",
      "candidates": [{title, short_desc, url, ranker_score, raw_es_score,
                      exact_title_match, redirect_match, name_coverage,
                      cat_overlap, title_sim, context_sim_intro}],  # sorted desc
+     "split": {country, country_name, trimmed_text, core_query, actor_desc},
      "query": str,               # the term actually searched, after expansion
+     "expanded": bool,           # whether the context expanded the query
      "alt_query": str | None,    # the second surface form searched, if any
+     "retries": [str],           # further terms searched after a miss, in order
      "mode": str, "timing": [rows], "seconds": float}
 
     `query_date` is accepted for symmetry with `categorize_entity` and is not
     used: the Wikipedia ranker has no notion of when the article was true.
     """
-    import re
-
     from ngec.actors.wiki_matcher import merge_ranked_results  # before the clock
 
     compute_mode = mode or R.current_mode()
@@ -388,42 +395,77 @@ def resolve_entity(span: str, context: str = "", query_date: str = "today",
     start = time.time()
     best = None
     candidates: list[dict] = []
-    raw_span = re.sub(r"['’]s\s*$", "", span).strip()
-    query = raw_span
+    split_out = {"country": None, "country_name": "", "trimmed_text": span,
+                 "core_query": span, "actor_desc": ""}
+    query = span
+    expanded = False
     alt_term = ""
+    retries: list[str] = []
+
+    def search_and_rank(term: str, actor_desc: str, country: str,
+                        alt_terms: list[str], expand: bool):
+        """One search (plus the alternative-form search) and one ranking."""
+        term = re.sub(r"['’]s\s*$", "", term).strip()
+        # NER over the context, exactly as query_wiki does it: "Johnson" in
+        # a sentence that also says "Boris Johnson" becomes the latter.
+        if context and expand:
+            term = wm._expand_query(term, context)
+        hits = wm.wiki_searcher.search_wiki(term, max_results=200, country=country)
+        for article in hits:
+            article["from_alt_query"] = 0
+
+        # The second search, over the surface form the pipeline did *not*
+        # settle on. Its ES scores come from a different query and are not
+        # on the primary's scale, which is what `from_alt_query` tells the
+        # ranker. `_create_scoring_dataframe` reads that key off each
+        # article with a default of 0, so before this the feature was
+        # silently constant -- correct for a single search, but it meant
+        # the demo never exercised it.
+        alt = wm._pick_alt_query_term(term, alt_terms)
+        if alt:
+            alt_hits = wm.wiki_searcher.search_wiki(alt, max_results=200)
+            for article in alt_hits:
+                article["from_alt_query"] = 1
+            hits = merge_ranked_results(hits, alt_hits, 200)
+
+        good = wm.wiki_searcher._trim_results(hits)
+        if not good:
+            return term, alt, None, None
+        df = wm._create_scoring_dataframe(good, term, context=context,
+                                          actor_desc=actor_desc, country=country)
+        # _call_ranker adds a 'ranker_score' column to df in place and
+        # returns the winning row (or None when nothing clears its bar).
+        return term, alt, df, wm._call_ranker(df, context=context)
+
     with R.compute(compute_mode), timing.collect() as collector:
-        good = []
+        df = pick = None
         if wm is not None:
-            # NER over the context, exactly as query_wiki does it: "Johnson"
-            # in a sentence that also says "Boris Johnson" becomes the latter.
-            if context:
-                query = wm._expand_query(raw_span, context)
-            hits = wm.wiki_searcher.search_wiki(query, max_results=200)
-            for article in hits:
-                article["from_alt_query"] = 0
+            split = ar.split_mention(span, context=context)
+            split_out = {k: split[k] for k in split_out}
+            core = split["core_query"]
 
-            # The second search, over the surface form the pipeline did *not*
-            # settle on. Its ES scores come from a different query and are not
-            # on the primary's scale, which is what `from_alt_query` tells the
-            # ranker. `_create_scoring_dataframe` reads that key off each
-            # article with a default of 0, so before this the feature was
-            # silently constant -- correct for a single search, but it meant
-            # the demo never exercised it.
-            alt_term = wm._pick_alt_query_term(query, [raw_span])
-            if alt_term:
-                alt_hits = wm.wiki_searcher.search_wiki(alt_term, max_results=200)
-                for article in alt_hits:
-                    article["from_alt_query"] = 1
-                hits = merge_ranked_results(hits, alt_hits, 200)
+            # The pipeline's sequence of searches: the core entity first, with
+            # the description and country narrowing the ranking. A miss is
+            # retried on the whole trimmed span if NER had cut it down, or
+            # else on just the entity text inside it.
+            query, alt_term, df, pick = search_and_rank(
+                core, split["actor_desc"], split["country_name"],
+                split["alt_query_terms"], expand=not split["ner_extracted_specific"])
+            expanded = query != re.sub(r"['’]s\s*$", "", core).strip()
+            ent_text = split["ent_text"].strip()
+            if pick is None and core != split["trimmed_text"]:
+                retries.append(split["trimmed_text"])
+            elif pick is None and ent_text and ent_text != core:
+                retries.append(ent_text)
+            for term in retries:
+                q2, alt2, df2, pick = search_and_rank(term, "", split["country_name"], [], expand=True)
+                if pick is not None:
+                    # Show the table that produced the winner, and the terms
+                    # that found it.
+                    query, alt_term, df, expanded = q2, alt2, df2, False
+                    break
 
-            good = wm.wiki_searcher._trim_results(hits)
-        if good:
-            df = wm._create_scoring_dataframe(good, query, context=context,
-                                              actor_desc="", country="")
-            # _call_ranker adds a 'ranker_score' column to df in place and
-            # returns the winning row (or None when nothing clears its bar).
-            pick = wm._call_ranker(df, context=context)
-
+        if df is not None:
             cols = ["title", "short_desc", "ranker_score", "raw_es_score",
                     "exact_title_match", "redirect_match", "name_coverage",
                     "cat_overlap", "title_sim", "context_sim_intro"]
@@ -444,8 +486,9 @@ def resolve_entity(span: str, context: str = "", query_date: str = "today",
                     "wiki_reason":
                         f"XGBoost (score={float(pick.get('ranker_score', 0)):.3f})"})
 
-    return {"best": best, "candidates": candidates, "query": query,
-            "alt_query": alt_term or None, "mode": compute_mode,
+    return {"best": best, "candidates": candidates, "split": jsonable(split_out),
+            "query": query, "expanded": expanded, "alt_query": alt_term or None,
+            "retries": retries, "mode": compute_mode,
             "timing": collector.rows(), "seconds": time.time() - start}
 
 

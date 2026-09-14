@@ -237,6 +237,16 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
     keeps the merged list roughly sorted by "how highly did *some* query rank
     this", which is what the downstream trim and ranker expect.
 
+    An article that both searches found keeps the *primary* search's copy,
+    whichever list it is taken from. The two copies differ in `raw_es_score`
+    (each query scores on its own scale) and in `from_alt_query`, and the
+    primary's is the one the ranker should see: "Colin Powell" searched as
+    "Colin Powell" is not a candidate that only the alternative form turned
+    up. Before this, the copy that happened to come first in the interleave
+    won, and a correct article ranked higher by the alternative search was
+    handed to the ranker with a foreign, much lower ES score -- on that span
+    the ranker's score fell from 0.99 to 0.25.
+
     Args:
         primary: results for the main query term, in rank order
         alternate: results for the alternative query term, in rank order
@@ -245,6 +255,7 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
     Returns:
         list: the merged, de-duplicated, capped list of articles
     """
+    primary_by_title = {article['title']: article for article in primary}
     merged = []
     seen_titles = set()
     for rank in range(max(len(primary), len(alternate))):
@@ -253,7 +264,7 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
                 article = results[rank]
                 if article['title'] not in seen_titles:
                     seen_titles.add(article['title'])
-                    merged.append(article)
+                    merged.append(primary_by_title.get(article['title'], article))
     return merged[:max_results]
 
 

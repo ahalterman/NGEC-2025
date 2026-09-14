@@ -483,8 +483,10 @@ class CountryDetector:
             if match:
                 # Remove the matched country/nationality from text
                 trimmed_text = re.sub(pattern, "", text).strip()
+                # The possessive is left behind wherever the country was:
                 # "Mexico's Zapatista rebel group" -> "'s Zapatista rebel group"
-                trimmed_text = re.sub(r"^'s\b", "", trimmed_text).strip()
+                # "southern Mexico's Zapatista rebel group" -> "southern 's Zapatista rebel group"
+                trimmed_text = re.sub(r"(^|\s)'s\b", " ", trimmed_text).strip()
                 trimmed_text = re.sub(r" +", " ", trimmed_text).strip()
                 found.append((country, trimmed_text.strip(), match))
         

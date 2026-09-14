@@ -291,6 +291,32 @@ def run_mode(mode: str) -> None:
                   (out["best"] or {}).get("title") == "Boris Johnson",
                   f"picked {(out['best'] or {}).get('title')!r}, not 'Boris Johnson'")
 
+    # A title-plus-name mention is taken apart with the pipeline's own
+    # split_mention before it is searched: the country comes off, the name is
+    # the query, the title is a ranker feature. Searched whole, this span
+    # scored 0.6 on the right article; as the name it scores 0.99.
+    titled = "former US Secretary of State Colin Powell"
+    out = run("resolve_entity (title + name)", steps.resolve_entity, titled,
+              context="", mode=mode)
+    if out:
+        print(f"    split: {out['split']}")
+        if out["best"]:
+            print(f"    best: {out['best']['title']} "
+                  f"({out['best']['ranker_score']:.3f})")
+        check("resolve_entity (title + name)", out["split"]["country"] == "USA",
+              f"country {out['split']['country']!r}, not 'USA'")
+        check("resolve_entity (title + name)", out["split"]["core_query"] == "Colin Powell",
+              f"core {out['split']['core_query']!r}, not 'Colin Powell'")
+        check("resolve_entity (title + name)",
+              out["split"]["actor_desc"] == "former Secretary of State",
+              f"description {out['split']['actor_desc']!r}")
+        if es_up:
+            check("resolve_entity (title + name)",
+                  (out["best"] or {}).get("title") == "Colin Powell"
+                  and out["best"]["ranker_score"] > 0.9,
+                  f"picked {(out['best'] or {}).get('title')!r} at "
+                  f"{(out['best'] or {}).get('ranker_score', 0):.3f}")
+
     # --- step 4
     out = run("categorize_entity", steps.categorize_entity, span, context=context,
               query_date="2023-03-15", mode=mode)
