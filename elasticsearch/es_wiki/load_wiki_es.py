@@ -486,15 +486,21 @@ def wiki_index_stats(es):
     return int(stats["docs.count"]), stats["store.size"], stats["health"]
 
 
-def file_date(path):
-    """The ISO date a file was last modified, or None if it isn't there.
+def dump_date(path):
+    """The date of the Wikipedia snapshot this index was built from.
 
-    Used as the best available stand-in for "how old is this dump?". The
-    Wikipedia XML has no generation timestamp in its header, and the canonical
-    download is named "latest", so the download time is what we can actually
-    know. If you fetched a dated dump instead (enwiki-20260801-...), the
-    filename recorded alongside this carries the real answer.
+    Wikipedia publishes dated dump directories (enwiki-20260801-...), and that
+    filename is the only authoritative record of which snapshot a build used:
+    the XML carries no generation timestamp of its own. Parse the date out of
+    the name when it is there.
+
+    Fall back to the file's mtime -- i.e. when it was downloaded -- only for
+    the undated "latest" dump, where it is an approximation and can be days off
+    from the snapshot it actually refers to. Prefer a dated dump.
     """
+    m = re.search(r"enwiki-(\d{4})(\d{2})(\d{2})-", os.path.basename(path))
+    if m:
+        return "-".join(m.groups())
     try:
         return datetime.date.fromtimestamp(os.path.getmtime(path)).isoformat()
     except OSError:
@@ -583,7 +589,7 @@ def load_es(file, es_batch, threads, drop=False):
         "wiki",
         {
             "dump_file": os.path.basename(file),
-            "dump_date": file_date(file),
+            "dump_date": dump_date(file),
             "build_date": datetime.date.today().isoformat(),
             "doc_count": after_docs,
             "builder": "NGEC elasticsearch/es_wiki/load_wiki_es.py",

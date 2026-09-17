@@ -57,8 +57,9 @@ COMPOSE_FILE="elasticsearch/compose-build.yml"
 COMPOSE=(docker compose --project-directory . -f "$COMPOSE_FILE")
 RUN_LOADER=(uv run --group es-build python)
 
-DEFAULT_DUMP="elasticsearch/es_wiki/data/enwiki-latest-pages-articles.xml.bz2"
-DUMP_URL_BASE="https://dumps.wikimedia.org/enwiki/latest"
+WIKI_DUMP_DIR="elasticsearch/es_wiki/data"
+DUMP_URL_HOST="https://dumps.wikimedia.org/enwiki"
+DUMP_DATE=""
 
 TARGET=""
 RESUME=0
@@ -104,8 +105,11 @@ usage() {
 
 Options:
   --resume            continue an interrupted run, skipping completed stages
-  --dump PATH         Wikipedia dump to build from (default: the latest dump
-                      under elasticsearch/es_wiki/data/)
+  --dump PATH         use this dump file instead of downloading one
+  --dump-date DATE    build from the dated Wikipedia dump for YYYYMMDD
+                      (default: the newest dated dump whose articles job is
+                      complete). Dated dumps are used rather than "latest" so
+                      the published index records which snapshot it came from.
   --skip-download     use the dump / gazetteer already on disk
   --no-backup         skip the pre-run copy of the data dir (it is ~13 GB; the
                       copy is your only undo, so skip it only deliberately)
@@ -146,9 +150,13 @@ state_set() {
     printf '%s=%s\n' "$key" "$val" >> "$tmp"
     mv "$tmp" "$STATE_FILE"
 }
-stage_done()    { [ "$(state_get "stage_$1")" = "done" ]; }
-mark_running()  { state_set "stage_$1" "running"; state_set "stage_$1_started" "$(date +%s)"; }
-mark_done()     { state_set "stage_$1" "done";    state_set "stage_$1_finished" "$(date +%s)"; }
+# Stage keys are namespaced per target. `both` runs two flows that each have a
+# stage called "download"; without the prefix, geonames finishing its gazetteer
+# download marks "download" done and the wiki flow then skips fetching the dump.
+STAGE_PREFIX=""
+stage_done()    { [ "$(state_get "stage_$STAGE_PREFIX$1")" = "done" ]; }
+mark_running()  { state_set "stage_$STAGE_PREFIX$1" "running"; state_set "stage_$STAGE_PREFIX$1_started" "$(date +%s)"; }
+mark_done()     { state_set "stage_$STAGE_PREFIX$1" "done";    state_set "stage_$STAGE_PREFIX$1_finished" "$(date +%s)"; }
 
 # ---------------------------------------------------------------------------
 # Arguments
@@ -158,6 +166,10 @@ while [ $# -gt 0 ]; do
         wiki|geonames|both) TARGET="$1"; shift ;;
         --resume)        RESUME=1; shift ;;
         --dump)          DUMP="${2:-}"; [ -n "$DUMP" ] || die "--dump needs a path"; shift 2 ;;
+        --dump-date)     DUMP_DATE="${2:-}"; [ -n "$DUMP_DATE" ] || die "--dump-date needs YYYYMMDD"
+                         case "$DUMP_DATE" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+                             *) die "--dump-date must be YYYYMMDD, got '$DUMP_DATE'" ;; esac
+                         shift 2 ;;
         --skip-download) SKIP_DOWNLOAD=1; shift ;;
         --no-backup)     DO_BACKUP=0; shift ;;
         --yes|-y)        ASSUME_YES=1; shift ;;
@@ -257,9 +269,42 @@ AFTER_SNAP="$SNAP_DIR/$RUN_ID-after.json"
 # ---------------------------------------------------------------------------
 # Locate the dump (wiki only)
 # ---------------------------------------------------------------------------
+# Wikipedia keeps ~5 dated snapshots plus an undated "latest". Only a dated one
+# can tell you afterwards which snapshot an index was built from, so resolve to
+# the newest dated dump whose articles job actually finished -- the current
+# month's directory exists while it is still being generated.
+resolve_dump_date() {
+    local listing dates d status
+    listing="$(curl -fsS --max-time 60 "$DUMP_URL_HOST/" 2>/dev/null)" \
+        || die "could not list $DUMP_URL_HOST/ -- pass --dump-date or --dump"
+    dates="$(printf '%s' "$listing" | grep -oE '2[0-9]{7}/' | tr -d '/' | sort -ru)"
+    [ -n "$dates" ] || die "no dated dumps found at $DUMP_URL_HOST/"
+    for d in $dates; do
+        # dumpstatus.json is one JSON blob: strip whitespace, drop everything
+        # before the articlesdump job, then take that job's first "status".
+        status="$(curl -fsS --max-time 60 "$DUMP_URL_HOST/$d/dumpstatus.json" 2>/dev/null \
+            | tr -d ' \n' | sed 's/.*"articlesdump"//' \
+            | grep -o '"status":"[a-z]*"' | head -1 | cut -d'"' -f4)"
+        if [ "$status" = "done" ]; then printf '%s' "$d"; return 0; fi
+        log "skipping $d (articles dump status: ${status:-unknown})" >&2
+    done
+    die "no dated dump has a completed articles job -- pass --dump-date explicitly"
+}
+
 if [ "$TARGET" != "geonames" ]; then
-    [ -n "$DUMP" ] || DUMP="$DEFAULT_DUMP"
-    case "$DUMP" in /*) ;; *) DUMP="$REPO_ROOT/$DUMP" ;; esac
+    if [ -n "$DUMP" ]; then
+        case "$DUMP" in /*) ;; *) DUMP="$REPO_ROOT/$DUMP" ;; esac
+    else
+        if [ -z "$DUMP_DATE" ]; then
+            [ "$RESUME" -eq 1 ] && DUMP_DATE="$(state_get dump_date)"
+            if [ -z "$DUMP_DATE" ]; then
+                log "Resolving newest completed Wikipedia dump..."
+                DUMP_DATE="$(resolve_dump_date)"
+                log "Using dump date $DUMP_DATE"
+            fi
+        fi
+        DUMP="$REPO_ROOT/$WIKI_DUMP_DIR/enwiki-$DUMP_DATE-pages-articles.xml.bz2"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -279,11 +324,9 @@ fi
 [ "$TARGET" != "geonames" ] && printf '  dump          : %s\n' "$DUMP"
 printf '  backup        : %s\n' "$([ "$DO_BACKUP" -eq 1 ] && echo yes || echo 'NO (--no-backup)')"
 if [ "$RESUME" -eq 1 ]; then
-    printf '  stages done   : '
-    for s in download build_links load_redis load_es recreate load; do
-        stage_done "$s" && printf '%s ' "$s"
-    done
-    printf '\n'
+    printf '  stages done   : %s\n' \
+        "$(grep -E '^stage_[a-z_]+=done$' "$STATE_FILE" 2>/dev/null \
+           | sed 's/^stage_//; s/=done$//' | tr '\n' ' ')"
 fi
 rule
 
@@ -306,7 +349,10 @@ if [ "$RESUME" -eq 0 ]; then
     state_set before_snapshot "$BEFORE_SNAP"
     state_set completed "no"
 fi
-[ "$TARGET" != "geonames" ] && state_set dump "$DUMP"
+if [ "$TARGET" != "geonames" ]; then
+    state_set dump "$DUMP"
+    [ -n "$DUMP_DATE" ] && state_set dump_date "$DUMP_DATE"
+fi
 
 # ---------------------------------------------------------------------------
 # Stop whatever currently holds port 9200, remembering it so we can restore it
@@ -412,6 +458,7 @@ fi
 # Stages
 # ---------------------------------------------------------------------------
 run_geonames() {
+    STAGE_PREFIX="geonames_"
     cd "$REPO_ROOT/elasticsearch/es_geonames"
     if stage_done download || [ "$SKIP_DOWNLOAD" -eq 1 ]; then
         log "geonames: skipping download"
@@ -424,20 +471,25 @@ run_geonames() {
     # `reload` is recreate+load: drop only the geonames index, then load it.
     # On resume this is re-run wholesale -- it is ~30 minutes, not worth
     # checkpointing more finely.
-    log "geonames: recreate + load"
-    mark_running load
-    "${RUN_LOADER[@]}" load_geonames_es.py reload
-    mark_done load
+    if stage_done load; then
+        log "geonames: recreate + load already done, skipping"
+    else
+        log "geonames: recreate + load"
+        mark_running load
+        "${RUN_LOADER[@]}" load_geonames_es.py reload
+        mark_done load
+    fi
     cd "$REPO_ROOT"
 }
 
 run_wiki() {
+    STAGE_PREFIX="wiki_"
     cd "$REPO_ROOT/elasticsearch/es_wiki"
     mkdir -p data
 
     if stage_done download || [ "$SKIP_DOWNLOAD" -eq 1 ]; then
         log "wiki: skipping download"
-    elif [ -n "${DUMP:-}" ] && [ "$DUMP" != "$REPO_ROOT/$DEFAULT_DUMP" ] && [ -f "$DUMP" ]; then
+    elif [ -n "${DUMP:-}" ] && [ -f "$DUMP" ]; then
         log "wiki: using supplied dump $DUMP"
         mark_done download
     else
@@ -445,8 +497,9 @@ run_wiki() {
         mark_running download
         # -C - continues rather than restarting, which is what makes an
         # interrupted 24 GB download survivable.
+        [ -n "$DUMP_DATE" ] || die "no dump date resolved; pass --dump-date or --dump"
         curl -L -C - --retry 5 --retry-delay 10 \
-            "$DUMP_URL_BASE/enwiki-latest-pages-articles.xml.bz2" \
+            "$DUMP_URL_HOST/$DUMP_DATE/enwiki-$DUMP_DATE-pages-articles.xml.bz2" \
             -o "$DUMP"
         mark_done download
     fi
@@ -488,7 +541,7 @@ run_wiki() {
     # NOT drop: the original run already did, and dropping again would discard
     # exactly the partial progress we are resuming for.
     drop_flag="--drop"
-    if [ "$(state_get stage_load_es)" = "running" ]; then
+    if [ "$(state_get "stage_${STAGE_PREFIX}load_es")" = "running" ]; then
         drop_flag=""
         log "wiki: load_es was interrupted -- resuming WITHOUT --drop"
         log "      (documents already indexed will be rewritten in place; _id is the"
