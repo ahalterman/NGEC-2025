@@ -26,6 +26,12 @@
 # What resume does and does not recover:
 #
 #   download     fully resumable -- curl -C - continues a partial file.
+#   decompress   optional, and skipped unless it pays. A multistream dump can
+#                be cut at its stream offsets and decompressed by every core at
+#                once, so the two passes below read plain XML instead of
+#                spending ~45 minutes each on single-threaded bz2. It costs
+#                ~117 GB of disk, is skipped when the disk is too full, and any
+#                failure falls back to reading the .bz2.
 #   build_links  restarts from the beginning of the dump. The loader
 #                checkpoints its pickle periodically, but only for inspection;
 #                it has no resume offset, so this stage is re-done in full.
@@ -60,6 +66,15 @@ RUN_LOADER=(uv run --group es-build python)
 WIKI_DUMP_DIR="elasticsearch/es_wiki/data"
 DUMP_URL_HOST="https://dumps.wikimedia.org/enwiki"
 DUMP_DATE=""
+DUMP_INDEX=""            # multistream stream-offset index, beside the dump
+DUMP_XML=""              # the dump decompressed, when we take that path
+
+# The parallel decompress writes the dump out as plain XML -- about 117 GB for
+# enwiki, plus the part files it has not yet concatenated. Below this much free
+# space the up-front decompress is skipped and the loader reads the .bz2, which
+# is slower but needs no extra disk.
+PARALLEL_BUNZIP=1
+PARALLEL_BUNZIP_MIN_GB=130
 
 TARGET=""
 RESUME=0
@@ -100,7 +115,7 @@ confirm() {
 }
 
 usage() {
-    sed -n '3,44p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,50p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
     cat <<'EOF'
 
 Options:
@@ -111,6 +126,10 @@ Options:
                       complete). Dated dumps are used rather than "latest" so
                       the published index records which snapshot it came from.
   --skip-download     use the dump / gazetteer already on disk
+  --no-parallel-bunzip
+                      do not decompress the dump up front. Saves ~117 GB of
+                      disk and costs ~90 minutes, because the loader then
+                      decompresses the .bz2 again on each of its two passes.
   --no-backup         skip the pre-run copy of the data dir (it is ~13 GB; the
                       copy is your only undo, so skip it only deliberately)
   --yes               do not prompt for confirmation
@@ -134,6 +153,14 @@ human() {
     awk -v b="$1" 'BEGIN{ s="B KB MB GB TB"; n=split(s,u," ");
         for(i=1;i<n && b>=1024;i++) b/=1024;
         printf (i==1 ? "%d %s" : "%.1f %s"), b, u[i] }'
+}
+# Free GB on the filesystem holding $1, walking up to the nearest directory that
+# exists (the dump dir is created later). -P forces the one-line POSIX format,
+# which is the only thing BSD and GNU df agree on.
+free_gb() {
+    local d="$1"
+    while [ ! -d "$d" ] && [ "$d" != "/" ]; do d="$(dirname "$d")"; done
+    df -Pk "$d" 2>/dev/null | awk 'NR==2 {printf "%d", $4/1048576}'
 }
 
 # State file is flat key=value so it can be read and repaired by hand.
@@ -171,6 +198,7 @@ while [ $# -gt 0 ]; do
                              *) die "--dump-date must be YYYYMMDD, got '$DUMP_DATE'" ;; esac
                          shift 2 ;;
         --skip-download) SKIP_DOWNLOAD=1; shift ;;
+        --no-parallel-bunzip) PARALLEL_BUNZIP=0; shift ;;
         --no-backup)     DO_BACKUP=0; shift ;;
         --yes|-y)        ASSUME_YES=1; shift ;;
         -h|--help)       usage ;;
@@ -273,6 +301,12 @@ AFTER_SNAP="$SNAP_DIR/$RUN_ID-after.json"
 # can tell you afterwards which snapshot an index was built from, so resolve to
 # the newest dated dump whose articles job actually finished -- the current
 # month's directory exists while it is still being generated.
+#
+# The job to ask about is the one that produces the file we download, and those
+# are not the same job. `articlesdump` writes the numbered part files;
+# `articlesmultistreamdumprecombine` writes the single recombined multistream
+# dump this script fetches, and finishes later. Asking the first one leaves a
+# window where the status says done and the file does not exist yet.
 resolve_dump_date() {
     local listing dates d status
     listing="$(curl -fsS --max-time 60 "$DUMP_URL_HOST/" 2>/dev/null)" \
@@ -281,12 +315,12 @@ resolve_dump_date() {
     [ -n "$dates" ] || die "no dated dumps found at $DUMP_URL_HOST/"
     for d in $dates; do
         # dumpstatus.json is one JSON blob: strip whitespace, drop everything
-        # before the articlesdump job, then take that job's first "status".
+        # before that job, then take the job's first "status".
         status="$(curl -fsS --max-time 60 "$DUMP_URL_HOST/$d/dumpstatus.json" 2>/dev/null \
-            | tr -d ' \n' | sed 's/.*"articlesdump"//' \
+            | tr -d ' \n' | sed 's/.*"articlesmultistreamdumprecombine"//' \
             | grep -o '"status":"[a-z]*"' | head -1 | cut -d'"' -f4)"
         if [ "$status" = "done" ]; then printf '%s' "$d"; return 0; fi
-        log "skipping $d (articles dump status: ${status:-unknown})" >&2
+        log "skipping $d (multistream articles dump status: ${status:-unknown})" >&2
     done
     die "no dated dump has a completed articles job -- pass --dump-date explicitly"
 }
@@ -303,9 +337,40 @@ if [ "$TARGET" != "geonames" ]; then
                 log "Using dump date $DUMP_DATE"
             fi
         fi
-        DUMP="$REPO_ROOT/$WIKI_DUMP_DIR/enwiki-$DUMP_DATE-pages-articles.xml.bz2"
+        DUMP="$REPO_ROOT/$WIKI_DUMP_DIR/enwiki-$DUMP_DATE-pages-articles-multistream.xml.bz2"
     fi
+    # Multistream is the same articles, compressed as many small independent
+    # streams instead of one big one, and Python's bz2 reads either without
+    # noticing. It costs ~1 GB more to download and is the only form that can be
+    # decompressed in parallel, so it is what we fetch; whether we then use that
+    # property is decided per run, below.
+    #
+    # The stream-offset index sits beside such a dump under a matching name. A
+    # dump that is not multistream has none, and the parallel path is then
+    # simply unavailable.
+    case "$DUMP" in
+        *-multistream.xml.bz2) DUMP_INDEX="${DUMP%-multistream.xml.bz2}-multistream-index.txt.bz2" ;;
+        *)                     DUMP_INDEX="" ;;
+    esac
+    # Keep the enwiki-YYYYMMDD- prefix: load_wiki_es.py reads the dump date off
+    # this filename to stamp the index's _meta, and a generic name silently
+    # stamps a null date.
+    DUMP_XML="${DUMP%.bz2}"
 fi
+
+# What the plan will do about decompression. Same conditions as the stage
+# itself, so the plan cannot promise something the run then skips.
+decompress_plan() {
+    local free
+    [ "$PARALLEL_BUNZIP" -eq 1 ] || { echo "no (--no-parallel-bunzip)"; return; }
+    [ -n "$DUMP_INDEX" ]         || { echo "no (dump is not multistream)"; return; }
+    free="$(free_gb "$REPO_ROOT/$WIKI_DUMP_DIR")"
+    if [ "$free" -lt "$PARALLEL_BUNZIP_MIN_GB" ]; then
+        echo "no (${free} GB free, needs ~${PARALLEL_BUNZIP_MIN_GB} GB)"
+    else
+        echo "up front, in parallel (~117 GB, ${free} GB free)"
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Plan
@@ -321,7 +386,10 @@ if [ -d "$ES_DATA" ]; then
 else
     printf '  current size  : %s(does not exist yet -- this will be a first build)%s\n' "$Y" "$N"
 fi
-[ "$TARGET" != "geonames" ] && printf '  dump          : %s\n' "$DUMP"
+if [ "$TARGET" != "geonames" ]; then
+    printf '  dump          : %s\n' "$DUMP"
+    printf '  decompress    : %s\n' "$(decompress_plan)"
+fi
 printf '  backup        : %s\n' "$([ "$DO_BACKUP" -eq 1 ] && echo yes || echo 'NO (--no-backup)')"
 if [ "$RESUME" -eq 1 ]; then
     printf '  stages done   : %s\n' \
@@ -499,8 +567,18 @@ run_wiki() {
         # interrupted 24 GB download survivable.
         [ -n "$DUMP_DATE" ] || die "no dump date resolved; pass --dump-date or --dump"
         curl -L -C - --retry 5 --retry-delay 10 \
-            "$DUMP_URL_HOST/$DUMP_DATE/enwiki-$DUMP_DATE-pages-articles.xml.bz2" \
+            "$DUMP_URL_HOST/$DUMP_DATE/enwiki-$DUMP_DATE-pages-articles-multistream.xml.bz2" \
             -o "$DUMP"
+        # The offset index is ~0.3 GB and is the whole reason for taking the
+        # multistream variant. Failing to get it is not fatal: without it the
+        # build just reads the .bz2, which is what it used to do anyway.
+        if [ -n "$DUMP_INDEX" ]; then
+            log "wiki: downloading the multistream offset index"
+            curl -L -C - --retry 5 --retry-delay 10 \
+                "$DUMP_URL_HOST/$DUMP_DATE/enwiki-$DUMP_DATE-pages-articles-multistream-index.txt.bz2" \
+                -o "$DUMP_INDEX" \
+                || warn "could not fetch the offset index -- the build will read the .bz2 directly"
+        fi
         mark_done download
     fi
     [ -f "$DUMP" ] || die "dump not found: $DUMP"
@@ -517,12 +595,55 @@ run_wiki() {
     fi
     state_set dump_sig "$dump_sig"
 
+    # -----------------------------------------------------------------------
+    # Decompress once in parallel, instead of twice single-threaded.
+    #
+    # build_links and load_es each read the whole dump, and Python's bz2 runs at
+    # about 38 MB/s, so reading the .bz2 spends ~45 minutes per pass just
+    # decompressing. A multistream dump can be cut at the stream offsets its
+    # index lists and decompressed by every core at once: ~13 minutes, paid
+    # once. The XML is identical either way, so this is purely an optimisation
+    # and every failure path below falls back to handing the loader the .bz2.
+    # -----------------------------------------------------------------------
+    WIKI_INPUT="$DUMP"
+    free="$(free_gb "$(dirname "$DUMP_XML")")"
+    if [ "$PARALLEL_BUNZIP" -eq 0 ]; then
+        log "wiki: up-front decompress disabled (--no-parallel-bunzip)"
+    elif stage_done decompress && [ -s "$DUMP_XML" ]; then
+        log "wiki: reusing $(basename "$DUMP_XML") from an earlier run"
+        WIKI_INPUT="$DUMP_XML"
+    elif [ -z "$DUMP_INDEX" ] || [ ! -f "$DUMP_INDEX" ]; then
+        warn "no multistream offset index beside $(basename "$DUMP")."
+        warn "         Reading the .bz2 directly -- correct, but ~45 min slower per pass."
+    elif [ "$free" -lt "$PARALLEL_BUNZIP_MIN_GB" ]; then
+        warn "only ${free} GB free, and decompressing up front needs ~${PARALLEL_BUNZIP_MIN_GB} GB."
+        warn "         Reading the .bz2 directly -- slower, but no extra disk."
+    else
+        log "wiki: decompressing the dump in parallel (~13 min, ~117 GB)"
+        mark_running decompress
+        if "${RUN_LOADER[@]}" "$REPO_ROOT/elasticsearch/tools/parallel_bunzip2.py" \
+                "$DUMP" "$DUMP_INDEX" "$DUMP_XML"; then
+            mark_done decompress
+            WIKI_INPUT="$DUMP_XML"
+            log "wiki: decompressed to $(basename "$DUMP_XML") ($(human "$(file_size "$DUMP_XML")"))"
+        else
+            # A half-written .xml is worse than none: a later --resume would
+            # find it and quietly build the index from a truncated dump.
+            warn "parallel decompress failed its own page-count check -- discarding the output."
+            warn "         Falling back to the .bz2. The index is unaffected, only slower to build."
+            rm -f "$DUMP_XML"
+            rm -rf "$DUMP_XML.parts"
+            state_set "stage_${STAGE_PREFIX}decompress" "failed"
+        fi
+    fi
+    log "wiki: loaders will read $(basename "$WIKI_INPUT")"
+
     if stage_done build_links; then
         log "wiki: skipping build_links (already done)"
     else
         log "wiki: build_links -- scanning dump for redirects (hours)"
         mark_running build_links
-        "${RUN_LOADER[@]}" load_wiki_es.py build_links "$DUMP"
+        "${RUN_LOADER[@]}" load_wiki_es.py build_links "$WIKI_INPUT"
         [ -s data/redirect_dict.pkl ] || die "build_links produced no redirect_dict.pkl"
         mark_done build_links
     fi
@@ -532,7 +653,7 @@ run_wiki() {
     else
         log "wiki: load_redis"
         mark_running load_redis
-        "${RUN_LOADER[@]}" load_wiki_es.py load_redis "$DUMP"
+        "${RUN_LOADER[@]}" load_wiki_es.py load_redis "$WIKI_INPUT"
         mark_done load_redis
     fi
 
@@ -553,7 +674,7 @@ run_wiki() {
         log "wiki: load_es -- parsing and indexing articles (many hours)"
         mark_running load_es
         # shellcheck disable=SC2086
-        "${RUN_LOADER[@]}" load_wiki_es.py load_es $drop_flag "$DUMP"
+        "${RUN_LOADER[@]}" load_wiki_es.py load_es $drop_flag "$WIKI_INPUT"
         mark_done load_es
     fi
     cd "$REPO_ROOT"
@@ -616,6 +737,10 @@ else
     printf 'Publish with: tools/publish_index.sh\n'
     if [ -n "$(state_get backup_path)" ]; then
         printf 'Backup (delete once satisfied): %s\n' "$(state_get backup_path)"
+    fi
+    if [ -n "$DUMP_XML" ] && [ -s "$DUMP_XML" ]; then
+        printf 'Decompressed dump (delete to reclaim %s): %s\n' \
+            "$(human "$(file_size "$DUMP_XML")")" "$DUMP_XML"
     fi
 fi
 printf 'Snapshots: %s\n           %s\n' "$BEFORE_SNAP" "$AFTER_SNAP"

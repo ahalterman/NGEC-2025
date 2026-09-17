@@ -265,6 +265,12 @@ index's first offset is the first *page* stream, not byte 0, so a worker that
 starts there drops the stream holding the root tag and `<siteinfo>` and
 produces a headerless file. Cost: ~117 GB of disk for the 2026-09 dump.
 
+`tools/rebuild_index.sh` now does this for you: it fetches the multistream dump
+and its offset index, decompresses up front when there is room, and falls back
+to reading the `.bz2` when there is not or when the page-count check fails.
+Run it with `--no-parallel-bunzip` to always take the slower, smaller path. The
+manual invocation above is still there for building a dump by hand.
+
 **2. `mwparserfromhell`, on one core per worker.** Profiling `load_es` showed
 essentially *all* of the per-article cost was the single
 `mwparserfromhell.parse()` call — about 2 MB of wikitext per second per core.
@@ -316,6 +322,9 @@ Run the fixture smoke test above first.
 
    (`curl` ships with recent Windows, macOS, and Linux. There's no need to
    decompress — the loader reads `.bz2` directly.)
+
+   This step is only for building by hand. `tools/rebuild_index.sh` resolves the
+   newest complete dated dump and downloads it itself.
 
    Prefer a **dated, multistream** dump if you have the disk for it:
 
