@@ -88,3 +88,43 @@ def test_degenerate_core_is_rejected(nlp, detector):
     split = split_mention("House Judiciary", nlp, detector)
     assert split["core_query"] == "House Judiciary"
     assert split["actor_desc"] == ""
+
+
+# ---------------------------------------------------------------------------
+# The v3 splitter (ngec/actors/mention_split_v3.py). It is committed but not
+# switched on, so these tests ask for it by name.
+
+
+def test_default_splitter_is_v1():
+    """The pipeline default. Changing it changes every actor the coder resolves."""
+    from ngec.actors import actor_resolution
+    assert actor_resolution.SPLITTER == "v1"
+
+
+@pytest.mark.substantive
+def test_v3_keeps_the_description_v1_loses(nlp, detector, es_client_local):
+    """
+    The case the v3 rewrite exists for: v1's NER core swallows part of the
+    description ("former economist Colin Powell") and leaves `actor_desc`
+    empty, so the ranker never sees what kind of Colin Powell this is.
+
+    v3 embeds the agents file, so it is slow to build and needs Elasticsearch;
+    the `es_client_local` fixture is here to skip the test when there is none.
+    """
+    v1 = split_mention("former British economist Colin Powell", nlp, detector,
+                       splitter="v1")
+    assert v1["core_query"] == "former economist Colin Powell"
+    assert v1["actor_desc"] == ""
+
+    v3 = split_mention("former British economist Colin Powell", nlp, detector,
+                       splitter="v3")
+    assert v3["core_query"] == "Colin Powell"
+    assert v3["actor_desc"] == "former British economist"
+    assert v3["country_name"] == "United Kingdom"
+
+
+@pytest.mark.substantive
+def test_v3_leaves_a_bare_name_alone(nlp, detector, es_client_local):
+    v3 = split_mention("Angela Merkel", nlp, detector, splitter="v3")
+    assert v3["core_query"] == "Angela Merkel"
+    assert v3["actor_desc"] == ""

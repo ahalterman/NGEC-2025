@@ -2,6 +2,7 @@ from collections import Counter
 from copy import deepcopy
 from importlib import resources
 import logging
+import os
 import re
 import time
 
@@ -323,7 +324,61 @@ def country_from_context(country_detector, text, context, window=200):
     return country or ""
 
 
-def split_mention(text, nlp, country_detector, context="", known_country=""):
+# Which mention splitter the pipeline uses. "v1" is the original
+# (`_split_mention_v1` below): strip the nationality, then take the longest
+# PERSON (else ORG) entity spaCy finds as the thing to search Wikipedia for.
+# "v3" is the rewrite in `mention_split_v3.py`, which decides where to cut with
+# the PLOVER agents file, the wiki index and capitalisation instead of a list
+# of role words. Flip this one line to switch the whole pipeline; individual
+# callers can override it with `splitter="v1"` / `splitter="v3"`.
+SPLITTER = "v1"
+
+# The v3 splitter embeds every agent pattern when it is built, so it is built
+# once per process and kept.
+_V3_SPLITTER = None
+
+
+def _v3_splitter(nlp, country_detector):
+    """The process-wide v3 splitter, built on first use.
+
+    The wiki index it consults is the one NGEC_WIKI_URL names, defaulting to
+    the local node the rest of the pipeline uses.
+    """
+    global _V3_SPLITTER
+    if _V3_SPLITTER is None:
+        from .mention_split_v3 import SplitterV3
+        agents_file = resources.files("ngec") / "assets" / "PLOVER_agents.txt"
+        _V3_SPLITTER = SplitterV3(
+            country_detector,
+            str(agents_file),
+            es_url=os.environ.get("NGEC_WIKI_URL", "http://localhost:9200/wiki"),
+            nlp=nlp)
+    return _V3_SPLITTER
+
+
+def split_mention(text, nlp, country_detector, context="", known_country="",
+                  splitter=None, doc=None):
+    """
+    Take an actor mention apart into country, description, and core entity.
+
+    A thin dispatcher over the implementations; see `SPLITTER` above and
+    `_split_mention_v1` below for the contract all of them honour.
+
+    Args:
+        splitter: "v1" or "v3". None uses the module-level `SPLITTER`.
+        doc: a parsed spaCy document of the story, if the caller has one.
+            Neither splitter reads it today; it is accepted because
+            `actor_to_code` has one to offer and a splitter that reads entities
+            off by offset would want it.
+    """
+    if (splitter or SPLITTER) == "v3":
+        return _v3_splitter(nlp, country_detector).split(
+            text, context=context, known_country=known_country)
+    return _split_mention_v1(text, nlp, country_detector, context=context,
+                             known_country=known_country)
+
+
+def _split_mention_v1(text, nlp, country_detector, context="", known_country=""):
     """
     Take an actor mention apart into the pieces the resolver searches with.
 
@@ -1455,7 +1510,7 @@ class ActorResolver:
         """The country *name* mentioned nearest to `text` in `context`; see `country_from_context`."""
         return country_from_context(self.country_detector, text, context, window)
 
-    def split_mention(self, text, context="", known_country=""):
+    def split_mention(self, text, context="", known_country="", splitter=None):
         """
         Take a mention apart into country, description, and core entity.
 
@@ -1465,7 +1520,8 @@ class ActorResolver:
         its own, using exactly the code the pipeline runs.
         """
         return split_mention(text, self.nlp, self.country_detector,
-                             context=context, known_country=known_country)
+                             context=context, known_country=known_country,
+                             splitter=splitter)
 
     def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term="") -> dict | None:
         """
@@ -1504,7 +1560,8 @@ class ActorResolver:
         # Wikipedia for, and the description around that part. Everything
         # below works from these pieces.
         split = split_mention(text, self.nlp, self.country_detector,
-                              context=context, known_country=known_country)
+                              context=context, known_country=known_country,
+                              doc=doc)
         country = split["country"]
         trimmed_text = split["trimmed_text"]
         known_country = split["country_name"]
