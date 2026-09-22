@@ -269,6 +269,77 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
 
 
 
+# Infobox keys whose values name an office, a rank or a profession. Wikipedia
+# numbers repeated fields, so a person who has held four offices has `office`,
+# `office1` ... `office3`; matching on the prefix picks all of them up.
+OFFICE_KEY_PREFIXES = ("office", "title", "position", "occupation", "rank",
+                       "profession", "order_of")
+
+# Words that carry no office information, so that "former Secretary of State"
+# is compared on "secretary" and "state" rather than on "of".
+DESC_STOPWORDS = {"the", "a", "an", "of", "for", "and", "to", "in", "at", "on",
+                  "by", "with", "former", "ex", "acting", "outgoing", "interim",
+                  "incoming", "current", "senior", "chief", "deputy", "new",
+                  "s", "his", "her", "their", "its"}
+
+
+def office_text(infobox: dict) -> str:
+    """
+    The office-like values of an infobox, joined into one string.
+
+    Wikipedia's short description for a person is usually a bare
+    "Mexican politician (born 1966)", which says nothing about *which* office
+    they hold -- so scoring a mention's description against it, as
+    `actor_desc_sim_short` does, throws away the part of the mention that
+    disambiguates. The infobox does carry it: Enrique Peña Nieto's says
+    "Governor of the State of Mexico", which is what the mention
+    "the governor of Mexico State, Enrique Pena Nieto" is describing.
+    """
+    if not isinstance(infobox, dict):
+        return ""
+    values = [str(v) for k, v in infobox.items()
+              if any(k.startswith(p) for p in OFFICE_KEY_PREFIXES) and v]
+    return " ; ".join(values)
+
+
+def first_sentence(text: str) -> str:
+    """
+    The first sentence of an article's introduction.
+
+    The rest of an intro paragraph is biography and dilutes the comparison;
+    the first sentence is the one that says what the subject *is*.
+    """
+    if not text:
+        return ""
+    # Find the first sentence-final punctuation mark followed by whitespace or
+    # end of text. (The earlier `(.+?[.!?])(?:\s|$)` form is quadratic on a
+    # long paragraph with no such mark -- e.g. Urdu/Arabic text using "۔" --
+    # and stalled the linker for minutes per candidate list.)
+    text = text.strip()
+    match = re.search(r"[.!?](?=\s|$)", text)
+    return text[:match.end()].strip() if match else text[:300].strip()
+
+
+def content_words(text: str) -> set:
+    """Lower-cased words of a description, minus the ones carrying no office."""
+    words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'’\-]+", text or "")}
+    return words - DESC_STOPWORDS
+
+
+def desc_office_overlap(actor_desc: str, infobox: dict) -> float:
+    """
+    Fraction of a mention's description words that appear in the candidate's
+    office fields. 0 when either side is empty.
+    """
+    desc_words = content_words(actor_desc)
+    if not desc_words:
+        return 0.0
+    office_words = content_words(office_text(infobox))
+    if not office_words:
+        return 0.0
+    return len(desc_words & office_words) / len(desc_words)
+
+
 def title_concept_features(title: str, intro_length: int, doc_country: str,
                            detector: CountryDetector) -> tuple[int, int]:
     """
@@ -1070,6 +1141,11 @@ class WikiMatcher:
                 'title_is_generic_concept': is_generic_concept,
                 'title_has_other_country': has_other_country,
                 'from_alt_query': article.get('from_alt_query', 0),
+                # How much of the mention's description ("former Secretary of
+                # State") the candidate's infobox offices account for. Lexical,
+                # so it costs nothing to compute and needs no encoder.
+                'actor_desc_office_overlap': desc_office_overlap(
+                    actor_desc, article.get('infobox', {})),
                 'name_coverage': name_coverage,
                 'cat_overlap': cat_overlap,
                 'raw_es_score': article.get('raw_es_score', 0),
@@ -1080,6 +1156,7 @@ class WikiMatcher:
                 'context_sim_short': 0,  # Will be filled in later
                 'actor_desc_sim_intro': 0,  # Will be filled in later
                 'actor_desc_sim_short': 0,  # Will be filled in later
+                'actor_desc_sim_first_sent': 0,  # Will be filled in later
                 'combined_score': 0  # Will be calculated after all scores are in
             })
 
@@ -1138,6 +1215,17 @@ class WikiMatcher:
             # Add to dataframe
             df['actor_desc_sim_intro'] = desc_sims_intro[0].tolist()
             df['actor_desc_sim_short'] = desc_sims_short[0].tolist()
+            # The same comparison against the *first sentence* of the intro
+            # only. "Colin Powell was an American politician and general who
+            # served as Secretary of State" carries the office; the rest of the
+            # paragraph is biography that dilutes it. Only computed when there
+            # is a description to compare against, like the two above.
+            first_sents = [first_sentence(article.get('intro_para', ''))
+                           for article in articles]
+            first_sent_embeddings = self.trf.encode(first_sents, batch_size=8,
+                                                    show_progress_bar=False)
+            desc_sims_first = cos_sim(desc_embedding.reshape(1, -1), first_sent_embeddings)
+            df['actor_desc_sim_first_sent'] = desc_sims_first[0].tolist()
 
         # The ranker expects an "empty text" feature, which lets it 
         # discount the context similarity columns when they're all 0.
@@ -1154,6 +1242,7 @@ class WikiMatcher:
         # existing counterparts (`country_match`, `context_sim_intro`) have them.
         for col in ['title_sim', 'context_sim_intro', 'context_sim_short',
                     'actor_desc_sim_intro', 'actor_desc_sim_short',
+                    'actor_desc_sim_first_sent', 'actor_desc_office_overlap',
                     'lcs', 'levenshtein', 'country_match', 'exact_title_match',
                     'alt_name_match', 'redirect_match',
                     'cm_doc', 'cm_title', 'cm_cat',
