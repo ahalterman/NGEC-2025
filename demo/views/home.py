@@ -10,13 +10,23 @@ from ngec_demo.style import (code_glossary, demo_model_note, event_heading,
                              field_table, json_block, lede, mode_badge,
                              role_codes_in, running, step_links, timing_table)
 
-st.title("NGEC")
-lede("Next Generation Event Coder — turns a news story into structured political "
-     "event records: who did what to whom, where, and when.")
+st.title("NGEC Demo")
+st.markdown("A demo of the Next Generation Event Coder, a pipeline to turn a news story into structured "
+     "event records. Accompanies the Halterman, paper currently under review.")
+
+st.markdown("The purpose of NGEC and this research is to make it easier for social scientists to create custom event data. This demo uses the PLOVER ontology throughout, but each step also discusses how it can be customized.")
+
+st.markdown("See the [NGEC](https://github.com/ahalterman/NGEC-2025) repository on Github for the code.")
 
 if "doc" not in st.session_state:
     st.session_state.doc = DOCUMENTS[0].text
     st.session_state.pub_date = pd.to_datetime(DOCUMENTS[0].pub_date).date()
+
+st.markdown("### Start here")
+
+st.markdown("We can start by seeing how NGEC processes an entire document, end-to-end, through all the steps of creating event data.")
+
+st.markdown("Click one of the three examples below, or paste your own document in.")
 
 cols = st.columns(len(DOCUMENTS))
 for col, doc in zip(cols, DOCUMENTS):
@@ -40,7 +50,7 @@ if missing:
                "The steps that need them will return nothing.")
 
 if run:
-    with running(mode, "Coding the document…"):
+    with running(mode, "Running the entire pipeline over the document... (May take 30+ seconds running on CPU)"):
         _, notes = R.get_classifier(mode)
         st.session_state["model_notes"] = notes
         st.session_state["result"] = steps.run_pipeline(text, str(pub_date),
@@ -49,6 +59,7 @@ if run:
 result = st.session_state.get("result")
 if result:
     st.subheader("Events")
+    st.markdown("Each record below reports the detected event type and mode (sub-event type), the raw spans of text in quotes for the actors and recipients along with their country and role codes, and the resolved date and location. These records all use the PLOVER event ontology as a demo. See the pages on the sidebar for customization.")
     events = result["events"]
     if events:
         # One story can fire an event type under several modes, and each mode is
@@ -56,10 +67,10 @@ if result:
         # the mode. Say so once rather than leaving the reader to spot it.
         types = [e.get("event_type", "") for e in events]
         repeated = sorted({t for t in types if types.count(t) > 1})
-        if repeated:
-            st.caption(f"{', '.join(repeated)} fired under more than one mode, "
-                       "so it appears once per mode; the two records can "
-                       "otherwise be identical.")
+        #if repeated:
+        #    st.caption(f"{', '.join(repeated)} fired under more than one mode, "
+        #               "so it appears once per mode; the two records can "
+        #               "otherwise be identical.")
         codes: list[str] = []
         for i, event in enumerate(events, start=1):
             fields = steps.event_fields(event)
@@ -77,7 +88,7 @@ if result:
                        "followed by its role.")
     else:
         st.info("No event cleared the classifier's thresholds, or the attribute "
-                "model declined every candidate.")
+                "model declined to identify spans for any event.")
     if result.get("error"):
         st.warning(result["error"])
     if result["dropped"]:
@@ -88,11 +99,12 @@ if result:
     demo_model_note()
 
     st.subheader("Timing")
+    st.markdown("This demo is running on a relatively small server without a GPU. Time is dominated by the small attribute LLM, which takes around 3 seconds per document-event. On a GPU, you can expect around 30 document-events per second, which is around a 100x speedup.")
     timing_table(result["breakdown"])
     st.caption(f"{result['timing']['total']:.1f} s · {mode_badge(result['mode'])} · "
-               "model load and warm-up are not counted — they happen once per "
+               "model load and warm-up are not counted. These happen once per "
                "mode and are on the Timing page.")
 
 st.subheader("Five steps")
-lede("Each stage of the pipeline, on its own, with its own inputs.")
+st.markdown("The rest of the demo goes in depth on each of the five steps involved in creating an event record from text. Each link below takes you to a different step so you can see how it works, how it could be customized, and how it could potentially be used on its own.")
 step_links()

@@ -206,7 +206,7 @@ def run_mode(mode: str) -> None:
 
     # The prompt the page shows in "Advanced: edit the prompt", edited by hand
     # and sent back. The document and definition are the ECAV example from
-    # pages/step2.py -- an ontology from another project -- kept in step with
+    # views/step2.py -- an ontology from another project -- kept in step with
     # that page's EXAMPLES by hand.
     ecav_text = ("Supporters of the opposition Unity Party blocked the main road "
                  "into Kisumu on Thursday, three days after the parliamentary "
@@ -214,7 +214,7 @@ def run_mode(mode: str) -> None:
                  "the count. Police fired tear gas to disperse the crowd of about "
                  "2,000, a party spokesman said.")
     # TODO(andy): replace with the verbatim definition from the ECAV codebook
-    # (Daxecker, Amicarelli & Jung 2019), here and in pages/step2.py. This is a
+    # (Daxecker, Amicarelli & Jung 2019), here and in views/step2.py. This is a
     # shortened paraphrase of that page's draft definition and has not been
     # checked against the codebook.
     ecav_def = ("Public acts of mobilization, contestation, or coercion by state "

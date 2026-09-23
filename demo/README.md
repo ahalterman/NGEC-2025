@@ -104,4 +104,7 @@ and takes a few minutes; the CPU pass needs `llama-server` up.
 - `ngec_demo/examples.py` — the documents and spans the pages open with.
 - `ngec_demo/style.py` — the light theme's CSS, the bar chart, the timing
   table, the sidebar block and the widgets the pages share.
-- `pages/` — one file per page.
+- `views/` — one file per page. Not `pages/`: a folder by that name puts
+  Streamlit in its legacy multipage mode, where a direct link to a page runs
+  that file alone and skips `app.py`, and with it the password gate, until
+  some session reaches `st.navigation`.
