@@ -397,11 +397,22 @@ class WikiClient:
     
     def __init__(self,
                  es_client: Elasticsearch,
+                 # folding on, importance off: docs/memos/2026-09-10-wiki-retrieval-eval.md
+                 use_folded: bool = True,
+                 use_importance: bool = False,
                  ):
         """Initialize the Wikipedia client.
 
         es_config is a dict with es_host, es_port, es_user, es_password
+
+        use_folded and use_importance are the defaults for `run_wiki_search`;
+        see that method for what each one adds to the query. Both need index
+        features that only exist in wiki indices built from 2026-09 on. See
+        docs/memos/2026-09-10-wiki-retrieval-eval.md for the measurements behind
+        the defaults.
         """
+        self.use_folded = use_folded
+        self.use_importance = use_importance
         try:
             es_client.ping()
             self.conn = Search(using=es_client, index="wiki")
@@ -438,7 +449,8 @@ class WikiClient:
 
     def run_wiki_search(self, query_term, limit_term="", max_results=200,
                         country="",
-                        use_importance=False,
+                        use_importance=None,
+                        use_folded=None,
                         title_exact_boost=250,
                         title_and_boost=120,
                         title_fuzzy_boost=50,
@@ -462,8 +474,23 @@ class WikiClient:
                 if known. Used to add country-qualified title clauses; see
                 `country_phrase_variants`. Passing "" is the old behavior.
             use_importance: also boost articles by redirect count and by having
-                an infobox/short description
+                an infobox/short description. Needs a `redirect_count` field,
+                which only 2026-09-and-later indices have. None uses the
+                instance default set in `__init__`.
+            use_folded: also match the accent-folded `.folded` sub-fields of
+                title/redirects/alternative_names, so that "Lopez Obrador"
+                reaches "López Obrador". The sub-fields only exist in
+                2026-09-and-later indices, and turning the clauses on is a
+                deliberate ranking change: it roughly doubles the title-fuzzy
+                contribution and moves every `raw_es_score`, so the XGBoost
+                ranker sees different inputs. Measured in
+                docs/memos/2026-09-10-wiki-retrieval-eval.md. None uses the
+                instance default set in `__init__`.
         """
+        if use_importance is None:
+            use_importance = self.use_importance
+        if use_folded is None:
+            use_folded = self.use_folded
 
         # Base matching clauses.
         #
@@ -485,18 +512,23 @@ class WikiClient:
             {"match": {"title": {"query": query_term, "boost": title_fuzzy_boost}}},
             {"match": {"redirects": {"query": query_term, "boost": redirects_fuzzy_boost}}},
             {"match": {"alternative_names": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
-            # Accent-folded `.folded` sub-fields on title/redirects/alternative_names
-            # exist in wiki indices built from 2026-09 on (see
-            # elasticsearch/es_wiki/wiki_mapping.json). Clauses querying them used
-            # to sit here, but no index has ever had the sub-field, so they were
-            # never live and contributed nothing to any published result. Turning
-            # them on is a deliberate ranking change -- it roughly doubles the
-            # title-fuzzy contribution and moves every raw_es_score -- so it needs
-            # to be evaluated with setup/train_wiki_model (and the ranker
-            # retrained) before it is switched on.
             {"match": {"intro_para": {"query": query_term, "boost": intro_para_boost}}},
             {"match": {"short_desc": {"query": query_term, "boost": short_desc_boost}}}
         ]
+
+        if use_folded:
+            # Accent-folded `.folded` sub-fields on title/redirects/alternative_names
+            # exist in wiki indices built from 2026-09 on (see
+            # elasticsearch/es_wiki/wiki_mapping.json); against an older index
+            # these clauses simply match nothing. They are what lets a mention
+            # written without diacritics reach the article that has them.
+            base_should_clauses += [
+                # The `folded` analyzer is lowercase + asciifolding (no stemmer),
+                # so these are the same tokens with the diacritics taken off.
+                {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
+                {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
+                {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
+            ]
 
         # Country-qualified title clauses. News text says "the electoral
         # commission"; Wikipedia says "Electoral Commission of Kenya". These
@@ -596,19 +628,28 @@ class WikiSearcher:
     
     def __init__(self, 
                  wiki_client: None | WikiClient=None, 
-                 es_client: None | Elasticsearch=None):
+                 es_client: None | Elasticsearch=None,
+                 use_folded: bool = True,
+                 use_importance: bool = False):
         """
         Initialize the Wikipedia searcher.
         
         Args:
             wiki_client: WikiClient instance
             es_client: Elasticsearch client (used if wiki_client not provided)
+            use_folded: match the accent-folded sub-fields as well (see
+                `WikiClient.run_wiki_search`). Only used when this class builds
+                its own WikiClient; a caller passing a `wiki_client` sets the
+                flags on it.
+            use_importance: boost by redirect count as well (same caveat)
         """
         match wiki_client, es_client:
             case None, None:
                 raise ValueError("Must provide either wiki_client or es_client")
             case None, _:
-                self.wiki_client = WikiClient(es_client=es_client)
+                self.wiki_client = WikiClient(es_client=es_client,
+                                              use_folded=use_folded,
+                                              use_importance=use_importance)
             case _, _:
                 self.wiki_client = wiki_client
     
@@ -794,6 +835,8 @@ class WikiMatcher:
                  wiki_ranker_model: None | str | Path=None,
                  ranker_threshold: float | None = None,
                  device=None,
+                 use_folded: bool = True,
+                 use_importance: bool = False,
                  ):
         """
         Initialize the Wikipedia matcher.
@@ -807,9 +850,16 @@ class WikiMatcher:
             device: Device to use for inference ('cuda', 'cpu', or None). Passed
                 to the actor-similarity model as well as the query encoder.
             wiki_sort_method: Method to use for sorting results
+            use_folded: match the accent-folded sub-fields in retrieval as well
+            use_importance: boost candidates by redirect count as well
+
+        Both retrieval flags need a 2026-09-or-later Wikipedia index and change
+        the candidate list the ranker sees; see `WikiClient.run_wiki_search`.
         """
         # Initialize components or use provided ones
-        self.wiki_searcher = WikiSearcher(es_client=es_client)
+        self.wiki_searcher = WikiSearcher(es_client=es_client,
+                                          use_folded=use_folded,
+                                          use_importance=use_importance)
             
         # Initialize models if not provided
         if trf_model is None:
@@ -1637,41 +1687,30 @@ class WikiMatcher:
                 return cleaned
         return ""
 
-    def query_wiki(self,
-                   query_term,
-                   limit_term="",
-                   country="",
-                   context="",
-                   actor_desc="",
-                   method="neural",
-                   max_results=200,
-                   skip_expansion=False,
-                   alt_query_terms: list[str] | None = None):
+    def retrieve_candidates(self,
+                            query_term,
+                            limit_term="",
+                            country="",
+                            context="",
+                            max_results=200,
+                            skip_expansion=False,
+                            alt_query_terms: list[str] | None = None):
         """
-        Search Wikipedia and return the best matching article.
+        Everything `query_wiki` does before the ranker: settle on the query
+        term, search Elasticsearch, and merge in the alternative form's hits.
 
-        Args:
-            query_term: Term to search for
-            limit_term: Term to limit results by
-            country: Country *name* (e.g. "Ghana") to help with disambiguation
-            context: Context text to help with disambiguation
-            actor_desc: Actor description (automatically parsed)
-            max_results: Maximum results to return from search
-            skip_expansion: If True, skip NER-based query expansion (use when
-                the caller already extracted the core entity via NER)
-            alt_query_terms: Other surface forms of the same mention (e.g. the
-                raw span before country-stripping, or the span before NER
-                expansion). The first one that differs from `query_term` is
-                searched as well and the two candidate lists are merged. One
-                extra Elasticsearch round trip buys about a point of recall,
-                because whichever surface form the article is titled under is
-                often not the one the pipeline settled on.
+        This is a separate method so that the ranker's *training* rows can be
+        generated through exactly the code that serves them. The features the
+        ranker reads (`raw_es_score`, `index`, `from_alt_query`) depend on the
+        query term the expansion settles on and on how the two candidate lists
+        are merged, so a training script that rebuilt any of that by hand would
+        silently drift from production -- which is how the ranker came to be
+        trained against a merge that no longer exists. See
+        `setup/train_wiki_model/generate_features.py`.
 
         Returns:
-            dict or None: Best matching Wikipedia article or None if no good match
+            tuple: (the query term actually searched, the merged candidate list)
         """
-        if method not in ["neural", "rules"]:
-            raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
         # Strip possessive suffix before searching
         query_term = re.sub(r"['’]s\s*$", "", query_term).strip()
         # Do NER expansion unless caller already extracted a specific (multi-word) entity
@@ -1709,6 +1748,53 @@ class WikiMatcher:
             for article in alt_results:
                 article['from_alt_query'] = 1
             results = merge_ranked_results(results, alt_results, max_results)
+
+        return query_term, results
+
+    def query_wiki(self,
+                   query_term,
+                   limit_term="",
+                   country="",
+                   context="",
+                   actor_desc="",
+                   method="neural",
+                   max_results=200,
+                   skip_expansion=False,
+                   alt_query_terms: list[str] | None = None):
+        """
+        Search Wikipedia and return the best matching article.
+
+        Args:
+            query_term: Term to search for
+            limit_term: Term to limit results by
+            country: Country *name* (e.g. "Ghana") to help with disambiguation
+            context: Context text to help with disambiguation
+            actor_desc: Actor description (automatically parsed)
+            max_results: Maximum results to return from search
+            skip_expansion: If True, skip NER-based query expansion (use when
+                the caller already extracted the core entity via NER)
+            alt_query_terms: Other surface forms of the same mention (e.g. the
+                raw span before country-stripping, or the span before NER
+                expansion). The first one that differs from `query_term` is
+                searched as well and the two candidate lists are merged. One
+                extra Elasticsearch round trip buys about a point of recall,
+                because whichever surface form the article is titled under is
+                often not the one the pipeline settled on.
+
+        Returns:
+            dict or None: Best matching Wikipedia article or None if no good match
+        """
+        if method not in ["neural", "rules"]:
+            raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
+        query_term, results = self.retrieve_candidates(
+            query_term,
+            limit_term=limit_term,
+            country=country,
+            context=context,
+            max_results=max_results,
+            skip_expansion=skip_expansion,
+            alt_query_terms=alt_query_terms,
+        )
 
         best = self.pick_best_wiki(
             query_term, 
