@@ -24,8 +24,16 @@ EXAMPLES: list[tuple[str, str]] = [
      "forecasters expect the storm to clear by Thursday morning."),
 ]
 
-st.title("1. Which event?")
-lede("Every text is scored by all sixteen PLOVER classifiers; each fires at its "
+st.title("1. Event Detection")
+
+st.markdown("""The first step in our proposed event data pipeline is *event
+detection*: identifying which event types are described in a document. Treating
+this as a document classification task makes it easy to collect training data and fit models.
+
+This is a step that almost anyone making custom event data would want to modify. The paper 
+            has more details.""")
+
+st.markdown("Every text is scored by all sixteen PLOVER classifiers; each fires at its "
      "own tuned threshold, so a story can be several events, or none.")
 
 if "s1_text" not in st.session_state:
@@ -84,7 +92,8 @@ if result:
 # restore that directory or fix those pointers; until then this text gives the
 # recipe rather than sending a reader to a path that does not exist.
 with st.expander("Customizing event classification"):
-    st.markdown("""
+    st.markdown("""*Or, use conflibert*,
+
 Nothing is fitted live here, but the recipe is short. To code your own ontology
 rather than PLOVER:
 

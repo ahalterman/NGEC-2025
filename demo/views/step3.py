@@ -57,9 +57,9 @@ EXAMPLES: list[tuple[str, str, str]] = [
      "faced criticism."),
 ]
 
-st.title("3. Which entity?")
-lede("A span is searched against a Wikipedia index and every candidate article "
-     "is scored by a ranker that reads the surrounding sentence.")
+st.title("3. Resolving to Wikipedia")
+lede("A entity span is searched against a Wikipedia index and every candidate article "
+     "is scored by a ranker using the mention's context, if available..")
 
 if "s3_span" not in st.session_state:
     st.session_state.s3_span = EXAMPLES[0][1]
@@ -76,7 +76,7 @@ for row in (EXAMPLES[:3], EXAMPLES[3:]):
             st.rerun()
 
 st.text_input("Entity span", key="s3_span")
-st.text_area("Context — the sentence the span came from", key="s3_context", height=90)
+st.text_area("Context (optional): the sentence or paragraph the span came from", key="s3_context", height=90)
 run = st.button("Look up", type="primary")
 
 health = R.health(R.current_mode())
@@ -84,7 +84,7 @@ missing = [name for name in ("Elasticsearch", "wiki index")
            if not health.get(name, {}).get("ok")]
 if missing:
     st.warning(f"Not available: {', '.join(missing)}. "
-               "This page needs Elasticsearch and the wiki index.")
+               "This page needs Elasticsearch and the wiki index to run.")
 
 if run:
     with running(R.current_mode(), "Searching Wikipedia and scoring the candidates…"):
@@ -117,11 +117,12 @@ if result:
     # runs, so the page cannot drift from step 4.
     asked = st.session_state.get("s3_asked", "")
     split = result.get("split") or {}
-    st.subheader("How the span was searched")
+    st.subheader("How the search was constructed")
+    st.markdown('Part of our "bag of tricks" are a set of techniques to help improve search performance, including expanding acronyms, cleaning up long spans, and distinguishing between searchable entities and broader context.')
     rows = []
     if split.get("country"):
         rows.append(("country", f'{split["country_name"] or split["country"]} '
-                                f'({split["country"]}) — found in the span and removed'))
+                                f'({split["country"]}) was found in the span and removed before search'))
     elif split.get("country_name"):
         rows.append(("country", f'{split["country_name"]} — from the context'))
     if split.get("actor_desc"):
@@ -132,8 +133,7 @@ if result:
     if split.get("country"):
         steps_taken.append(f'stripped the country: "{split["trimmed_text"]}"')
     if split.get("core_query") and split["core_query"] != split.get("trimmed_text"):
-        steps_taken.append(f'NER cut the span down to "{split["core_query"]}", '
-                           "leaving the description around it")
+        steps_taken.append(f'NER trimmed the span down to "{split["core_query"]}"i')
     if result.get("expanded"):
         steps_taken.append(f'expanded to "{result["query"]}" from the context')
     if result.get("alt_query"):

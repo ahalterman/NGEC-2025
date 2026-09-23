@@ -643,11 +643,11 @@ def timing_table(rows: list[dict] | None = None,
 
 
 STEPS = [
-    ("pages/step1.py", "1. Which event?", "Sixteen event types, one classifier each."),
-    ("pages/step2.py", "2. Who did what?", "A fine-tuned model pulls out the spans."),
-    ("pages/step3.py", "3. Which entity?", "Each span is matched to a Wikipedia article."),
-    ("pages/step4.py", "4. What kind of actor?", "The article becomes role and country codes."),
-    ("pages/step5.py", "5. When and where?", "Dates become real dates; place names become geonames entries."),
+    ("views/step1.py", "1. Event detection", "What happened? Identifying which event types a story contains."),
+    ("views/step2.py", "2. Attribute Extraction", "Who did what to whom, when and where? Extracting spans of text for each."),
+    ("views/step3.py", "3. Wikipedia Lookup", "Who are these people? Resolving entities to Wikipedia.."),
+    ("views/step4.py", "4. Categorizing Entities", "What kind of actors are they? Categorizing entities by country and role."),
+    ("views/step5.py", "5. Dates and Locations", "When and where? Resolving relative dates and linking locations to geographic coordinates."),
 ]
 
 

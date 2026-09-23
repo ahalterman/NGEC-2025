@@ -16,8 +16,8 @@ from ngec_demo.style import (field_table, json_block, lede, mode_badge, running,
 # apart. The last is published on a Friday, so "Monday" and "Wednesday" both
 # fall earlier in the same week.
 DATE_EXAMPLES: list[tuple[str, str]] = [
-    ("last Tuesday", "2023-03-15"),
-    ("three weeks ago", "2024-06-11"),
+    ("last Tuesday", "today"),
+    ("three weeks ago", "today"),
     ("since early 2015", "2024-02-20"),
     ("between Monday and Wednesday", "2024-06-14"),
 ]
@@ -39,16 +39,17 @@ GEO_EXAMPLES: list[tuple[str, str]] = [
 ]
 
 st.title("5. When and where?")
-lede("A date phrase from the story is resolved against the story's publication "
-     "date; place names are resolved against geonames and matched to the "
-     "event's location span.")
+lede("""Assuming that a reported event occurred on the news story's date of publication is a major problem. We want to take the raw, relative dates extracted by the attribute model and resolve them to an absolute date, while preserving as much uncertainty as possible.
+
+     We also need to know *where* events happened. To do that, we'll resolve every named location in a story to its geographic coordinates and match up the event's reported location with a resolved location.
+     """)
 
 health = R.health(R.current_mode())
 missing = [name for name in ("Elasticsearch", "geonames index")
            if not health.get(name, {}).get("ok")]
 if missing:
     st.warning(f"Not available: {', '.join(missing)}. Geoparsing needs the "
-               "geonames index; date resolution does not.")
+               "geonames index.")
 
 st.subheader("5.1 Dates")
 

@@ -32,14 +32,14 @@ def main() -> None:
     # No icons: the step pages are already numbered, and a rail of emoji is the
     # first thing that breaks the deadpan look.
     pages = [
-        st.Page("pages/home.py", title="NGEC", default=True),
-        st.Page("pages/step1.py", title="1. Which event?"),
-        st.Page("pages/step2.py", title="2. Who did what?"),
-        st.Page("pages/step3.py", title="3. Which entity?"),
-        st.Page("pages/step4.py", title="4. What kind of actor?"),
-        st.Page("pages/step5.py", title="5. When and where?"),
-        st.Page("pages/bulk.py", title="Bulk"),
-        st.Page("pages/timing.py", title="Timing"),
+        st.Page("views/home.py", title="NGEC", default=True),
+        st.Page("views/step1.py", title="1. Event Detection"),
+        st.Page("views/step2.py", title="2. Attribute Extraction"),
+        st.Page("views/step3.py", title="3. Linking Entities to Wikipedia"),
+        st.Page("views/step4.py", title="4. Categorizing Entities"),
+        st.Page("views/step5.py", title="5. Dates and Locations"),
+        st.Page("views/bulk.py", title="Bulk"),
+        st.Page("views/timing.py", title="Timing"),
     ]
 
     page = st.navigation(pages)
