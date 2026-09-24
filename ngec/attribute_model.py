@@ -61,6 +61,18 @@ PromptFormat = Literal["legacy", "v5"]
 # valid (if worse) model and may be referenced elsewhere by that name.
 DEFAULT_MODEL = "ahalt/qwen3-event-extraction-exp5.1"
 
+
+def resolve_model_name(model_name: str | None = None) -> str:
+    """The attribute model to use: `model_name` if given, then the
+    NGEC_ATTRIBUTE_MODEL environment variable, then DEFAULT_MODEL.
+
+    AttributeModel and `ngec download-models` both go through this, so the
+    model that gets downloaded is the one the pipeline then loads.
+    """
+    return (model_name
+            or os.environ.get("NGEC_ATTRIBUTE_MODEL")
+            or DEFAULT_MODEL)
+
 # Models whose prompt format is known. A path or name that is not listed falls
 # back to "legacy" with a warning, because guessing silently is how a model ends
 # up being evaluated in a format it was never trained on.
@@ -314,9 +326,7 @@ class AttributeModel:
         """
         self.silent=silent
         self.backend = backend
-        self.model_name = (model_name
-                           or os.environ.get("NGEC_ATTRIBUTE_MODEL")
-                           or DEFAULT_MODEL)
+        self.model_name = resolve_model_name(model_name)
         self.prompt_format: PromptFormat = (prompt_format
                                             or resolve_prompt_format(self.model_name))
         # The v5 models were evaluated with a 2048-token ceiling; the legacy one

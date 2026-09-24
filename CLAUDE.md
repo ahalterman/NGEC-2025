@@ -120,7 +120,10 @@ contract; reconcile or delete them.
   libraries** (`undefined symbol: __nvJitLinkGetErrorLogSize_12_9`). On the
   reference machine, run with `env -u LD_LIBRARY_PATH`.
 - spaCy models `en_core_web_lg` and `en_core_web_trf` are required (checked on
-  import; a warning is emitted if missing).
+  import; a warning is emitted if missing). `ngec download-models`
+  (`ngec/models.py`) installs them and also pre-fetches the Hugging Face models
+  (the three sentence encoders and the attribute LLM), resolving each name the
+  same way the pipeline does, env-var overrides included.
 - Backends for the attribute LLM: `vllm` (default, Linux/CUDA), `transformers`
   (slow, portable, used in tests), `mlx` (macOS).
 - Steps 5 (actor resolution) and the end-to-end test require a running

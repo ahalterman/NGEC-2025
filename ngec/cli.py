@@ -14,7 +14,7 @@ import argparse
 import logging
 import sys
 
-from .models import REQUIRED_SPACY_MODELS, download_models
+from .models import download_models
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -25,13 +25,24 @@ def main(argv: list[str] | None = None) -> int:
 
     download = subparsers.add_parser(
         "download-models",
-        help="download the spaCy models NGEC needs",
+        help="download the models NGEC needs",
         description=(
-            "Download and install the spaCy models NGEC needs "
-            f"({', '.join(REQUIRED_SPACY_MODELS)}, about 900 MB together). "
-            "They are not on PyPI, so installing ngec does not bring them in."))
+            "Download the models NGEC needs, about 3 GB together: the two spaCy "
+            "models, the sentence encoders used for event classification and "
+            "actor resolution, and the attribute-extraction LLM. None of them "
+            "come with installing ngec, and without this step they would "
+            "download the first time the pipeline runs (except the spaCy "
+            "models, which do not download on their own at all)."))
     download.add_argument("--force", action="store_true",
-                          help="re-download models that are already installed")
+                          help="reinstall the spaCy models and re-download the "
+                               "attribute model even if they are already present")
+    download.add_argument("--attribute-model", metavar="NAME",
+                          help="the attribute model to download, as a Hugging Face "
+                               "id (default: $NGEC_ATTRIBUTE_MODEL, or the model "
+                               "AttributeModel uses by default)")
+    download.add_argument("--no-attribute-model", action="store_true",
+                          help="skip the attribute model, e.g. when it runs on a "
+                               "llama.cpp server")
 
     args = parser.parse_args(argv)
 
@@ -41,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "download-models":
         try:
-            download_models(force=args.force)
+            download_models(force=args.force,
+                            attribute_model=args.attribute_model,
+                            include_attribute_model=not args.no_attribute_model)
         except RuntimeError as exc:
             print(exc, file=sys.stderr)
             return 1
