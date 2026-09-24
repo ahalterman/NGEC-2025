@@ -24,7 +24,7 @@ when the event type does not occur in the document.
 
 It replaces [`ahalt/qwen3-event-extraction-exp5.1`](https://huggingface.co/ahalt/qwen3-event-extraction-exp5.1)
 (the model in the submitted paper). On a 500-document test set of new VOA articles, its
-mean F1 is 70.0, against 54.9 for exp5.1. See "Evaluation" below.
+mean F1 is 71.0, against 54.9 for exp5.1. See "Evaluation" below.
 
 **It uses a different prompt and output format from exp5.1.** Multiple spans
 for each attribute are now proper JSON lists instead of semi-colon separated, and the
@@ -133,12 +133,18 @@ definitions = {(d["event_type"], d["mode"]): d["definition"]
 
 ## Example usage with vLLM
 
+In a script (not a notebook), put this under `if __name__ == "__main__":`,
+because vLLM starts its engine in a separate process.
+
 ```python
 from vllm import LLM, SamplingParams
 from transformers import AutoTokenizer
 
 MODEL = "ahalt/qwen3.5-event-extraction-0.8b"
-model = LLM(model=MODEL, enable_prefix_caching=True, max_model_len=8192)
+# The checkpoint keeps Qwen3.5's vision tower, because vLLM only supports
+# Qwen3.5's multimodal architecture. language_model_only=True skips loading it.
+model = LLM(model=MODEL, enable_prefix_caching=True, max_model_len=8192,
+            language_model_only=True)
 tokenizer = AutoTokenizer.from_pretrained(MODEL)
 
 # Greedy decoding, which is how the model was evaluated
@@ -168,10 +174,17 @@ records = json.loads(output[0].outputs[0].text)
 ```
 
 The output shown is the model's actual output for this document, produced by
-the Q8_0 GGUF. The document is from the 500-document test set described below.
+the code above. The document is from the 500-document test set described below.
 
 The model may return several records for one document, one per instance of the event.
-On the 500 test documents, every output was valid JSON. 
+Under greedy decoding it occasionally repeats the same few records until it
+reaches the token limit, which leaves the JSON unfinished (3 of the 500 test
+documents). Keep the records that were completed before the cut-off and drop
+exact duplicates; NGEC's parser does this.
+
+The Hugging Face `transformers` library (5.5.1 or later) loads the checkpoint
+as a text-only model and ignores the vision weights. The GGUF does not contain
+them.
 
 ## Evaluation
 
@@ -183,14 +196,21 @@ on the same documents.
 
 | Test set | exp5.1 | This model |
 |---|---|---|
-| 500 VOA documents (gold500_a) | 54.9 | 70.0 |
+| 500 VOA documents (gold500_a) | 54.9 | 71.0 |
 | Held-out 50 documents (earlier answer key; a rebuilt key is pending) | 65.2 | 72.5 |
 | Original 100 human-coded ASSAULT documents, actor only (any annotator's span) | 73.6 | 88.5 |
 
-On the 500 documents, the gain is 15 points, with a 95% interval of +11 to +20.
-This model gets 54 articles entirely right (exp5.1: 5). It misses events on 26
-articles (exp5.1: 170) and finds 69% of all events (exp5.1: 26%). It swaps the
-actor and the recipient in 1.7% of events (exp5.1: 4.6%).
+The gold500_a score uses the definitions in `definitions.json`, the ones the
+model was trained on. The other two rows, and the figures in the next
+paragraph, were measured with definitions rendered from an earlier version of
+the codebook (2026-01-23); with those, the model scores 70.0 on gold500_a
+instead of 71.0.
+
+With the earlier definitions, the gain on gold500_a is 15 points, with a 95%
+interval of +11 to +20. This model gets 54 articles entirely right (exp5.1: 5).
+It misses events on 26 articles (exp5.1: 170) and finds 69% of all events
+(exp5.1: 26%). It swaps the actor and the recipient in 1.7% of events (exp5.1:
+4.6%).
 
 The answer keys for gold500_a and the held-out set were drafted by three models
 and adjudicated by a fourth model and a human spot check of the adjudicated
@@ -206,9 +226,13 @@ the model trained on it. Giving a bare type name instead of the definition costs
 
 **Speed and size.** On an Intel i9-12900K (8 threads), the Q8_0 GGUF takes 3.9
 seconds per document on average, about 1,040 prompt tokens and 150 output tokens.
-On a 100-document subset of gold500_a, the Q8_0 GGUF scored 74.3, against 73.6 for
-these bf16 weights on a GPU, so quantization to 8 bits has no measurable effect. On one
-GPU with vLLM, the model processes about 37 events per second.
+On a 100-document subset of gold500_a (with the earlier definitions), the Q8_0
+GGUF scored 74.3, against 73.6 for these bf16 weights on a GPU, so quantization
+to 8 bits has no measurable effect. On one RTX 4090 with vLLM and
+`language_model_only=True`, the 500 gold500_a documents take 25 seconds: 20
+documents and 39 events per second. Skipping the vision tower changes neither
+accuracy nor generation speed noticeably, but it uses 1.53 instead of 1.72 GiB
+of GPU memory for the weights and halves the time to start the engine.
 
 ## Training
 
