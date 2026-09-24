@@ -217,17 +217,20 @@ def _same_day_weekday(raw: str, base_date: datetime) -> ResolvedDate | None:
     normal past-preference parse and still lands on its most recent occurrence
     before publication.
 
-    Deliberately narrow: it fires only when the *whole* span is a weekday name
-    (optionally prefixed with "on" or "this"). Anything carrying a modifier
-    ("last Tuesday", "next Tuesday"), a time of day ("Thursday evening"), a
-    month, or a digit goes through the cascade untouched.
+    Deliberately narrow: it fires only when the *whole* span is a weekday name,
+    optionally prefixed with "on" or "this", with "early", "late" or
+    "overnight", and optionally followed by a part of the day ("late Monday",
+    "Monday night", "on Monday evening"). Anything carrying a relative modifier
+    ("last Tuesday", "next Tuesday"), a month, or a digit goes through the
+    cascade untouched.
     """
-    m = re.fullmatch(rf"(?:on\s+|this\s+)?({_WEEKDAYS})", raw.strip(" -,."),
-                     re.IGNORECASE)
+    m = re.fullmatch(rf"(?:on\s+|this\s+)?(?:(?:early|late|overnight)\s+)?({_WEEKDAYS})"
+                     rf"(?:\s+(?:morning|afternoon|evening|night))?",
+                     raw.strip(" -,."), re.IGNORECASE)
     if m is None or _WEEKDAY_INDEX[m.group(1).lower()] != base_date.weekday():
         return None
     return ResolvedDate(resolved_date=base_date, granularity="day", date_type="exact",
-                        reason="<Bare weekday naming the publication day, resolved to the pub date>")
+                        reason="<Weekday naming the publication day, resolved to the pub date>")
 
 
 def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> ResolvedDate | None:

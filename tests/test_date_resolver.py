@@ -325,6 +325,17 @@ def test_bare_weekday_naming_the_pub_day():
         assert "publication day" in res.reason, expr
 
 
+def test_weekday_with_part_of_day_naming_the_pub_day():
+    # "late Friday", "Friday night" etc. in a story filed on a Friday mean that
+    # Friday too, not the one a week earlier.
+    for expr in ["Friday evening", "Friday night", "late Friday", "early Friday",
+                 "overnight Friday", "on Friday night", "late Friday night",
+                 "Friday morning", "this Friday afternoon"]:
+        res = _resolve_date(expr, REF)
+        assert res.resolved_date.strftime("%Y-%m-%d") == "2025-05-16", expr
+        assert res.date_type == "exact" and res.granularity == "day", expr
+
+
 def test_bare_weekday_other_than_the_pub_day():
     # Every other weekday still resolves to its most recent occurrence *before*
     # publication, exactly as before.
@@ -346,10 +357,8 @@ def test_same_day_rule_is_narrow():
     assert _resolve_date("August 15", REF).resolved_date.strftime("%Y-%m-%d") == "2024-08-15"
     assert _resolve_date("15/8/2004", REF).resolved_date.strftime("%Y-%m-%d") == "2004-08-15"
     assert _resolve_date("over the weekend", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-10"
-    # A time-of-day qualifier is not a bare weekday, so "Friday evening" on a
-    # Friday still reads as the previous Friday. Left alone deliberately: the
-    # same-day fix is scoped to the bare form.
-    assert _resolve_date("Friday evening", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-09"
+    # A part-of-day qualifier on some other weekday is untouched.
+    assert _resolve_date("Thursday evening", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-15"
 
     # Empty and missing spans fall back to the pub date, flagged unresolved.
     for expr in ["", None]:
