@@ -10,11 +10,16 @@ Implemented here:
   effective value, and which code actually reads it
 - Compute: the PyTorch build, whether it can really see the GPU that is
   present, and what `gpu=True` will do on this machine
+- Elasticsearch: whether it is reachable, and whether the `wiki` and
+  `geonames` indices are in it
+- Smoke test (only with `--smoke`): three real news stories run through the
+  whole pipeline, after checking that every model it needs is already
+  downloaded. Doctor never downloads anything; see `ngec/smoke_test.py`.
 
-Still to come, roughly in this order: spaCy models and packaged assets;
-Elasticsearch reachability and the `wiki` and `geonames` index contents; the
-available LLM backends, including whether `llama-server` is serving the model
-the Python side is prompting for.
+Still to come, roughly in this order: packaged assets; whether the index
+contents are complete and current, not merely present; the available LLM
+backends, including whether `llama-server` is serving the model the Python side
+is prompting for.
 
 The `Check` structure, and the idea that a finding has to say what it breaks
 and how to fix it, are taken from `demo/ngec_demo/resources.py::Health`, which
@@ -343,6 +348,181 @@ def compute() -> list[Check]:
     return checks
 
 
+# -------------------------------------------------------------- elasticsearch
+
+
+# The indices the pipeline queries: `wiki` for actor resolution
+# (ngec/actors/wiki_matcher.py) and `geonames` for mordecai3's geolocation.
+ES_INDICES = ("wiki", "geonames")
+
+
+def _es_target() -> str:
+    return f"{os.environ.get('ES_HOST', 'localhost')}:{os.environ.get('ES_PORT', '9200')}"
+
+
+def elasticsearch() -> list[Check]:
+    """Can the pipeline reach Elasticsearch, and are both indices in it?
+
+    Connects the way the tests and the demo do (ES_HOST, ES_PORT, .env), with a
+    short timeout so that an unreachable host costs seconds, not minutes.
+    """
+    try:
+        from .smoke_test import es_client_from_env
+
+        client = es_client_from_env(timeout=5, max_retries=0)
+    except Exception as exc:  # noqa: BLE001 - any failure to connect is the finding
+        return [Check(
+            "Elasticsearch", FAIL,
+            f"cannot connect to {_es_target()}: {type(exc).__name__}",
+            "geolocation and actor resolution, and so the pipeline as a whole",
+            "start Elasticsearch (README, step 5), or point ES_HOST / ES_PORT "
+            "at the cluster you mean")]
+
+    version = client.info().get("version", {}).get("number", "unknown")
+    checks = [Check("Elasticsearch", OK, f"{_es_target()}, version {version}")]
+
+    for index in ES_INDICES:
+        if not client.indices.exists(index=index):
+            checks.append(Check(
+                f"'{index}' index", FAIL, "missing",
+                "actor resolution" if index == "wiki" else "geolocation",
+                "load the prebuilt index (README, step 5); a cluster without it "
+                "is usually the wrong volume path in `docker run -v`"))
+            continue
+        count = client.count(index=index)["count"]
+        if count == 0:
+            checks.append(Check(
+                f"'{index}' index", FAIL, "exists but is empty",
+                "actor resolution" if index == "wiki" else "geolocation",
+                "reload the index (see elasticsearch/SETUP.md)"))
+        else:
+            checks.append(Check(f"'{index}' index", OK, f"{count:,} documents"))
+
+    return checks
+
+
+# ---------------------------------------------------------------------- smoke
+
+
+def _attribute_model_is_local(name: str) -> bool:
+    """Whether the attribute model can be loaded without downloading anything."""
+    if Path(name).expanduser().is_dir():
+        return True
+    try:
+        from huggingface_hub import snapshot_download
+
+        snapshot_download(name, local_files_only=True)
+        return True
+    except Exception:  # noqa: BLE001 - not cached, or huggingface_hub is broken
+        return False
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else "no output"
+
+
+def smoke() -> list[Check]:
+    """Run three real news stories through the whole pipeline.
+
+    Opt-in (`--smoke`), because it takes minutes on a CPU. It never downloads a
+    model: it first checks that the spaCy models and the attribute model are
+    already here, and then runs the pipeline in a separate process with
+    Hugging Face's offline mode on, so anything else that is missing fails
+    instead of being fetched. See `ngec/smoke_test.py` for why a separate
+    process.
+    """
+    import tempfile
+    import time
+
+    from .models import missing_spacy_models
+
+    checks: list[Check] = []
+
+    missing = missing_spacy_models()
+    if missing:
+        checks.append(Check(
+            "spaCy models", FAIL, f"not installed: {', '.join(missing)}",
+            "parsing, and so the pipeline as a whole", "ngec download-models"))
+    else:
+        checks.append(Check("spaCy models", OK, "installed"))
+
+    model = os.environ.get("NGEC_ATTRIBUTE_MODEL") or _default_attribute_model()
+    if _attribute_model_is_local(model):
+        checks.append(Check("Attribute model", OK, f"{model} is downloaded"))
+    else:
+        checks.append(Check(
+            "Attribute model", FAIL, f"{model} is not downloaded",
+            "attribute extraction, and so the pipeline as a whole",
+            "ngec download-models"))
+
+    # One row rather than the whole Elasticsearch group, which a plain
+    # `--smoke` run also shows; the first failure is enough to act on.
+    es_failures = [c for c in elasticsearch() if c.status == FAIL]
+    if es_failures:
+        first = es_failures[0]
+        detail = first.detail if first.name == "Elasticsearch" \
+            else f"{first.name}: {first.detail}"
+        checks.append(Check("Elasticsearch", FAIL, detail, first.blocks, first.fix))
+    else:
+        checks.append(Check("Elasticsearch", OK, "reachable, both indices loaded"))
+
+    if any(c.status == FAIL for c in checks):
+        # INFO, not FAIL: the failures above already make the exit code
+        # non-zero, and this adds nothing to fix.
+        checks.append(Check("Pipeline", INFO, "not run: fix the problems above first"))
+        return checks
+
+    print("Running three news stories through the pipeline. This takes a few "
+          "minutes on a CPU...", file=sys.stderr)
+
+    env = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    with tempfile.TemporaryDirectory(prefix="ngec-smoke-") as tmp:
+        out_file = Path(tmp) / "result.json"
+        start = time.monotonic()
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "ngec.smoke_test", str(out_file)],
+                cwd=tmp, env=env, capture_output=True, text=True, timeout=3600)
+        except subprocess.TimeoutExpired:
+            checks.append(Check(
+                "Pipeline", FAIL, "still running after an hour; stopped",
+                "nothing by itself, but on three short stories this means "
+                "something is badly wrong -- check the Compute group above"))
+            return checks
+        seconds = time.monotonic() - start
+
+        if result.returncode != 0 or not out_file.exists():
+            error = _last_line(result.stderr or result.stdout)
+            offline = "offline" in error.lower() or "local_files_only" in error
+            checks.append(Check(
+                "Pipeline", FAIL, error,
+                "the pipeline as a whole",
+                "ngec download-models (the pipeline needed a model that is not "
+                "downloaded)" if offline else
+                "run the pipeline directly to see the full error: "
+                "python -m ngec.smoke_test out.json"))
+            return checks
+
+        summary = json.loads(out_file.read_text(encoding="utf-8"))
+
+    events = summary["events"]
+    if not events:
+        checks.append(Check(
+            "Pipeline", FAIL,
+            f"ran in {seconds:.0f}s but coded no events from "
+            f"{summary['stories']} stories, which should each produce some",
+            "the pipeline's output: something upstream is silently dropping "
+            "everything, e.g. the event classifier finding no event types"))
+        return checks
+
+    checks.append(Check(
+        "Pipeline", OK,
+        f"{len(events)} events from {summary['stories']} stories in {seconds:.0f}s"))
+    checks += [Check(e["story"], INFO, e["summary"]) for e in events]
+    return checks
+
+
 # --------------------------------------------------------------------- output
 
 
@@ -350,7 +530,12 @@ GROUPS: dict[str, tuple[str, object]] = {
     "install": ("Installation", installation),
     "config": ("Configuration", configuration),
     "compute": ("Compute", compute),
+    "elasticsearch": ("Elasticsearch", elasticsearch),
+    "smoke": ("Smoke test", smoke),
 }
+
+# Everything but the smoke test, which takes minutes and has to be asked for.
+DEFAULT_GROUPS = ["install", "config", "compute", "elasticsearch"]
 
 GLYPHS = {OK: ("check", "green"), INFO: ("dot", "dim"),
           WARN: ("bang", "yellow"), FAIL: ("cross", "red")}
@@ -382,8 +567,14 @@ def render(groups: list[tuple[str, list[Check]]]) -> None:
                           escape(check.note))
         console.print(table)
 
-    problems = [c for _, checks in groups for c in checks
-                if c.status in (WARN, FAIL)]
+    # The smoke test repeats an Elasticsearch failure so that `--only smoke`
+    # still says what is wrong; list it once when both groups ran.
+    problems, seen = [], set()
+    for _, checks in groups:
+        for c in checks:
+            if c.status in (WARN, FAIL) and (c.detail, c.fix) not in seen:
+                seen.add((c.detail, c.fix))
+                problems.append(c)
     if not problems:
         console.print("\n[green]No problems found.[/green]")
         return
@@ -407,9 +598,12 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"run only these groups ({', '.join(GROUPS)})")
     parser.add_argument("--json", action="store_true",
                         help="machine-readable output, for pasting into a bug report")
+    parser.add_argument("--smoke", action="store_true",
+                        help="also run three news stories through the whole "
+                             "pipeline (takes a few minutes on a CPU)")
     args = parser.parse_args(argv)
 
-    selected = list(GROUPS)
+    selected = DEFAULT_GROUPS + (["smoke"] if args.smoke else [])
     if args.only:
         selected = [name.strip() for name in args.only.split(",") if name.strip()]
         unknown = [name for name in selected if name not in GROUPS]

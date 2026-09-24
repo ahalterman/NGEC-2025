@@ -195,7 +195,7 @@ Installing `ngec` involves enough moving parts -- a PyTorch build, two spaCy mod
 uv run ngec-doctor
 ```
 
-It prints the installed version and commit, every environment variable ngec and its tooling read (with the effective value and which code reads it), and what the PyTorch build can actually see. Anything it flags is repeated at the bottom with what the problem breaks and the command that fixes it. It exits non-zero only on a real failure, so it is safe to run as a smoke test in CI.
+It prints the installed version and commit, every environment variable ngec and its tooling read (with the effective value and which code reads it), and what the PyTorch build can actually see. Anything it flags is repeated at the bottom with what the problem breaks and the command that fixes it. It exits non-zero only on a real failure, so it is safe to run in CI; an unreachable Elasticsearch counts as one, so on a CI runner without it use `--only install,config,compute`.
 
 Two flags:
 
@@ -207,7 +207,7 @@ uv run ngec-doctor --only compute
 uv run ngec-doctor --json
 ```
 
-`--only` takes any comma-separated subset of `install`, `config` and `compute`. `--json` gives the same findings in machine-readable form, which is the more useful thing to paste into a bug report. `python -m ngec.doctor` works too, if you would rather not rely on the console script being on your PATH.
+`--only` takes any comma-separated subset of `install`, `config`, `compute`, `elasticsearch` and `smoke`; `--smoke` adds the last one, a full pipeline run over three news articles, to the default four. `--json` gives the same findings in machine-readable form, which is the more useful thing to paste into a bug report. `python -m ngec.doctor` works too, if you would rather not rely on the console script being on your PATH.
 
 The most common thing it catches is the PyTorch problem described above: on a machine with an NVIDIA GPU, doctor asks the driver directly and compares that against what PyTorch can see, so a torch build that has quietly fallen back to the CPU is reported rather than left to show up as a pipeline that is thirty times slower than expected.
 
