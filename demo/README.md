@@ -76,7 +76,7 @@ and takes a few minutes; the CPU pass needs `llama-server` up.
   resolution still work.
 - **llama-server** on `http://127.0.0.1:8080`, for CPU mode only.
 - **Models** are downloaded from Hugging Face on first use and cached
-  (`ahalt/qwen3-event-extraction-exp5.1` plus the spaCy and sentence-transformer
+  (`ahalt/qwen3.5-event-extraction-0.8b` plus the spaCy and sentence-transformer
   models).
 
 ## Environment

@@ -48,6 +48,23 @@ def _first_attribute_value(value):
     return value  # str or None
 
 
+# The v6 attribute model keeps the word a place name follows in the text
+# ("in Haiti", "near Kabul"), because that is how its answer keys were written.
+# The geoparser's place names have no such word, so it is dropped before the two
+# are compared. The extracted span itself is left as it was.
+_LEADING_PREPOSITION = re.compile(
+    r"^(?:in|at|on|near|from|to|into|across|outside|inside|around|within|throughout)\s+",
+    re.IGNORECASE)
+
+
+def _location_search_term(value) -> str | None:
+    """The location span to match against geoparsed places, minus a leading preposition."""
+    term = _first_attribute_value(value)
+    if not isinstance(term, str):
+        return term
+    return _LEADING_PREPOSITION.sub("", term.strip()) or term
+
+
 def resolve_date(event: dict) -> dict:
     """
     Add a top-level 'date_resolved' key to an event, resolved from its
@@ -1166,7 +1183,7 @@ class Formatter:
             # 'attributes' is a single dict (one event per record).
             attributes = event.get('attributes') or {}
             event["event_location"] = pick_event_loc(
-                _first_attribute_value(attributes.get('location')),
+                _location_search_term(attributes.get('location')),
                 event.get('geolocated_ents', []),
                 geo_confidence_threshold=self.geo_threshold
             )

@@ -57,15 +57,15 @@ systemctl --user restart ngec-llama-server     # after rebuilding the GGUF
 ```
 
 The unit pins the settings the measurements in `demo_old/DESIGN.md` were taken with —
-`attr-exp5.1-q8.gguf`, 8192 context, 4 threads, bound to localhost. Rebuilding
+`qwen3.5-event-extraction-0.8b-Q8_0.gguf`, 8192 context, 4 threads, bound to localhost. Rebuilding
 the model to a different quantization means editing `ExecStart`, and it means
 re-validating: Q4_K_M is faster and drifts further.
 
 **Keep the GGUF and `NGEC_ATTRIBUTE_MODEL` in step.** The server supplies the
 weights; the Python side supplies the tokenizer and, through it, the prompt
-format the model expects. Serving `attr-q8.gguf` (the original
-`ahalt/event-attribute-extractor`, legacy prompt format) while the app prompts
-for `exp5.1` produces valid JSON and worse extractions, with no error anywhere.
+format the model expects. Serving `attr-exp5.1-q8.gguf` (the submitted paper's
+model, v5 prompt format) while the app prompts for the default v6 model
+produces worse extractions, with no error anywhere.
 The app's health check compares the two names and reports a mismatch in the
 status sidebar, but it is easier not to create one.
 

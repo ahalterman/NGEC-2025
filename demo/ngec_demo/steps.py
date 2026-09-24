@@ -116,17 +116,25 @@ def classify(text: str, mode: str | None = None) -> dict:
 
 # --- step 2: attribute extraction -------------------------------------------
 
-# The six attributes the model was trained to return. Anything else it returns
-# is passed through untouched, which is what makes the "extra attributes" box
-# on the page work at all.
-STANDARD_ATTRIBUTES = ("event_type", "anchor_quote", "actor", "recipient",
-                       "date", "location")
+# The attributes the models were trained to return. `mode`, `killed` and
+# `injured` come only from the v6 model (the last two only for ASSAULT, PROTEST
+# and COERCE). Anything else a model returns is passed through untouched, which
+# is what makes the "extra attributes" box on the page work at all.
+STANDARD_ATTRIBUTES = ("event_type", "mode", "anchor_quote", "actor", "recipient",
+                       "date", "location", "killed", "injured")
 
-# The last line of the OUTPUT FORMAT block, identical in both prompt formats
-# (see _make_system_content_short / _make_system_content_v5 in
+# The last line of the OUTPUT FORMAT block, identical in the legacy and v5
+# prompt formats (see _make_system_content_short / _make_system_content_v5 in
 # ngec/attribute_model.py). Extra fields are inserted after it so they read
 # like the six the model already knows.
 _FORMAT_ANCHOR = '"location": "where occurred OR N/A"'
+
+# The same place in the v6 prompt, whose record schema lists the roles as
+# JSON lists; and the line that closes that prompt, before which a description
+# of each extra field goes (see _make_system_content_v6).
+_FORMAT_ANCHOR_V6 = '"location": [...]'
+_V6_CLOSING = "Return the JSON list only."
+_V6_BLOCK = "ADDITIONAL ATTRIBUTES FOR THIS EVENT TYPE\n"
 
 # Every message of a rendered chat prompt: <|im_start|>role\n...<|im_end|>.
 _CHAT_MESSAGE = r"<\|im_start\|>(\w+)\n(.*?)<\|im_end\|>"
@@ -167,13 +175,32 @@ def _conversation_from_prompt(prompt: str) -> list[dict]:
     return messages or [{"role": "user", "content": prompt}]
 
 
+def _request_extra_fields_v6(content: str, fields: list[str]) -> str:
+    """Add fields to a v6 system prompt the way it lists its own extra attributes.
+
+    Each field joins the record schema as a list, and gets a line in the
+    "ADDITIONAL ATTRIBUTES" block (which is created for an event type that has
+    none), matching how the prompt describes `killed` and `injured`.
+    """
+    keys = "".join(f', "{f}": [...]' for f in fields)
+    content = content.replace(_FORMAT_ANCHOR_V6, _FORMAT_ANCHOR_V6 + keys, 1)
+    lines = "".join(f"- {f}: {f.replace('_', ' ')}. Verbatim spans from the "
+                    "document; empty when there is none.\n" for f in fields)
+    if _V6_BLOCK not in content:
+        lines = _V6_BLOCK + lines
+    return content.replace(_V6_CLOSING, lines + _V6_CLOSING, 1)
+
+
 def _request_extra_fields(conversation: list[dict], fields: list[str]) -> list[dict]:
     """Add fields to the OUTPUT FORMAT block of whichever message states it."""
     added = ",\n".join(f'    "{f}": "{f.replace("_", " ")} OR N/A"' for f in fields)
     out, done = [], False
     for message in conversation:
         content = message["content"]
-        if not done and _FORMAT_ANCHOR in content:
+        if not done and _FORMAT_ANCHOR_V6 in content and _V6_CLOSING in content:
+            content = _request_extra_fields_v6(content, fields)
+            done = True
+        elif not done and _FORMAT_ANCHOR in content:
             content = content.replace(_FORMAT_ANCHOR,
                                       _FORMAT_ANCHOR + ",\n" + added, 1)
             done = True
@@ -185,8 +212,11 @@ def _request_extra_fields(conversation: list[dict], fields: list[str]) -> list[d
     return out
 
 
-def _schema_with(fields: list[str]) -> dict:
+def _schema_with(fields: list[str], prompt_format: str = "v5") -> dict | None:
     """ATTRIBUTE_SCHEMA plus the extra fields, for backends that constrain decoding.
+
+    None for a v6 model, which writes lists rather than the strings this schema
+    describes and is run unconstrained (as `AttributeModel.process` runs it).
 
     llama-server turns the schema into a decoding grammar, and that grammar
     forbids any key the schema does not list. So asking for a field in the
@@ -198,6 +228,8 @@ def _schema_with(fields: list[str]) -> dict:
 
     from ngec.attributes.schema import ATTRIBUTE_SCHEMA
 
+    if prompt_format == "v6":
+        return None
     schema = copy.deepcopy(ATTRIBUTE_SCHEMA)
     for field in fields:
         schema["items"]["properties"][field] = {"type": "string"}
@@ -206,18 +238,15 @@ def _schema_with(fields: list[str]) -> dict:
 
 
 def _split_spans(event: dict) -> dict:
-    """Semicolon-separated spans into lists, as `AttributeModel.process` does.
+    """Spans into lists, as `AttributeModel.process` does: semicolon-joined
+    strings (legacy, v5) are split, JSON lists (v6) are kept.
 
     Only for the vllm path below, which parses its own JSON. The engine path
     goes through `parse_response`, which has already done this.
     """
-    for key in ("actor", "recipient", "date", "location"):
-        value = event.get(key)
-        if isinstance(value, str):
-            event[key] = [v.strip() for v in value.split(";")]
-        elif isinstance(value, list):
-            event[key] = [str(v).strip() for v in value]
-    return event
+    from ngec.attributes.schema import normalize_spans
+
+    return normalize_spans(event)
 
 
 def _generate_attributes(am, conversation: list[dict], prompt: str,
@@ -341,7 +370,7 @@ def extract_attributes(text: str, event_type: str, event_def: str | None = None,
                     prompt = am.tokenizer.apply_chat_template(
                         conversation, tokenize=False, add_generation_prompt=True,
                         enable_thinking=False)
-                    schema = _schema_with(fields)
+                    schema = _schema_with(fields, am.prompt_format)
                 records = [jsonable(event) for event
                            in _generate_attributes(am, conversation, prompt, schema)]
 

@@ -10,8 +10,10 @@ Conversation = list[Message]
 class GenerationConfig:
     """Sampling settings, defined once and translated per engine.
 
-    Defaults follow Qwen3 non-thinking guidance; greedy decoding causes
-    repetition loops, hence the floor on temperature.
+    Defaults follow Qwen3 non-thinking guidance, for the Qwen3 attribute models
+    (greedy decoding sent those into repetition loops). The Qwen3.5 v6 model is
+    decoded greedily instead, which is `temperature=0.0`; see
+    `AttributeModel._generation_config`.
 
     Not every engine honors every field: an engine translates what its backend
     supports and ignores the rest, so check here before assuming a knob took

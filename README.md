@@ -131,7 +131,7 @@ uv run ngec download-models
 | spaCy `en_core_web_trf`, `en_core_web_lg` | ~900 MB | parsing, and word vectors for actor matching |
 | `sentence-transformers/all-mpnet-base-v2` | ~440 MB | event classification |
 | `sentence-transformers/static-retrieval-mrl-en-v1`, `BAAI/bge-small-en-v1.5` | ~260 MB | actor resolution (Wikipedia and agent matching) |
-| `ahalt/qwen3-event-extraction-exp5.1` | ~1.2 GB | attribute extraction |
+| `ahalt/qwen3.5-event-extraction-0.8b` | ~1.8 GB | attribute extraction |
 
 The spaCy models are installed as Python packages. The rest go into the Hugging Face cache (`~/.cache/huggingface`, or `$HF_HOME` if set), which is where the pipeline looks for them. Models that are already there are skipped, so it is safe to run again.
 
@@ -139,7 +139,7 @@ The spaCy models have to be downloaded this way; the pipeline stops with an erro
 
 A few options:
 
-- `--attribute-model NAME` downloads a different attribute model, e.g. `ahalt/event-attribute-extractor` for the original model. If `NGEC_ATTRIBUTE_MODEL` is set, that model is the default, as it is for the pipeline.
+- `--attribute-model NAME` downloads a different attribute model, e.g. `ahalt/qwen3-event-extraction-exp5.1` for the model in the submitted paper. If `NGEC_ATTRIBUTE_MODEL` is set, that model is the default, as it is for the pipeline.
 - `--no-attribute-model` skips the LLM, e.g. if you run it through a llama.cpp server, which uses its own GGUF file.
 - `--force` reinstalls the spaCy models and re-downloads the LLM, if you suspect a broken download.
 

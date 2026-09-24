@@ -10,7 +10,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 from typing import Any, cast, Literal, TypedDict, NotRequired
 
-from .attributes.schema import ATTRIBUTE_SCHEMA, parse_response
+from .attributes.schema import ATTRIBUTE_SCHEMA, normalize_spans, parse_response
 from .llm.base import Conversation, GenerationEngine
 from .utilities import explode_events, write_intermediate
 
@@ -50,14 +50,26 @@ BackendType = Literal["vllm", "transformers", "mlx", "llamacpp"]
 #           closing instruction. Reproduced from `eval_unified.py` in
 #           train_NGEC_2026, which is what produced that model's reported
 #           numbers.
-PromptFormat = Literal["legacy", "v5"]
+#   v6      the format of the Qwen3.5-0.8B student
+#           (ahalt/qwen3.5-event-extraction-0.8b). The model returns roles as
+#           JSON lists rather than semicolon-joined strings, adds a `mode` key,
+#           and for ASSAULT, PROTEST and COERCE also returns `killed` and
+#           `injured`. The system prompt depends on the event type (those three
+#           get the extra attributes), and the definitions have to be the exact
+#           strings the model was trained on, which ship as
+#           assets/event_definitions_v6.json. Decoding is greedy. Reproduced from
+#           `student/prompting.py` in train_NGEC_2026, and checked against it on
+#           every training example.
+PromptFormat = Literal["legacy", "v5", "v6"]
 
-# ahalt/qwen3-event-extraction-exp5.1 is the 2026 retraining (see
-# setup/hf_release/) — ~18pp better than the original ahalt/event-attribute-extractor
-# on actor/location exact match. It replaced the original as the default once
-# uploaded; the original stays published under its own name since it is still a
-# valid (if worse) model and may be referenced elsewhere by that name.
-DEFAULT_MODEL = "ahalt/qwen3-event-extraction-exp5.1"
+# ahalt/qwen3.5-event-extraction-0.8b is the model of the revised paper: 70.0
+# mean F1 on the 500-document VOA test set against 54.9 for
+# ahalt/qwen3-event-extraction-exp5.1, the model of the submitted paper. (That
+# 70.0 was measured with definitions from an older codebook; with the trained
+# definitions this module sends, the same model scores 71.0 on the same set,
+# through NGEC's vllm backend.) See its model card in setup/hf_release/. The two
+# older models stay published and selectable by name, for comparison.
+DEFAULT_MODEL = "ahalt/qwen3.5-event-extraction-0.8b"
 
 
 def resolve_model_name(model_name: str | None = None) -> str:
@@ -86,13 +98,58 @@ KNOWN_PROMPT_FORMATS: dict[str, PromptFormat] = {
     "ahalt/qwen3-event-extraction-exp5.1": "v5",
     "qwen3-event-extraction-exp5.1": "v5",
     "qwen3-event-extraction-exp5.2": "v5",
+    "ahalt/qwen3.5-event-extraction-0.8b": "v6",
+    "qwen3.5-event-extraction-0.8b": "v6",
 }
+
+# A model can also say which format it was trained on, in a small `ngec.json`
+# file next to its weights: {"prompt_format": "v6"}. The v6 model's Hugging Face
+# repository has one. This is what lets a copy that has been renamed, or
+# downloaded to a directory with a different name, still be prompted correctly.
+MODEL_INFO_FILE = "ngec.json"
+
+
+def _declared_prompt_format(model_name: str) -> PromptFormat | None:
+    """The format named in the model's own `ngec.json`, if it has one.
+
+    Looks in a local directory first, then in a Hugging Face repository (the
+    file is downloaded once and cached like the weights). Anything that goes
+    wrong -- no such file, no network, an unreadable file -- returns None and
+    the caller falls back to the name lookup.
+    """
+    local = os.path.join(str(model_name), MODEL_INFO_FILE)
+    path = local if os.path.isfile(local) else None
+    if path is None and not os.path.isdir(str(model_name)):
+        try:
+            from huggingface_hub import hf_hub_download
+            path = hf_hub_download(str(model_name), MODEL_INFO_FILE)
+        except Exception:  # noqa: BLE001 - missing file, offline, not a repo id
+            return None
+    if path is None:
+        return None
+    try:
+        with open(path) as f:
+            declared = json.load(f).get("prompt_format")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if declared in ("legacy", "v5", "v6"):
+        return cast(PromptFormat, declared)
+    logger.warning(f"{path} names an unknown prompt format {declared!r}; ignoring it.")
+    return None
 
 
 def resolve_prompt_format(model_name: str) -> PromptFormat:
-    """The prompt format a model was trained on, by name or directory name."""
+    """The prompt format a model was trained on.
+
+    Checked in this order: the model's name in KNOWN_PROMPT_FORMATS, the
+    format the model declares in its own `ngec.json`, and the name of the
+    directory it was loaded from.
+    """
     if model_name in KNOWN_PROMPT_FORMATS:
         return KNOWN_PROMPT_FORMATS[model_name]
+    declared = _declared_prompt_format(model_name)
+    if declared is not None:
+        return declared
     # Local models are given as paths; match on the directory name.
     basename = os.path.basename(str(model_name).rstrip("/"))
     if basename in KNOWN_PROMPT_FORMATS:
@@ -119,6 +176,11 @@ class Attributes(TypedDict):
     recipient: list[str]
     date: list[str]
     location: list[str]
+    # Only from v6 models: the sub-event the model assigned, and, for ASSAULT,
+    # PROTEST and COERCE, the people reported killed and injured.
+    mode: NotRequired[str]
+    killed: NotRequired[list[str]]
+    injured: NotRequired[list[str]]
 
 class AttributeModelInput(TypedDict):
     """
@@ -231,15 +293,99 @@ RULES:
 - Return [] if no events of the specified type are present.
 - Follow any Special Instructions provided with the event type definition."""
 
-def _load_vllm_sampling_params(max_tokens=1024):
+
+# --- the v6 prompt ------------------------------------------------------------
+#
+# Copied from `student/prompts/student_t0.md` and `reannotate/attributes.py` in
+# train_NGEC_2026. Like the v5 prompt, these strings are part of the
+# measurement: the model was trained on exactly this text, so edit nothing here
+# for style. tests/test_attribute_model.py checks the rendered prompt.
+
+V6_SYSTEM = (
+    "Extract every instance of the given political event type from the document "
+    "as a JSON list, or [] if there is none.\n\n"
+    "Each record:\n"
+    '{{"event_type": "<type>", "mode": "<sub-event name or empty string>",\n'
+    ' "anchor_quote": "<short verbatim passage identifying this instance>",\n'
+    ' "actor": [...], "recipient": [...], "date": [...], "location": [...]{extra_keys}}}\n\n'
+    "Every string in actor, recipient, date, and location must be an exact, "
+    "verbatim substring of the document.{extra_verbatim}\n"
+    "{extra_block}"
+    "Return the JSON list only."
+)
+
+# The attributes a v6 model extracts beyond the four core roles, with the
+# instructions it was trained on. Which of them apply depends on the event type
+# (V6_ATTRIBUTE_EVENT_TYPES).
+V6_ATTRIBUTE_TEXT = {
+    "killed": (
+        "Every person or group the document reports as killed in this event, whether "
+        "or not they were its target. Fill it whenever deaths are reported, even when "
+        "the dead are also the recipient. One list element per distinct party, counts "
+        "kept ('three officers'). Empty when no death is reported. Written like a "
+        "recipient: the verbatim noun phrase, counts and quantifiers kept, leading "
+        "articles dropped, one list element per distinct party."),
+    "injured": (
+        "Every person or group the document reports as injured in this event, whether "
+        "or not they were its target. Fill it whenever injuries are reported, even when "
+        "the injured are also the recipient. One list element per distinct party, "
+        "counts kept ('three officers'). Empty when no injury is reported. Written like "
+        "a recipient: the verbatim noun phrase, counts and quantifiers kept, leading "
+        "articles dropped, one list element per distinct party."),
+}
+V6_ATTRIBUTE_EVENT_TYPES = {"ASSAULT", "PROTEST", "COERCE"}
+
+
+def _make_system_content_v6(event_type: str) -> str:
+    """The v6 system prompt for one event type.
+
+    ASSAULT, PROTEST and COERCE add `killed` and `injured` to the record
+    schema, with a sentence saying they are verbatim too and a block describing
+    each. Every other type gets the plain prompt.
+    """
+    attributes = (["killed", "injured"] if event_type in V6_ATTRIBUTE_EVENT_TYPES
+                  else [])
+    if not attributes:
+        return V6_SYSTEM.format(extra_keys="", extra_verbatim="", extra_block="")
+    extra_keys = "".join(f', "{name}": [...]' for name in attributes)
+    names = " and ".join(attributes)
+    extra_block = ("ADDITIONAL ATTRIBUTES FOR THIS EVENT TYPE\n"
+                   + "".join(f"- {name}: {V6_ATTRIBUTE_TEXT[name]}\n"
+                             for name in attributes))
+    return V6_SYSTEM.format(extra_keys=extra_keys,
+                            extra_verbatim=f" The same holds for {names}.",
+                            extra_block=extra_block)
+
+
+def _load_v6_definitions(def_file="event_definitions_v6.json") -> dict[tuple[str, str], str]:
+    """The exact event definitions the v6 model was trained on.
+
+    Keyed by (event type, mode), where a mode of "" is the definition of the
+    whole event type. These are not rendered from the codebook CSV at run time,
+    because the codebook has been edited since the model was trained; a
+    definition that differs from the training one is a prompt the model never
+    saw.
+    """
+    with resources.files("ngec").joinpath("assets", def_file).open() as f:
+        entries = json.load(f)
+    return {(e["event_type"], e["mode"]): e["definition"] for e in entries}
+
+
+def _load_vllm_sampling_params(max_tokens=1024, greedy=False):
     """
     Load the sampling parameters for the vLLM model.
+
+    The v6 model is decoded greedily, which is how it was evaluated. The older
+    Qwen3 models are sampled, because greedy decoding sent them into repetition
+    loops.
     """
-    try: 
+    try:
         from vllm import SamplingParams
     except ImportError:
         raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
-    
+
+    if greedy:
+        return SamplingParams(temperature=0.0, max_tokens=max_tokens)
     sampling_params = SamplingParams(
         temperature=0.5,       # Greedy decoding breaks Qwen
         top_p=0.8,             # Qwen3 non-thinking recommendation
@@ -302,16 +448,19 @@ class AttributeModel:
             loads its weights from whatever `llama-server` was started with —
             this only selects the tokenizer there, so the two have to be kept in
             step by hand.
-        prompt_format : {"legacy", "v5"}, optional
+        prompt_format : {"legacy", "v5", "v6"}, optional
             The prompt format the model was trained on. Defaults to looking
-            `model_name` up in KNOWN_PROMPT_FORMATS. Only pass this for a model
-            that is not listed there; a mismatch does not raise, it just makes
-            the extractions worse.
+            `model_name` up in KNOWN_PROMPT_FORMATS, then in the model's own
+            `ngec.json` (see resolve_prompt_format). Only pass this for a model
+            that has neither; a mismatch does not raise, it just makes the
+            extractions worse.
         seed : int, optional
-            Seed the sampler, making a run repeatable on one machine. Decoding
-            samples rather than being greedy (greedy decoding sends Qwen into
-            repetition loops), so an unseeded run can return a different span --
-            or N/A instead of a span -- for the same document. Useful for tests
+            Seed the sampler, making a run repeatable on one machine. The
+            legacy and v5 models are sampled rather than decoded greedily
+            (greedy decoding sent those Qwen3 models into repetition loops), so
+            an unseeded run can return a different span -- or N/A instead of a
+            span -- for the same document. The default v6 model is decoded
+            greedily and needs no seed. Useful for tests
             and for reproducing a reported extraction; leave it unset otherwise.
             Currently honoured only by backends that go through an engine.
         intermediate_dir : str, optional
@@ -325,8 +474,14 @@ class AttributeModel:
                                             or resolve_prompt_format(self.model_name))
         # The v5 models were evaluated with a 2048-token ceiling; the legacy one
         # has always run at 1024. A document with many events can hit the lower
-        # limit, and a truncated response is dropped as unparseable JSON.
+        # limit, and a truncated response is dropped as unparseable JSON. The v6
+        # model was evaluated at 768; 1024 leaves room without changing what
+        # greedy decoding returns for any response that fit in 768.
         self.max_output_tokens = 2048 if self.prompt_format == "v5" else 1024
+        # v6 is decoded greedily (that is how its numbers were measured); the
+        # older Qwen3 models are sampled.
+        self.greedy = self.prompt_format == "v6"
+        generation_config = self._generation_config(seed)
 
         if gpu:
             self.device="cuda"
@@ -356,20 +511,26 @@ class AttributeModel:
             if vllm_model:
                 self.model = vllm_model
             else:
+                # The v6 checkpoint is Qwen3.5's multimodal layout, because that
+                # is the only Qwen3.5 architecture vLLM registers. NGEC only
+                # sends text, so language_model_only tells vLLM not to build or
+                # load the vision tower and not to profile its image encoder.
+                text_only = ({"language_model_only": True}
+                             if self.prompt_format == "v6" else {})
                 self.model = LLM(model=self.model_name,
                                  enable_prefix_caching=True,
                                  max_model_len=8000,
-                                 gpu_memory_utilization=max_gpu_memory)
-            self.sampling_params = _load_vllm_sampling_params(self.max_output_tokens)
+                                 gpu_memory_utilization=max_gpu_memory,
+                                 **text_only)
+            self.sampling_params = _load_vllm_sampling_params(self.max_output_tokens,
+                                                              greedy=self.greedy)
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         elif self.backend == "transformers":
-            from .llm import GenerationConfig
             from .llm.transformers import TransformersEngine
             self.engine = TransformersEngine(
                 model_name=self.model_name,
                 device=self.device,
-                config=GenerationConfig(max_tokens=self.max_output_tokens,
-                                        seed=seed),
+                config=generation_config,
                 silent=self.silent,
             )
             # Keep the attribute alive for make_prompt() and the demo; delete when
@@ -390,7 +551,7 @@ class AttributeModel:
             # Store the generate function and create sampler
             self.mlx_generate = generate
             self.sampler = make_sampler(
-                temp=0.5,           # temperature
+                temp=0.0 if self.greedy else 0.5,  # temperature; 0 is greedy
                 top_p=0.8,          # nucleus sampling
                 top_k=20,           # top-k sampling
                 min_p=0.0,          # minimum probability
@@ -408,13 +569,11 @@ class AttributeModel:
             # Start the server separately, e.g.
             #   llama-server -m attr-q8.gguf --port 8080 -c 8192
             # and point NGEC_LLAMACPP_URL at it. See DEVELOPING.md.
-            from .llm import GenerationConfig
             from .llm.llamacpp import LlamaCppServerEngine
             self.engine = LlamaCppServerEngine(
                 model_name=self.model_name,
                 url=llamacpp_url,
-                config=GenerationConfig(max_tokens=self.max_output_tokens,
-                                        seed=seed),
+                config=generation_config,
                 silent=self.silent,
             )
             # Keep the attribute alive for make_prompt() and the demo; delete when
@@ -429,12 +588,27 @@ class AttributeModel:
         self.batch_size=batch_size
         self.save_intermediate=save_intermediate
         self.intermediate_dir=intermediate_dir
+        # The v6 system prompt depends on the event type, so it is built per
+        # record in _build_conversation; the older formats use one for all.
         self.system_prompt = (_make_system_content_v5()
                               if self.prompt_format == "v5"
                               else _make_system_content_short())
         if event_definitions_file is None:
             event_definitions_file = "PLOVER_structured_codebook_updated.csv"
         self.event_definitions = _load_event_definitions(event_definitions_file, base_path)
+        # The v6 model reads the exact definitions it was trained on, which are
+        # not the codebook CSV above (see _load_v6_definitions).
+        self.v6_definitions = (_load_v6_definitions()
+                               if self.prompt_format == "v6" else {})
+
+    def _generation_config(self, seed=None):
+        """Decoding settings for the engine backends, matched to the prompt format."""
+        from .llm import GenerationConfig
+        if self.greedy:
+            return GenerationConfig(temperature=0.0, top_p=1.0, top_k=1, min_p=0.0,
+                                    presence_penalty=0.0,
+                                    max_tokens=self.max_output_tokens, seed=seed)
+        return GenerationConfig(max_tokens=self.max_output_tokens, seed=seed)
 
 
     # TODO (customization): add an informative error when a *mode* is missing
@@ -541,7 +715,49 @@ class AttributeModel:
             definition += f" ## Special Instructions: {extraction_notes}"
         return f"## Document: {doc}\n\n## Event Type: {definition}"
 
+    def _v6_definition(self, event) -> str:
+        """The `## Event Type:` text for one record, in the v6 format.
+
+        A record that carries its own ``event_def`` (an event type outside the
+        codebook, or a rewritten definition) is rendered the way the training
+        definitions are laid out: one ``##`` section per line. Otherwise the
+        definition is the trained one for the record's event type and mode.
+        """
+        event_type = event['event_type']
+        mode = event.get('event_mode') or ""
+        if event.get('event_def'):
+            definition = f"## Event: **{event_type}**: {event['event_def']}"
+            if event.get('mode_def'):
+                definition += f"\n## Specific Sub-Event: **{mode}**: {event['mode_def']}"
+            notes = event.get('extraction_notes')
+            if notes and not pd.isna(notes):
+                definition += f"\n## Special Instructions: {notes}"
+            return definition
+        if (event_type, mode) in self.v6_definitions:
+            return self.v6_definitions[(event_type, mode)]
+        if (event_type, "") in self.v6_definitions:
+            logger.warning(f"No trained definition for mode '{mode}' of {event_type}; "
+                           f"using the definition of {event_type} as a whole.")
+            return self.v6_definitions[(event_type, "")]
+        known = ", ".join(sorted({t for t, _ in self.v6_definitions}))
+        raise KeyError(
+            f"No definition for event type '{event_type}'. This model was trained "
+            f"on definitions of: {known}. For any other event type, give the record "
+            f"its own 'event_def' key (with optional 'mode_def' and "
+            f"'extraction_notes') and it will be used as-is.")
+
     def _build_conversation(self, event) -> Conversation:
+        if self.prompt_format == "v6":
+            # Runs of whitespace are collapsed, as they were in every training
+            # document.
+            doc = re.sub(r"\s+", " ", str(event['event_text'])).strip()
+            user = (f"## Document: {doc}\n\n"
+                    f"## Event Type: {self._v6_definition(event)}\n\n"
+                    "Return the JSON list.")
+            return [
+                {"role": "system", "content": _make_system_content_v6(event['event_type'])},
+                {"role": "user", "content": user},
+            ]
         doc, event_type, event_def, mode_def, notes = self._get_event_info(event)
         return [
             {"role": "system", "content": self.system_prompt},
@@ -602,18 +818,22 @@ class AttributeModel:
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
+        # The same parsing as the engine backends: strip <think> blocks,
+        # salvage the finished records of a truncated response, drop exact
+        # duplicates, and turn spans into lists.
         json_responses = []
-        error_responses = []
+        failures = []
         for response in responses:
-            response = re.sub("<think>.*?</think>", "", response, flags=re.DOTALL)  # Remove <think> tags and content
-            try:
-                json_responses.append(json.loads(response))
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON: {e}")
-                json_responses.append([])  # Append empty list on error
-                error_responses.append(response)
-        logger.info(f"Number of JSON decode errors: {len(error_responses)}")
-        logger.debug(f"Error responses: {error_responses}")
+            events, failure = parse_response(response)
+            json_responses.append(events)
+            if failure:
+                failures.append(failure)
+                logger.debug(f"Parse failure ({failure}): {response!r}")
+        if failures:
+            reasons = ", ".join(f"{reason}: {count}" for reason, count
+                                in Counter(failures).most_common())
+            logger.info(f"Number of parse failures: {len(failures)} of "
+                        f"{len(responses)} ({reasons})")
         return json_responses
                 
 
@@ -668,7 +888,11 @@ class AttributeModel:
         if self.engine is not None:
             conversations = [self._build_conversation(e)
                             for e in tqdm(event_list, desc="Making prompts", disable=self.silent)]
-            schema = ATTRIBUTE_SCHEMA if self.engine.capabilities.schema else None
+            # The string schema describes the legacy/v5 output. The v6 model
+            # writes lists and was evaluated without a schema, so it gets none.
+            schema = (ATTRIBUTE_SCHEMA
+                      if self.engine.capabilities.schema and self.prompt_format != "v6"
+                      else None)
             raw = self.engine.generate(conversations, schema=schema)
             final_attributes = []
             failures = []
@@ -690,10 +914,11 @@ class AttributeModel:
             prompts = [self.make_prompt(event) for event in tqdm(event_list, desc="Making prompts", disable=self.silent)]
             final_attributes = self.call_llm_batch(prompts)
 
-        # Post-processing (split the ; separated attributes into lists).
-        # Redundant on the engine path -- parse_response has already split these
-        # -- but harmless, since the loop below re-strips a list unchanged.
-        # Delete it once the last backend generates through an engine.
+        # Post-processing: every span attribute becomes a list of strings,
+        # whether the model wrote "a; b" (legacy, v5) or ["a", "b"] (v6).
+        # Redundant on the engine path -- parse_response has already done it --
+        # but harmless, since normalizing a list of stripped strings changes
+        # nothing. Delete it once the last backend generates through an engine.
 
         # Now, at the very end, put the results back into the event list.
         for n, i in enumerate(event_list):
@@ -707,19 +932,10 @@ class AttributeModel:
             #      'location': 'Dehli',
             #      'recipient': 'Muslim shops'}]
             #i['attributes'] = final_attributes[n]
-            for sub_event in attributes:
-                for key, value in sub_event.items():
-                    if key in ['actor', 'date', 'recipient', 'location']:
-                        # If the value is a string, split it by semicolon and strip whitespace
-                        if isinstance(value, str):
-                            value = [v.strip() for v in value.split(';')]
-                        # If the value is a list, ensure all items are stripped of whitespace
-                        elif isinstance(value, list):
-                            value = [v.strip() for v in value]
-                        else:
-                            continue
-                        # Update the sub-event with the cleaned value
-                        sub_event[key] = value
+            if isinstance(attributes, dict):
+                attributes = [attributes]
+            attributes = [normalize_spans(sub_event) for sub_event in attributes
+                          if isinstance(sub_event, dict)]
             # Temporarily store the full list of extracted sub-events; explode_events
             # (below) turns each into its own record with a single 'attributes' dict.
             event_list[n]['attributes'] = attributes

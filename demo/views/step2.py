@@ -228,8 +228,13 @@ if result:
             st.markdown(f'<p class="event-head">Record {index}</p>',
                         unsafe_allow_html=True)
         fields = [("event type", str(record.get("event_type") or "—"))]
+        if "mode" in record:  # the v6 model names the sub-event too
+            fields.append(("sub-event", str(record.get("mode") or "—")))
         fields += [(label, _spans(record.get(key)) or "—")
                    for label, key in STANDARD_ROWS]
+        # Also v6 only, and only for ASSAULT, PROTEST and COERCE.
+        fields += [(key, _spans(record.get(key)) or "—")
+                   for key in ("killed", "injured") if key in record]
         # Anything beyond the six is shown after them, in the order the model
         # returned it, so an extra attribute someone asked for is visibly the
         # model's answer and not one of the trained fields.

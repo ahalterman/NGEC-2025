@@ -37,15 +37,20 @@ The maintained end-to-end path is `PloverCoder.process()` in
    then the only field distinguishing them, so anything rendering or counting
    records needs to carry it.
 4. **Attribute extraction** — `ngec/attribute_model.py` `AttributeModel` (an LLM,
-   `ahalt/qwen3-event-extraction-exp5.1` by default, via
+   `ahalt/qwen3.5-event-extraction-0.8b` by default, via
    vllm/transformers/mlx/llamacpp). The model is selectable with `model_name=`
-   or `NGEC_ATTRIBUTE_MODEL`. The default is the 2026 retraining (trained from
-   `~/projects/train_NGEC_2026`; see `setup/hf_release/` for how it was
-   published). The original `ahalt/event-attribute-extractor` is older and
-   worse but stays resolvable by name for a baseline comparison.
+   or `NGEC_ATTRIBUTE_MODEL`. The default is the Qwen3.5-0.8B student trained in
+   `~/projects/train_NGEC_2026` (model card and definitions in
+   `setup/hf_release/`). `ahalt/qwen3-event-extraction-exp5.1` (the submitted
+   paper's model) and the original `ahalt/event-attribute-extractor` stay
+   resolvable by name for baseline comparisons.
    **A model and its prompt format go together**: see `KNOWN_PROMPT_FORMATS` in
-   that file, and "Swapping the attribute model" in `demo/DESIGN.md`. Prompting
-   a model in the wrong format does not raise; it quietly extracts worse. The
+   that file. The v6 format (the default model) returns roles as JSON lists
+   and reads the exact trained definitions in
+   `ngec/assets/event_definitions_v6.json`; older formats return
+   semicolon-joined strings, which `ngec/attributes/schema.py::normalize_spans`
+   splits. Prompting a model in the wrong format does not raise; it quietly
+   extracts worse. The
    model may
    find zero, one, or several events per document; `explode_events`
    (`ngec/utilities.py`) then makes each its own record with a single
@@ -112,8 +117,8 @@ contract; reconcile or delete them.
   `[tool.uv.sources]`; without one, uv installs the default PyPI (CUDA 13) build
   and an older driver falls back to the CPU silently.
   `uv sync --extra models --extra cu12 --extra vllm --group dev` is the
-  reference GPU install; **`python3 install.py --dev`** does the same after
-  detecting the driver. `[tool.uv] conflicts` makes the three mutually
+  reference GPU install; **`python3 setup/doctor/ngec_doctor.py`** detects the
+  driver and prints the right command. `[tool.uv] conflicts` makes the three mutually
   exclusive and forbids `cu13 + vllm`, because the vllm extra is pinned `<0.20`
   (0.20.0+ are CUDA 13 builds) and must run against a CUDA 12 PyTorch. See §4 of
   `RUNNING.md` for the whole story and `DEVELOPING.md` for the macOS/`mlx` path.

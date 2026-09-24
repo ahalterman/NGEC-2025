@@ -8,11 +8,34 @@
 import logging
 
 import torch
-from transformers import AutoTokenizer, pipeline, set_seed
+from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline, set_seed
 
 from .base import Conversation, EngineCapabilities, GenerationConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _native_config(model_name: str):
+    """The model's config, built with transformers' own class for its type.
+
+    vLLM ships its own config classes for some architectures (Qwen3.5 among
+    them) and, when it loads such a model, registers them with transformers'
+    AutoConfig for the rest of the process. transformers' Qwen3.5 model code
+    cannot use vLLM's class, so once a vLLM model has been loaded, a later
+    transformers-backend load of the same architecture fails ("'Qwen3_5Config'
+    object has no attribute 'vocab_size'"). Looking the class up by name in
+    transformers itself sidesteps that registration. Returns None for a model
+    type transformers does not know, and the pipeline then resolves it as usual.
+    """
+    import transformers
+    from transformers import PretrainedConfig
+    from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
+
+    config_dict, _ = PretrainedConfig.get_config_dict(model_name)
+    class_name = CONFIG_MAPPING_NAMES.get(config_dict.get("model_type", ""))
+    config_class = getattr(transformers, class_name, None) if class_name else None
+    return config_class.from_pretrained(model_name) if config_class else None
+
 
 # Don't subclass on GenerationEngine so that we can have an easier FakeEngine 
 # for testing. 
@@ -42,13 +65,23 @@ class TransformersEngine:
         # The checkpoint is bfloat16. On a GPU that is what we want, but on a
         # CPU without AVX512-BF16 or AMX every bf16 matmul is emulated, which
         # measured ~25% slower than float32 on an AVX2 machine.
-        self.model = pipeline(
-            "text-generation",
-            model=model_name,
-            device=device_id,
-            torch_dtype="auto" if device == "cuda" else torch.float32,
+        #
+        # The model is loaded here and handed to the pipeline, rather than
+        # letting the pipeline load it by name, so that it is built from
+        # _native_config (the pipeline re-reads the config itself and would
+        # pick up a class vLLM registered).
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            config=_native_config(model_name),
+            dtype="auto" if device == "cuda" else torch.float32,
         )
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.model = pipeline(
+            "text-generation",
+            model=model,
+            tokenizer=AutoTokenizer.from_pretrained(model_name),
+            device=device_id,
+        )
         # Kept even though generate() runs one conversation at a time: left
         # padding is REQUIRED for batched decoder-only generation, and without
         # it a future batch would silently generate from pad tokens rather than
@@ -78,16 +111,22 @@ class TransformersEngine:
                 add_generation_prompt=True,
                 enable_thinking=False,
             )
+            if self.config.temperature == 0:
+                # Greedy. transformers rejects temperature=0 with sampling on,
+                # so greedy is do_sample=False with no sampling settings.
+                sampling = {"do_sample": False}
+            else:
+                sampling = {"do_sample": True,
+                            "temperature": self.config.temperature,
+                            "top_p": self.config.top_p,
+                            "top_k": self.config.top_k,
+                            "min_p": self.config.min_p}
             output = self.model(
                 prompt,
                 max_new_tokens=self.config.max_tokens,
-                temperature=self.config.temperature,
-                top_p=self.config.top_p,
-                top_k=self.config.top_k,
-                min_p=self.config.min_p,
-                do_sample=True,
                 return_full_text=False,
                 pad_token_id=self.tokenizer.eos_token_id,
+                **sampling,
             )
             responses.append(output[0]["generated_text"].strip())
         return responses

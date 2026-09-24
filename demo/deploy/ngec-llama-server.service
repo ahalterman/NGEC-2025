@@ -43,14 +43,14 @@ Environment=LD_LIBRARY_PATH=%h/ngec-llamacpp/bin
 # Q8_0 rather than Q4_K_M is deliberate: Q4 is faster but diverged from the F16
 # reference on every one of 12 test prompts where Q8_0 matched 5. See demo_old/DESIGN.md.
 #
-# attr-exp5.1-*.gguf is the 2026 retraining (ahalt/qwen3-event-extraction-exp5.1,
-# the current default); attr-*.gguf without the suffix is the original
-# ahalt/event-attribute-extractor. They take different prompt formats, and the
-# format is chosen by the *tokenizer* the Python side loads — so if you change
-# the model here, change NGEC_ATTRIBUTE_MODEL to match. Nothing checks that they
-# agree.
+# qwen3.5-event-extraction-0.8b-Q8_0.gguf is the current default
+# (ahalt/qwen3.5-event-extraction-0.8b-GGUF on Hugging Face); attr-exp5.1-*.gguf
+# is the submitted paper's model. They take different prompt formats, and the
+# format is chosen from the model name the Python side is configured with — so
+# if you change the model here, change NGEC_ATTRIBUTE_MODEL to match. The demo's
+# sidebar reports a mismatch.
 ExecStart=%h/ngec-llamacpp/bin/llama-server \
-    --model %h/ngec-llamacpp/attr-exp5.1-q8.gguf \
+    --model %h/ngec-llamacpp/qwen3.5-event-extraction-0.8b-Q8_0.gguf \
     --host 127.0.0.1 \
     --port 8080 \
     --ctx-size 8192 \

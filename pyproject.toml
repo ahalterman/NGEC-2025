@@ -37,7 +37,10 @@ dependencies = [
     'tqdm>=4.60.0,<5.0',
     'textacy>=0.13.0,<1.0',
     'torch>=2.6.0,<3.0',
-    'transformers>=4.53.3,<5.0',
+    # 5.x is needed for the Qwen3.5 architecture of the default attribute model
+    # (ahalt/qwen3.5-event-extraction-0.8b) on the transformers backend.
+    # vLLM 0.19.1 excludes 5.0 through 5.5.0, hence the floor.
+    'transformers>=5.5.1,<6.0',
     'Unidecode>=1.4.0,<2.0',
     # The wiki ranker in assets/ is a saved xgboost model, so a major bump risks
     # a load failure or changed predictions.
@@ -87,7 +90,9 @@ vllm = [
     # CUDA 12 build (`libcudart.so.12`), and a CUDA 12 binary runs on CUDA 13
     # drivers too, so this ceiling is what makes the extra installable on the
     # widest set of machines. See the vLLM section of RUNNING.md.
-    'vllm>=0.19.0,<0.20',
+    # 0.19.0 requires transformers<5, which cannot load Qwen3.5 on the
+    # transformers backend; 0.19.1 allows transformers 5.5.1 and later.
+    'vllm>=0.19.1,<0.20',
     # vLLM only asks for xgrammar>=0.2.0, and uv locks the newest match. But
     # xgrammar 0.2.4 dropped Python 3.13 wheels and 0.2.5 ships 3.10 only, so
     # the unconstrained lock can't be installed. 0.2.3 has wheels for every
@@ -185,7 +190,7 @@ torchaudio = [
 # from git and its Geoparser signature has changed under us before (which breaks
 # ngec/geolocation.py); since uv.lock is not committed, this rev is the only
 # thing recording which version the pipeline was run and tested against.
-mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "bc62487930793c059f34b92f0426a68dbd6ef5ff" }
+mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "a4a1c48bc3b4a190eb0a58800744c327d448254c" }
 
 [dependency-groups]
 # The spaCy models, as a dependency group rather than an extra, because a group
