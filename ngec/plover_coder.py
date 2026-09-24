@@ -19,7 +19,8 @@ class PloverCoder:
                  attribute_backend: str = "transformers",
                  gpu: bool = False,
                  max_gpu_memory: float = 0.8,
-                 save_intermediate: bool = False):
+                 save_intermediate: bool = False,
+                 intermediate_dir: str | None = None):
         """
         Run the whole PLOVER coding pipeline over a list of stories.
 
@@ -47,27 +48,32 @@ class PloverCoder:
             alongside whatever else is running.
         save_intermediate: have each step write its output to a timestamped
             JSONL file, which is useful when debugging a specific step.
+        intermediate_dir: the directory those files go in. If None (the
+            default), the current working directory.
         """
         self.nlp = load_nlp()
         self.save_intermediate = save_intermediate
 
         # Instantiate components. Note that the event classifier has no
-        # save_intermediate option, and the actor resolver takes it on
-        # process() rather than here.
+        # save_intermediate option.
         self.event_model = PloverSklearnClassifier(threshold=event_threshold)
         # Hand the geoparser the spaCy model and ES connection we already have,
         # so it doesn't load a second copy of en_core_web_trf or assume ES is
         # on localhost.
         self.geolocation_model = GeolocationModel(nlp=self.nlp,
                                                   es_client=es_client,
-                                                  save_intermediate=save_intermediate)
+                                                  save_intermediate=save_intermediate,
+                                                  intermediate_dir=intermediate_dir)
         self.attribute_model = AttributeModel(silent=True,
                                               gpu=gpu,
                                               max_gpu_memory=max_gpu_memory,
                                               backend=attribute_backend,
-                                              save_intermediate=save_intermediate)
+                                              save_intermediate=save_intermediate,
+                                              intermediate_dir=intermediate_dir)
         self.actor_resolution_model = ActorResolver(spacy_model=self.nlp,
-                                                    es_client=es_client)
+                                                    es_client=es_client,
+                                                    save_intermediate=save_intermediate,
+                                                    intermediate_dir=intermediate_dir)
         self.formatter = Formatter()
 
 
@@ -82,7 +88,6 @@ class PloverCoder:
         story_list = self.geolocation_model.process(story_list, doc_list)
         event_list = stories_to_events(story_list, doc_list)
         event_list = self.attribute_model.process(event_list)
-        event_list = self.actor_resolution_model.process(event_list,
-                                                         save_intermediate=self.save_intermediate)
+        event_list = self.actor_resolution_model.process(event_list)
         cleaned_events = self.formatter.process(event_list, return_raw=True)
         return cleaned_events

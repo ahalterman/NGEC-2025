@@ -1,6 +1,9 @@
 from copy import deepcopy
 import logging
+import os
+import time
 
+import jsonlines
 import numpy as np
 from spacy.tokens import Token
 from spacy.language import Language
@@ -9,6 +12,29 @@ from .models import load_spacy
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+
+def write_intermediate(records, step_name, intermediate_dir=None):
+    """
+    Write one pipeline step's output to a timestamped JSONL file.
+
+    This is what the components' ``save_intermediate=True`` option does. The
+    file is named ``<YYYY_MM_DD-HHMMSS>_<step_name>.jsonl`` and goes in
+    ``intermediate_dir``, or the current working directory if that is None.
+    The timestamp runs to the second so that two runs close together do not
+    overwrite each other's files.
+
+    Returns the absolute path of the file that was written.
+    """
+    if intermediate_dir is None:
+        intermediate_dir = os.getcwd()
+    os.makedirs(intermediate_dir, exist_ok=True)
+    fn = time.strftime("%Y_%m_%d-%H%M%S") + f"_{step_name}.jsonl"
+    path = os.path.abspath(os.path.join(intermediate_dir, fn))
+    with jsonlines.open(path, "w") as f:
+        f.write_all(records)
+    logger.info(f"Wrote {len(records)} record(s) to {path}")
+    return path
 
 
 def load_nlp():

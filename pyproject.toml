@@ -110,6 +110,10 @@ mlx = [
 
 [tool.setuptools.packages.find]
 where = ["."] # Search for packages in the current directory
+# Only ship the `ngec` package. Without this, setuptools also picks up every
+# other top-level folder (tests/, setup/, demo/, elasticsearch/, ...) as a
+# namespace package and installs them into site-packages under those names.
+include = ["ngec*"]
 
 [tool.setuptools.package-data]
 ngec = [

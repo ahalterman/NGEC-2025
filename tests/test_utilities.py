@@ -1,6 +1,9 @@
 
 
-from ngec.utilities import stories_to_events, explode_events
+import json
+import os
+
+from ngec.utilities import stories_to_events, explode_events, write_intermediate
 
 
 
@@ -126,3 +129,20 @@ def test_events_without_mode_key():
     event_list = stories_to_events(story_list, doc_list=None)
 
     assert event_list == expected_output
+
+
+def test_write_intermediate_goes_to_given_dir(tmp_path):
+    out_dir = tmp_path / "debug" / "run1"   # does not exist yet
+    records = [{"id": "a"}, {"id": "b"}]
+    path = write_intermediate(records, "geolocation_output", str(out_dir))
+    assert os.path.isabs(path)
+    assert os.path.dirname(path) == str(out_dir)
+    assert path.endswith("_geolocation_output.jsonl")
+    with open(path) as f:
+        assert [json.loads(line) for line in f] == records
+
+
+def test_write_intermediate_defaults_to_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = write_intermediate([{"id": "a"}], "attribute_output")
+    assert os.path.samefile(os.path.dirname(path), tmp_path)

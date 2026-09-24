@@ -4,7 +4,6 @@ from importlib import resources
 import logging
 import os
 import re
-import time
 
 import dateparser
 from elasticsearch import Elasticsearch
@@ -13,6 +12,7 @@ from rich.progress import track
 
 from .common import ModelManager, clean_query, CountryDetector
 from .agent_matcher import AgentMatcher
+from ..utilities import write_intermediate
 from .wiki_matcher import WikiMatcher
 
 
@@ -1428,13 +1428,15 @@ class ActorResolver:
                 priorities_file: None | str = None,
                 override_sources: None | list | tuple = None,
                 device: None | str = None,
+                intermediate_dir: None | str = None,
                 ):
         """
         Initialize the ActorResolver with the necessary models and data.
         
         Args:
             spacy_model: Pre-loaded spaCy model to use
-            save_intermediate: Whether to save intermediate results
+            save_intermediate: Write the output of process() to a timestamped
+                "*_actor_resolution_output.jsonl" file, for debugging.
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
             agents_file: Path to a custom PLOVER/CAMEO-format agents file. The
@@ -1460,6 +1462,8 @@ class ActorResolver:
                 sentence-transformers' own choice, which is CUDA when a card is
                 visible). Pass 'cpu' to hold the encoders on the CPU on a
                 machine that has a GPU -- gpu=False alone does not do that.
+            intermediate_dir: The directory the save_intermediate file goes in.
+                The default None uses the current working directory.
         """
         # TODO: #26, make it possible to override models
         # This impacts all the other related classes here
@@ -1504,6 +1508,7 @@ class ActorResolver:
         
         # Store configuration
         self.save_intermediate = save_intermediate
+        self.intermediate_dir = intermediate_dir
         self.wiki_sort_method = wiki_sort_method
 
     def _country_from_context(self, text, context, window=200):
@@ -1740,7 +1745,7 @@ class ActorResolver:
         self.cache_manager.set(cache_key, best)
         return best
 
-    def process(self, event_list, save_intermediate=False):
+    def process(self, event_list, save_intermediate=None):
         """
         Process a list of events to resolve actor attributes.
         
@@ -1748,7 +1753,8 @@ class ActorResolver:
         
         Args:
             event_list: List of event dictionaries
-            save_intermediate: Whether to save intermediate results
+            save_intermediate: Whether to save intermediate results. The default
+                None uses the value given when the resolver was created.
             
         Returns:
             list: The same event list with actor resolution information added
@@ -1849,10 +1855,10 @@ class ActorResolver:
 
 
         # Save intermediate results if requested
+        if save_intermediate is None:
+            save_intermediate = self.save_intermediate
         if save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H") + "_actor_resolution_output.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(event_list)
+            write_intermediate(event_list, "actor_resolution_output", self.intermediate_dir)
                 
         return event_list
 
@@ -1869,7 +1875,7 @@ def main():
     """
     import argparse
 
-    from es_client import setup_es_client
+    from ngec.es_client import setup_es_client
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Resolve actors in events to PLOVER codes")
@@ -1915,46 +1921,3 @@ if __name__ == "__main__":
     )
     
     main()
-
-    exit(0)  # Exit cleanly after running main
-
-    ## Testing junk to remove later
-
-    from actor_resolution import (
-        ActorResolver,
-        AgentMatcher,
-        CountryDetector,
-        ModelManager,
-        WikiMatcher,
-        WikiParser,
-    )
-    from es_client import setup_es_client
-
-    es_client = setup_es_client()
-
-    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': '789_0', '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': {'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}}
-    agent_matcher = AgentMatcher()
-    actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
-    #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}
-    
-    resolver = ActorResolver(es_client=es_client)
-    resolver.actor_to_code("German Chancellor")
-    resolver.actor_to_code("Angela Merkel")
-    resolver.actor_to_code("Angela Merkel",
-                           query_date="2015-01-01")
-    
-    # Now demonstrate the wiki lookup functionality
-    wiki = resolver.wiki_matcher.query_wiki("Merkel", context = "Angela Merkel is the Chancellor of Germany.")
-    
-    res = resolver.wiki_matcher.query_wiki("Obama", method="rules")
-    resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Michelle Obama is the former First Lady of the United States.",
-                                     method = "rules")
-    
-    resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Obama is the former First Lady of the United States.",
-                                     method = "rules")
-    
-    resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Obama is the former First Lady of the United States.",
-                                     method = "neural")

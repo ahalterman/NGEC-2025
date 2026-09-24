@@ -1,7 +1,5 @@
 import os
 import pandas as pd
-import time
-import jsonlines
 import re
 import json
 import logging
@@ -14,7 +12,7 @@ from typing import Any, cast, Literal, TypedDict, NotRequired
 
 from .attributes.schema import ATTRIBUTE_SCHEMA, parse_response
 from .llm.base import Conversation, GenerationEngine
-from .utilities import explode_events
+from .utilities import explode_events, write_intermediate
 
 logger = logging.getLogger(__name__)
 
@@ -161,18 +159,9 @@ def _load_event_definitions(def_file="PLOVER_structured_codebook_updated.csv",
     Load a CSV of event definitions (including special instructions for the model.)
     """
     if base_path is None:
-        # Use importlib.resources to access package data
-        try:
-            with resources.files("NGEC").joinpath("assets", def_file).open() as f:
-                event_definitions = pd.read_csv(f)
-        except (OSError, ModuleNotFoundError):
-            # OSError covers FileNotFoundError as well as NotADirectoryError, which
-            # importlib.resources can raise when a same-named file shadows the package
-            # directory (e.g. an uppercase 'NGEC' path on a case-insensitive lookup).
-            # Fallback to file-based approach for development
-            current_dir = os.path.dirname(__file__)
-            file_path = os.path.join(current_dir, "assets", def_file)
-            event_definitions = pd.read_csv(file_path)
+        # The copy shipped in ngec/assets/
+        with resources.files("ngec").joinpath("assets", def_file).open() as f:
+            event_definitions = pd.read_csv(f)
     else:
         # Use provided base_path
         file_path = os.path.join(base_path, def_file)
@@ -279,7 +268,8 @@ class AttributeModel:
                  llamacpp_url: str | None = None,
                  model_name: str | None = None,
                  prompt_format: PromptFormat | None = None,
-                 seed: int | None = None
+                 seed: int | None = None,
+                 intermediate_dir: str | None = None,
                  ):
         """
         Initialize the attribute model
@@ -293,7 +283,8 @@ class AttributeModel:
         batch_size : int, default=8
             Batch size for processing
         save_intermediate : bool, default=False
-            Whether to save intermediate results
+            Write this step's output to a timestamped "*_attribute_output.jsonl"
+            file, and any events with no extraction to "*_dropped_events.jsonl".
         gpu : bool, default=False
             Whether to use GPU
         base_path : str, optional
@@ -323,6 +314,9 @@ class AttributeModel:
             or N/A instead of a span -- for the same document. Useful for tests
             and for reproducing a reported extraction; leave it unset otherwise.
             Currently honoured only by backends that go through an engine.
+        intermediate_dir : str, optional
+            The directory the ``save_intermediate`` files go in. Defaults to the
+            current working directory.
         """
         self.silent=silent
         self.backend = backend
@@ -434,6 +428,7 @@ class AttributeModel:
 
         self.batch_size=batch_size
         self.save_intermediate=save_intermediate
+        self.intermediate_dir=intermediate_dir
         self.system_prompt = (_make_system_content_v5()
                               if self.prompt_format == "v5"
                               else _make_system_content_short())
@@ -736,9 +731,7 @@ class AttributeModel:
             self._report_dropped(dropped)
 
         if self.save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H") + "_attribute_output.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(event_list)
+            write_intermediate(event_list, "attribute_output", self.intermediate_dir)
 
         return cast(list[AttributeModelOutput], event_list)
 
@@ -763,10 +756,8 @@ class AttributeModel:
                    f"excluded them from the main output. By event type: {dist_str}.")
 
         if self.save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H%M%S") + "_dropped_events.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(dropped)
-            message += f" The dropped events were written to {os.path.abspath(fn)}."
+            path = write_intermediate(dropped, "dropped_events", self.intermediate_dir)
+            message += f" The dropped events were written to {path}."
         else:
             message += (" Pass save_intermediate=True to write them to a "
                         "*_dropped_events.jsonl file for inspection.")

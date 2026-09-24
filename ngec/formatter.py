@@ -873,10 +873,17 @@ def word_overlap_fraction(word1: str, word2: str) -> float:
 
 
 class Formatter:
-    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=0.85):
+    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=0.85,
+                 output_dir: str | None=None):
+        """
+        output_dir: where process() writes events_processed.jsonl when it is not
+          asked to return the events raw. The default None uses the current
+          working directory.
+        """
         self.quiet = quiet
         self.iso_to_name = country_name_dict(country_csv_path)
         self.geo_threshold = geolocation_threshold
+        self.output_dir = output_dir
 
     """
     event = {   'attributes': {   'ACTOR': [{   'qa_end_char': 53,
@@ -1148,8 +1155,12 @@ class Formatter:
         event_list: list of dicts
           list of events after being passed through each of the processing steps
         return_raw: bool
-          If true, don't write to a final and instead return the final version. Useful for 
-          debugging. Defaults to False.
+          If true, only return the events. If false (the default), also write
+          them to events_processed.jsonl in the formatter's output_dir.
+
+        Returns
+        -------
+        The list of formatted events, in both cases.
         """
         for n, event in enumerate(event_list):
             # 'attributes' is a single dict (one event per record).
@@ -1164,9 +1175,12 @@ class Formatter:
             except Exception as exception:
                 logger.warning(f"{exception} parsing date for event number {n}")
 
-        if return_raw:
-            return event_list
-        else:
-            with jsonlines.open("events_processed.jsonl", "w") as f:
+        if not return_raw:
+            output_dir = self.output_dir if self.output_dir is not None else os.getcwd()
+            os.makedirs(output_dir, exist_ok=True)
+            path = os.path.abspath(os.path.join(output_dir, "events_processed.jsonl"))
+            with jsonlines.open(path, "w") as f:
                 f.write_all(event_list)
+            logger.info(f"Wrote {len(event_list)} event(s) to {path}")
+        return event_list
 

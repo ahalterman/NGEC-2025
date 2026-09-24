@@ -1,12 +1,12 @@
 from mordecai3 import Geoparser
 from rich.progress import track
-import time
-import jsonlines
 import pandas as pd
 import os
 import logging
 
 from importlib import resources
+
+from .utilities import write_intermediate
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +33,8 @@ class GeolocationModel:
                 geo_path=None,
                 es_client=None,
                 save_intermediate=False,
-                quiet=False):
+                quiet=False,
+                intermediate_dir=None):
         """
         Wrapper around the mordecai3 geoparser.
 
@@ -51,6 +52,10 @@ class GeolocationModel:
             mordecai3 uses the assets shipped inside the package.
         es_client: an Elasticsearch client. If None, mordecai3 connects to
             localhost:9200 itself.
+        save_intermediate: write this step's output to a timestamped
+            "*_geolocation_output.jsonl" file, for debugging.
+        intermediate_dir: the directory that file goes in. If None (default),
+            the current working directory.
         """
         self.geo = Geoparser(model_path=geo_model,
                             geo_asset_path=geo_path,
@@ -60,6 +65,7 @@ class GeolocationModel:
                             debug=False)
         self.quiet = quiet
         self.save_intermediate = save_intermediate
+        self.intermediate_dir = intermediate_dir
         self.iso_to_name = country_name_dict(base_path)
 
 
@@ -116,9 +122,7 @@ class GeolocationModel:
 
 
         if self.save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H") + "_geolocation_output.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(story_list)
+            write_intermediate(story_list, "geolocation_output", self.intermediate_dir)
 
         return story_list
 

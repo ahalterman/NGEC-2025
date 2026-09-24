@@ -55,13 +55,14 @@ The maintained end-to-end path is `PloverCoder.process()` in
    (Wikipedia + agent patterns via Elasticsearch) → adds top-level `actor` /
    `recipient` (lists of coded-actor dicts).
 6. **Formatting** — `ngec/formatter.py` `Formatter` → adds top-level
-   `event_location` and `date_resolved`; can write `events_processed.jsonl`.
+   `event_location` and `date_resolved`; can write `events_processed.jsonl`
+   (to `output_dir=`, default the working directory).
    Date resolution runs a fail-safe cascade (`_resolve_core`) and reports
    `resolved_date` / `date_end` / `granularity` / `date_type` / `reason`; see
    the "Date resolution" section of `PIPELINE.md` before changing it.
 
-`ngec_process.py` at the repo root is an **older** CLI entry point that predates
-`PloverCoder`; prefer `PloverCoder` / the end-to-end test as the source of truth.
+`PloverCoder` and the end-to-end test are the source of truth. (The older
+`ngec_process.py` CLI that predated them was removed; see #41.)
 
 **See `PIPELINE.md` for the full step-by-step data-contract analysis, the known
 bugs, and the reasoning behind them.** Keep it in sync when you change any step's
@@ -152,7 +153,9 @@ uv run pytest -m ""           # everything
   returns the list. To add/replace a component (e.g. a custom event classifier),
   copy the reference implementation and keep that interface —
   `plover_sklearn.py`'s module docstring documents the classifier contract.
-- Components take `save_intermediate=True` to dump per-step JSONL for debugging.
+- Components take `save_intermediate=True` to dump per-step JSONL for debugging,
+  and `intermediate_dir=` for where it goes (default: the working directory).
+  They all write through `write_intermediate` in `ngec/utilities.py`.
 - Assets (codebook CSV, country list, demo models) live in `ngec/assets/` and are
   loaded via `importlib.resources` (`resources.files("ngec")...`), not hard-coded
   paths.

@@ -7,9 +7,9 @@ robust. It was written as part of the journal-article revise-and-resubmit, after
 a reviewer had trouble running the code.
 
 The reference orchestrator is `PloverCoder.process()` in `ngec/plover_coder.py`,
-which is also what the README and `tests/test_end_to_end.py` exercise. (The
-top-level `ngec_process.py` is an older CLI entry point that predates
-`PloverCoder` and is not the maintained path.)
+which is also what the README and `tests/test_end_to_end.py` exercise. (An
+older top-level `ngec_process.py` CLI that predated `PloverCoder` has been
+removed.)
 
 ## The six steps
 
