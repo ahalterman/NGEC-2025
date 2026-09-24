@@ -9,13 +9,13 @@ instance. It serves two indices:
 | `geonames` | location resolution (mordecai3) | the GeoNames gazetteer        |
 
 Most users should **not** build these. Get a pre-built index instead — see
-[SETUP.md](SETUP.md), which covers restoring a snapshot archive (path A),
-mounting a pre-built data directory (path B), the build described here (path C),
-and how to package a finished index to hand to someone else. Building the wiki
+[SETUP.md](SETUP.md), which covers mounting a pre-built data directory
+(path A), the build described here (path B), and how to package a finished
+index to hand to someone else. Building the wiki
 index from scratch takes many hours and tens of GB of scratch space.
 
 Note that as of 2026-09-09 there is **no working public download URL** for
-either archive format; see the warning at the top of SETUP.md.
+the archive; see the warning at the top of SETUP.md.
 
 `python3 setup/doctor/ngec_doctor.py` reports which of the two indices this
 machine actually has, with document counts, and prints the command for whichever

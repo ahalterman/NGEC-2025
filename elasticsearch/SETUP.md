@@ -13,20 +13,18 @@ so both of these live together in whatever directory is mounted at
 `/usr/share/elasticsearch/data`. That is the one fact everything else here
 follows from.
 
-There are three ways to get them, depending on what you were handed:
+There are two ways to get them:
 
-- **Path A — restore a snapshot archive.** The format this repo now publishes.
-  Minutes. Portable across Elasticsearch versions, and verifiable.
-- **Path B — mount a pre-built data directory.** The older archive format (the
-  `geonames_wiki_index_*.tar.gz` that has been passed around). Also minutes, but
-  only works on Elasticsearch 7.10.x.
-- **Path C — build both indices from source dumps.** Half an hour for GeoNames,
+- **Path A — mount a pre-built data directory.** Download the published
+  archive, unpack it, and point Elasticsearch at it. Minutes, plus the
+  download. Only works on Elasticsearch 7.10.x.
+- **Path B — build both indices from source dumps.** Half an hour for GeoNames,
   most of a day for Wikipedia. For a newer Wikipedia dump, a different
   gazetteer, or a changed index format.
 
-Paths A and B stand on their own: nothing in them is NGEC-specific except the
-contents of the indices, so either is also the recipe for reusing the `wiki`
-index in an unrelated project. See
+Path A stands on its own: nothing in it is NGEC-specific except the contents of
+the indices, so it is also the recipe for reusing the `wiki` index in an
+unrelated project. See
 [Reusing the index elsewhere](#reusing-the-index-elsewhere).
 
 To find out which of these you need on this machine:
@@ -40,108 +38,23 @@ indices are there, and whether their document counts look like a complete load
 or one that died part-way. It prints the right command for whichever is wrong.
 See [`setup/doctor/README.md`](../setup/doctor/README.md).
 
-> ⚠️ **There is currently no public download URL for either archive.** The
+> ⚠️ **There is currently no public download URL for the archive.** The
 > address the root `README.md` used to give,
 > `https://andrewhalterman.com/files/geonames_wiki_index_2023-03-02.tar.gz`,
-> returns **HTTP 404** (checked 2026-09-09), and the copy committed at
-> `setup/geonames_wiki_index_2023-03-02.tar.gz` is a truncated 14 MB fragment of
-> a ~10 GB archive, not a usable index. `PREBUILT_INDEX_URL` in
+> returns **HTTP 404** (checked 2026-09-09). `PREBUILT_INDEX_URL` in
 > `setup/doctor/ngec_doctor.py` is the single constant `"TODO"`, and the setup
 > console refuses to run any command containing it. Fill that constant in once
 > an archive is published — the doctor, this document and `README.md` should
 > then agree. Until then, get the archive from Andy directly, or build it
-> (Path C).
+> (Path B).
 
 ---
 
-## Path A — restore a snapshot archive
+## Path A — mount a pre-built data directory
 
-**You need:** Docker (<https://www.docker.com/get-started/>), and about 35 GB of
-free disk. The archive is roughly 10 GB, the unpacked snapshot repository about
-the same again, and the restored data directory about 13 GB — but the repository
-can be deleted as soon as the restore finishes, so the peak is what to plan for,
-not the resting size.
-
-### 1. Unpack
-
-```shell
-mkdir -p ~/ngec-es
-tar -xzf ngec-index-snapshot-YYYY-MM-DD.tar.gz -C ~/ngec-es
-mkdir -p ~/ngec-es/data
-```
-
-You should now have `~/ngec-es/snapshots` (the repository) and an empty
-`~/ngec-es/data` (where the restored indices will go). Note the **absolute**
-path of both: Docker does not expand `~`, and given `~/…` it silently creates a
-directory named `~`.
-
-### 2. Start Elasticsearch with the snapshot repository mounted
-
-```shell
-docker run -d --name ngec-es \
-  -p 9200:9200 \
-  -e discovery.type=single-node \
-  -e path.repo=/snapshots \
-  --restart unless-stopped \
-  -v /absolute/path/to/ngec-es/data:/usr/share/elasticsearch/data \
-  -v /absolute/path/to/ngec-es/snapshots:/snapshots \
-  elasticsearch:7.10.1
-```
-
-`-e path.repo=/snapshots` is the one flag that is specific to this path:
-Elasticsearch refuses to register a filesystem repository outside `path.repo`.
-The other flags are explained in [Path B](#path-b--mount-a-pre-built-data-directory).
-
-Wait for it to answer:
-
-```shell
-curl -s localhost:9200/_cluster/health
-```
-
-### 3. Register the repository and restore
-
-```shell
-curl -X PUT 'localhost:9200/_snapshot/ngec' \
-  -H 'Content-Type: application/json' \
-  -d '{"type":"fs","settings":{"location":"/snapshots"}}'
-
-curl -s 'localhost:9200/_snapshot/ngec/_all' | python3 -m json.tool   # what's in it
-
-curl -X POST 'localhost:9200/_snapshot/ngec/<snapshot-name>/_restore?wait_for_completion=true' \
-  -H 'Content-Type: application/json' \
-  -d '{"indices":"wiki,geonames","include_global_state":false}'
-```
-
-Restore fails if an index of the same name already exists and is open — that is
-the intended safety, not a bug. Delete or close the old one first.
-
-For the `wiki` index alone, pass `"indices":"wiki"`.
-
-### 4. Verify
-
-```shell
-curl -s 'localhost:9200/_cat/indices?v'
-curl -s 'localhost:9200/wiki/_mapping'     | python3 -m json.tool | head -20
-curl -s 'localhost:9200/geonames/_mapping' | python3 -m json.tool | head -20
-```
-
-The counts should match the table at the top of this document, and each
-mapping's `_meta` block should tell you what the index was built from and when
-(see [Provenance](#provenance)). If `_meta` is missing, the index predates the
-current loaders.
-
-Once the restore is done, the `snapshots` mount is no longer needed. You can
-delete the directory and re-create the container without the `-v …:/snapshots`
-and `-e path.repo=…` flags.
-
----
-
-## Path B — mount a pre-built data directory
-
-This is the older archive format: a tar of an Elasticsearch **data directory**,
-which you mount straight into the container. It works, but it is pinned to
-Elasticsearch 7.10.x — see [Packaging](#packaging-an-index-to-hand-to-someone-else)
-for why we no longer publish this way.
+The archive is a tar of an Elasticsearch **data directory**, which you mount
+straight into the container. A 7.10 data directory only opens on
+Elasticsearch 7.10.x, which is why the version is pinned below.
 
 **You need:** Docker, and about 25 GB of free disk — roughly 10 GB for the
 tarball and 13 GB for the unpacked data directory. Delete the tarball afterwards.
@@ -156,8 +69,11 @@ tar -xzf geonames_wiki_index_*.tar.gz
 mv geonames_index wikigeo_index          # the folder name says "geo"; it holds both
 ```
 
-The directory name inside the archive is historical. Renaming it is optional
-but saves the next person from assuming it only has the gazetteer in it.
+That is for the 2023 archive, whose directory name is historical. Renaming it
+is optional but saves the next person from assuming it only has the gazetteer
+in it. Newer archives, made by `tools/publish_index.sh`, are named
+`wikigeo_index.tar.gz` and already unpack to `wikigeo_index/`, so there is
+nothing to rename.
 
 Note the **absolute** path of the result. Docker will not expand `~`: given
 `~/…` it silently creates a directory named `~`.
@@ -213,7 +129,7 @@ Two failure modes worth naming:
   perfectly happily against an empty data directory rather than failing, so
   this is the only place it shows up. Fix the path and re-create the container.
 - **A count far below the numbers above.** A load that died part of the way
-  through. Re-download, or rebuild that one index (Path C) — the other index
+  through. Re-download, or rebuild that one index (Path B) — the other index
   shares the data directory and is left alone.
 
 `yellow` health on a single-node cluster means it is trying, and failing, to
@@ -234,7 +150,7 @@ the same cluster as well: the index-building tooling in `tools/` and
 
 ### Reusing the index elsewhere
 
-The container in either path is a plain Elasticsearch 7.10.1 node. Nothing about
+The container from Path A is a plain Elasticsearch 7.10.1 node. Nothing about
 it depends on NGEC, so any project that wants a searchable local Wikipedia can
 use it: start the container, then query `localhost:9200/wiki` with `curl` or any
 Elasticsearch client.
@@ -250,15 +166,15 @@ the article is discarded), `infobox`, `box_type`, `affiliated_people` and
 [`es_wiki/README.md`](es_wiki/README.md) documents the field semantics.
 
 If you share a data directory between projects, share the *container* too: one
-node at a time, always. Restoring from a snapshot (Path A) into each project's
-own data directory avoids the problem entirely.
+node at a time, always. Unpacking a separate copy of the archive for each
+project avoids the problem entirely.
 
 ---
 
-## Path C — build the indices yourself
+## Path B — build the indices yourself
 
 Only when the pre-built index is stale, or you want a different Wikipedia
-snapshot, a different gazetteer, or a changed index format.
+dump, a different gazetteer, or a changed index format.
 
 Elasticsearch (and, for the wiki build, Redis) run in Docker via
 `compose-build.yml`; the loaders are small Python CLIs that run on the host
@@ -351,40 +267,28 @@ run end to end.
 
 ## Packaging an index to hand to someone else
 
-**Publish a snapshot archive.** The recipe is below; the reasoning and the
-measurements are after it.
+`tools/publish_index.sh` does this. It stops the Elasticsearch container
+serving port 9200 first, because a live data directory is not a consistent
+thing to copy: an archive taken while segments are being written can unpack
+into a corrupt index. Then it tars the data directory as `wikigeo_index/`,
+restarts the container, and writes into `elasticsearch/dist/`:
 
-### Making one
+- `wikigeo_index.tar.gz` — the archive, unpacking to `wikigeo_index/`
+- `wikigeo_index.tar.gz.sha256` — its checksum, for recipients to verify
+- `manifest.json` — document counts, dump dates and build dates for both
+  indices, read from each index's `_meta` (below)
 
-Run against the node that holds the finished indices. It can stay up — a
-snapshot is taken from a running node, which is the first advantage over tarring
-a data directory.
+It refuses to publish an index that has no `_meta`, and asks before uploading
+anything. The upload goes to `NGEC_PUBLISH_DEST`, an rsync target such as
+`user@host:/srv/www/ngec/index/`; `--no-upload` packages without uploading.
 
-```shell
-# 1. The node needs a repository path. If it wasn't started with one, re-create
-#    the container adding:  -e path.repo=/snapshots -v /abs/path/snapshots:/snapshots
-curl -X PUT 'localhost:9200/_snapshot/ngec' \
-  -H 'Content-Type: application/json' \
-  -d '{"type":"fs","settings":{"location":"/snapshots","compress":true}}'
-
-# 2. Snapshot both indices. Skip the global state: it carries cluster settings
-#    the recipient neither needs nor wants.
-curl -X PUT "localhost:9200/_snapshot/ngec/ngec-$(date +%F)?wait_for_completion=true" \
-  -H 'Content-Type: application/json' \
-  -d '{"indices":"wiki,geonames","include_global_state":false}'
-
-# 3. Tar the repository directory.
-tar -C /abs/path -czf ngec-index-snapshot-$(date +%F).tar.gz snapshots
-sha256sum ngec-index-snapshot-$(date +%F).tar.gz > ngec-index-snapshot-$(date +%F).tar.gz.sha256
-```
-
-The recipient's side is [Path A](#path-a--restore-a-snapshot-archive) above.
+The recipient's side is [Path A](#path-a--mount-a-pre-built-data-directory)
+above.
 
 ### Provenance
 
 Both loaders stamp build provenance into the index mapping's `_meta`, and
-**`_meta` travels inside the snapshot** — verified by restoring one into a
-different Elasticsearch and reading it back. It should record:
+`_meta` is part of the index, so **it travels inside the archive**. It should record:
 
 ```json
 "_meta": {
@@ -415,61 +319,3 @@ curl -s 'localhost:9200/wiki/_mapping' | python3 -m json.tool
 Caveat: `load_es` re-stamps `_meta` on *every* run, including one without
 `--drop`, so an index that has had a small fixture merged into it will describe
 itself as that fixture. Only trust `_meta` after a `--drop` build.
-
-### Why a snapshot rather than a tarred data directory
-
-Both were tested on the scratch build described in
-`docs/memos/2026-09-09-demo-review/es_index_verification.md`.
-
-| | Tarred data directory | Snapshot archive |
-|---|---|---|
-| Node must be stopped to make it | **yes** — copying a live data directory can capture a torn index | no |
-| Restores onto Elasticsearch 8 | no — 7.10 is not a direct-upgrade source for 8.x (you must pass through 7.17 first) | **yes, tested** (7.10.1 → 8.11.4, counts and `_meta` intact) |
-| Restores onto Elasticsearch 9 | no | no — indices created in 7.x are outside 9.x's window; reindex first |
-| Selective restore (`wiki` only) | no — it is all one directory | **yes** |
-| Verifiable before shipping | only by starting a node on it | `_snapshot/_all` reports per-shard success |
-| Merges into an existing node | no — it *is* the node's storage | **yes** — restores alongside indices already there |
-
-The last two rows are the practical ones. A student who wants only the `wiki`
-index for an unrelated project can restore just `wiki`, into a node that already
-has their own data in it. With a data directory they have to take both indices
-and give up the node.
-
-The version story is the decisive one. The archive that has been passed around
-so far is a 7.10 data directory, so every recipient is pinned to Elasticsearch
-7.10.1 forever, with no upgrade path that does not involve rebuilding from
-source. A snapshot taken from that same 7.10.1 node restores into 8.x today.
-
-**Size and time are a wash.** Measured on a scratch node holding the full
-13,250,817-document `geonames` index plus a small `wiki` index (2.2 GB of index
-on disk):
-
-| | Tarred data directory | Snapshot archive |
-|---|---|---|
-| Node downtime to produce | 83 s (1 s to stop + 82 s to tar) | **none** |
-| Time to produce | 82 s | 54 s snapshot + 82 s tar = 136 s |
-| Archive size | 1,515,791,693 bytes | 1,515,791,662 bytes |
-| Recipient's unpack | untar | 14 s untar + 54 s restore |
-| Result on disk | 2.2 GB | 2.2 GB |
-
-The two archives came out within 31 bytes of each other. So the choice is
-decided entirely by the rows above the size row — no downtime to produce,
-restoring onto a newer Elasticsearch, and being able to hand over one index
-rather than a whole node.
-
-Scale those figures by about 6 for the real pair of indices (12 GB of index
-rather than 2 GB).
-
-### One trap
-
-Never delete or move files inside a snapshot repository directory while it is
-registered with a running cluster. Elasticsearch notices, disables the
-repository, and every later call returns
-
-> Could not read repository data because the contents of the repository do not
-> match its expected state.
-
-The recovery is the one the message describes and it does work: `DELETE
-_snapshot/<name>`, clear the directory, then `PUT` the repository again — the
-cluster rebuilds its view from the physical contents. Take the archive by
-tarring the directory, not by pruning it.

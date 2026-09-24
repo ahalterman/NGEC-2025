@@ -7,7 +7,8 @@ Implemented here:
 - Installation: the ngec version and commit, the Python running it, and where
   the package is being imported from
 - Configuration: every environment variable ngec or its tooling reads, the
-  effective value, and which code actually reads it
+  effective value, and which code actually reads it (`SETTINGS`); and any key
+  in .env that is not one of them, which is usually a misspelling
 - Compute: the PyTorch build, whether it can really see the GPU that is
   present, and what `gpu=True` will do on this machine
 - Elasticsearch: whether it is reachable, and whether the `wiki` and
@@ -34,9 +35,11 @@ come back as findings. A broken install is exactly when this gets run, so
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -183,8 +186,130 @@ def _dotenv() -> Check:
     before = set(os.environ)
     load_dotenv(env_file)
     _FROM_DOTENV.update(set(os.environ) - before)
-    return Check(".env", OK, f"{len(_FROM_DOTENV)} setting(s) loaded",
+    # Doctor, the tests and the demo load .env themselves. A user's own script
+    # does not unless it calls load_dotenv() or es_client_from_env(), so a
+    # value shown below can be one their pipeline never sees.
+    return Check(".env", OK,
+                 f"{len(_FROM_DOTENV)} setting(s) loaded; your own scripts see "
+                 "them only if they load .env too",
                  note=str(env_file))
+
+
+@dataclass(frozen=True)
+class Setting:
+    """An environment variable that NGEC, its demo, or its tooling reads.
+
+    A `default` of None means "ask the code that defines it"; only the attribute
+    model uses that, because its default lives in `ngec.attribute_model` and a
+    second copy of the name here would drift. `secret` values are reported as
+    "set" and never printed. Settings with `always_shown=False` matter only to
+    the demo, to evaluation, or to building and publishing an index, so their
+    rows appear only when the variable is actually set.
+    """
+
+    name: str
+    default: str | None
+    read_by: str
+    secret: bool = False
+    always_shown: bool = True
+
+
+# Every environment variable NGEC reads, in the order the report shows them.
+# This list is what `.env` is checked against, so it has to be complete:
+# tests/test_doctor.py fails if the code reads an NGEC_ name missing from it,
+# or if .env.example documents anything other than exactly these.
+SETTINGS = [
+    Setting("NGEC_ATTRIBUTE_MODEL", None, "ngec.attribute_model"),
+    Setting("NGEC_WIKI_ENCODER", "sentence-transformers/static-retrieval-mrl-en-v1",
+            "ngec.actors", always_shown=False),
+    Setting("NGEC_AGENT_ENCODER", "BAAI/bge-small-en-v1.5", "ngec.actors",
+            always_shown=False),
+    Setting("NGEC_LLAMACPP_URL", "http://127.0.0.1:8080", "ngec.llm.llamacpp"),
+    Setting("ES_HOST", "localhost", "tests, demo, smoke test"),
+    Setting("ES_PORT", "9200", "tests, demo, smoke test"),
+    Setting("ES_USER", "", "tests, demo, smoke test", secret=True),
+    Setting("ES_PASSWORD", "", "tests, demo, smoke test", secret=True),
+    # Not the same cluster setting as ES_HOST/ES_PORT, and nothing keeps them in
+    # step; see _es_agreement.
+    Setting("NGEC_WIKI_URL", "http://localhost:9200/wiki", "ngec.actors (v3 splitter)"),
+    Setting("NGEC_ES_URL", "http://localhost:9200/", "tools/, elasticsearch/"),
+    Setting("NGEC_ES_DATA", "", "elasticsearch/compose-build.yml"),
+    Setting("NGEC_ES_PORT", "9200", "elasticsearch/compose-build.yml", always_shown=False),
+    Setting("NGEC_REDIS_HOST", "localhost", "elasticsearch/es_wiki"),
+    Setting("NGEC_REDIS_PORT", "6379", "elasticsearch/es_wiki"),
+    Setting("NGEC_PUBLISH_DEST", "", "tools/publish_index.sh", always_shown=False),
+    Setting("HF_HOME", "~/.cache/huggingface", "huggingface_hub"),
+    Setting("NGEC_DEMO_PASSWORD", "", "demo", secret=True, always_shown=False),
+    Setting("NGEC_DEMO_MODE", "gpu if CUDA is available, else cpu", "demo",
+            always_shown=False),
+    Setting("NGEC_DEMO_CPU_THREADS", "4", "demo", always_shown=False),
+    Setting("NGEC_DEMO_GPU_MEMORY", "0.25", "demo", always_shown=False),
+    Setting("NGEC_DEMO_CPU_BACKEND", "llamacpp", "demo", always_shown=False),
+]
+
+# A line in .env that sets a variable. A commented-out line sets nothing.
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _keys_in(env_file: Path) -> list[str]:
+    keys: list[str] = []
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        match = _ENV_LINE.match(line)
+        if match and match.group(1) not in keys:
+            keys.append(match.group(1))
+    return keys
+
+
+def _env_keys(env_file: Path | None) -> list[Check]:
+    """Check the keys set in .env against the settings NGEC actually reads.
+
+    A misspelled name is the classic silent failure here. python-dotenv loads
+    NGEC_ATTRIBUTE_MODLE without complaint, nothing reads it, and the run quietly
+    uses the default model.
+
+    The reference is SETTINGS, not a file on disk, so this works the same for an
+    installed copy as for a clone, and a `.env.example` belonging to the user's
+    own project cannot be mistaken for NGEC's.
+
+    Only likely typos are warnings: a name close to a known one, or any NGEC_
+    name, since nothing else would use that prefix. Other keys (HF_TOKEN,
+    CUDA_VISIBLE_DEVICES, a user's own settings) are reported but not judged.
+    """
+    if env_file is None:
+        return []
+
+    known = [setting.name for setting in SETTINGS]
+    unknown = [key for key in _keys_in(env_file) if key not in known]
+    if not unknown:
+        return [Check(".env keys", OK, "every key in .env is a setting NGEC reads")]
+
+    reference = ".env.example in the NGEC repository lists every setting"
+    checks: list[Check] = []
+    others: list[str] = []
+    for key in unknown:
+        # Upper-cased so that es_host is caught as well as ES_HOTS. The match is
+        # a guess -- ES_URL comes out as ES_USER -- so the fix is worded as one.
+        close = difflib.get_close_matches(key.upper(), known, n=1, cutoff=0.75)
+        if close:
+            checks.append(Check(
+                key, WARN, f"set in .env, but nothing reads it; did you mean {close[0]}?",
+                "whatever setting it was meant to be: a misspelled name is loaded "
+                "without error and then ignored, so that setting keeps its default",
+                f"if you meant {close[0]}, rename it in {env_file}; {reference}"))
+        elif key.startswith("NGEC_"):
+            checks.append(Check(
+                key, WARN, "set in .env, but no NGEC code reads it",
+                "whatever setting it was meant to be: nothing reads this name, so "
+                "that setting keeps its default",
+                f"check the name; {reference}"))
+        else:
+            others.append(key)
+    if others:
+        checks.append(Check(
+            ".env keys", INFO,
+            f"also sets {', '.join(others)}, which NGEC does not read",
+            note="fine if something else uses them"))
+    return checks
 
 
 def _default_attribute_model() -> str:
@@ -197,18 +322,21 @@ def _default_attribute_model() -> str:
         return "the package default"
 
 
-def _setting(name: str, default: str, read_by: str, secret: bool = False) -> Check:
-    raw = os.environ.get(name)
+def _setting(setting: Setting) -> Check:
+    default = setting.default
+    if default is None:
+        default = _default_attribute_model()
+    raw = os.environ.get(setting.name)
     if raw is None:
         detail = f"unset, defaulting to {default}" if default else "unset"
-    elif secret:
+    elif setting.secret:
         # Doctor output is the sort of thing that gets pasted into an issue.
         detail = "set"
     else:
         detail = raw
-    if name in _FROM_DOTENV:
+    if setting.name in _FROM_DOTENV:
         detail += " (from .env)"
-    return Check(name, INFO, detail, note=read_by)
+    return Check(setting.name, INFO, detail, note=setting.read_by)
 
 
 def _es_agreement() -> Check:
@@ -236,24 +364,10 @@ def _es_agreement() -> Check:
 
 
 def configuration() -> list[Check]:
-    # Built here rather than at module scope so the attribute model's own
-    # default can be reported instead of a second copy of the name.
-    settings = [
-        ("NGEC_ATTRIBUTE_MODEL", _default_attribute_model(), "ngec.attribute_model", False),
-        ("NGEC_LLAMACPP_URL", "http://127.0.0.1:8080", "ngec.llm.llamacpp", False),
-        ("ES_HOST", "localhost", "tests, demo", False),
-        ("ES_PORT", "9200", "tests, demo", False),
-        ("ES_USER", "", "tests, demo", True),
-        ("ES_PASSWORD", "", "tests, demo", True),
-        ("NGEC_ES_URL", "http://localhost:9200/", "tools/, elasticsearch/", False),
-        ("NGEC_ES_DATA", "", "elasticsearch/compose-build.yml", False),
-        ("NGEC_REDIS_HOST", "localhost", "elasticsearch/es_wiki", False),
-        ("NGEC_REDIS_PORT", "6379", "elasticsearch/es_wiki", False),
-        ("HF_HOME", "~/.cache/huggingface", "huggingface_hub", False),
-    ]
-
     checks = [_dotenv()]
-    checks += [_setting(*setting) for setting in settings]
+    checks += _env_keys(_find_env_file())
+    checks += [_setting(setting) for setting in SETTINGS
+               if setting.always_shown or setting.name in os.environ]
     checks.append(_es_agreement())
     return checks
 
