@@ -30,6 +30,9 @@ This is a ~10 GB download and the longest single step, so start it in a terminal
 > ⚠️ **There is currently no public download URL.** The address this README used
 > to give returns HTTP 404. For now, **ask Andy for the archive directly**, or
 > build the indices yourself — see [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md).
+> Building needs about **60 GB** of free disk, or about **180 GB** for the faster
+> option that decompresses the Wikipedia dump up front (it saves roughly 90
+> minutes). Only the ~16 GB index is kept afterwards.
 
 ```shell
 mkdir -p ~/ngec-es-data

@@ -184,6 +184,19 @@ under `uv`. The full procedure, including the tunables, the resumable
 [`es_geonames/README.md`](es_geonames/README.md). What follows is the sequence
 in one place.
 
+**You need:** Docker, and free disk for one of two options:
+
+- **About 60 GB** for the steps below, which read the compressed dump
+  directly: ~25 GB for the Wikipedia dump, 2 GB for the GeoNames gazetteer,
+  ~16 GB for the built index and ~16 GB for the backup of the old one.
+- **About 180 GB** for the faster option, `tools/rebuild_index.sh`'s default,
+  which also decompresses the dump up front into 117 GB of plain XML. That
+  saves roughly 90 minutes, because both wiki loader passes otherwise
+  decompress the `.bz2` themselves. The script only takes this path when at
+  least 130 GB is free, and `--no-parallel-bunzip` turns it off.
+
+Only the ~16 GB index needs to be kept afterwards; the rest can be deleted.
+
 Before anything else: **back up the data directory and stop your normal
 Elasticsearch container.** The build stack mounts the same directory, and two
 nodes on one directory corrupt it. (Or don't: see
