@@ -429,6 +429,25 @@ PREV_ES_CONTAINER="$(state_get prev_container)"
 if [ -z "$PREV_ES_CONTAINER" ]; then
     PREV_ES_CONTAINER="$(docker ps --filter publish=9200 --format '{{.Names}}' \
         | grep -v '^ngec-build-es$' | head -1 || true)"
+    # Publishing 9200 is not the only way to hold the index. A container on an
+    # internal network mounts the same directory without publishing anything,
+    # so the port filter misses it, the build stack starts anyway, and two ES
+    # nodes write one data dir -- which corrupts it. Match on the mount too.
+    if [ -z "$PREV_ES_CONTAINER" ]; then
+        # The `if` matters: a bare `grep -qx ... && echo` leaves the loop's exit
+        # status non-zero whenever the LAST container doesn't match, and under
+        # `set -e` with `pipefail` that aborts the whole script. The trailing
+        # `|| true` covers `head` closing the pipe early (SIGPIPE upstream).
+        PREV_ES_CONTAINER="$(docker ps --format '{{.Names}}' \
+            | grep -v '^ngec-build-es$' \
+            | while read -r c; do
+                  if docker inspect "$c" \
+                          --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null \
+                          | grep -qx "$ES_DATA"; then
+                      echo "$c"
+                  fi
+              done | head -1 || true)"
+    fi
     [ -n "$PREV_ES_CONTAINER" ] && state_set prev_container "$PREV_ES_CONTAINER"
 fi
 if [ -n "$PREV_ES_CONTAINER" ]; then
@@ -648,14 +667,15 @@ run_wiki() {
         mark_done build_links
     fi
 
-    if stage_done load_redis; then
-        log "wiki: skipping load_redis (already done)"
-    else
-        log "wiki: load_redis"
-        mark_running load_redis
-        "${RUN_LOADER[@]}" load_wiki_es.py load_redis "$WIKI_INPUT"
-        mark_done load_redis
-    fi
+    # Always re-run, never skipped on resume. Redis holds the redirect map in
+    # memory only, so any restart of the container empties it while the state
+    # file still records the stage as done. Skipping it then produces a full
+    # index whose documents all have empty `redirects` -- which looks like a
+    # successful build and passes the anomaly gate. Reloading costs ~30s.
+    log "wiki: load_redis (always re-run; Redis is in-memory)"
+    mark_running load_redis
+    "${RUN_LOADER[@]}" load_wiki_es.py load_redis "$WIKI_INPUT"
+    mark_done load_redis
 
     # The --drop decision is the one place resume semantics really matter.
     # A fresh run drops the index so the rebuild is clean. A resumed run must
