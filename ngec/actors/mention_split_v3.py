@@ -88,6 +88,10 @@ class SplitterV3:
     def __init__(self, country_detector, agents_file, es_url="http://localhost:9200/wiki", encoder=None, nlp=None):
         from sentence_transformers import SentenceTransformer
         self.cd = country_detector
+        # The splitter finds countries by name (it needs the name to tell "Bank
+        # of Uganda" from "Ugandan bank"), but the `country` it returns is an
+        # ISO-3 code, as v1's is: the agent matcher and code selector expect one.
+        self.name_to_iso3 = dict(zip(country_detector.countries["Name"], country_detector.countries["CCA3"]))
         self.es_url = es_url
         self.nlp = nlp
         self.enc = encoder or SentenceTransformer(STATIC_ENCODER, device="cpu")
@@ -378,7 +382,7 @@ class SplitterV3:
         desc = re.sub(r"\s+(of|for|to|at|in|the|a|an)$", "", desc.strip(" ,;:"), flags=re.I)
         if desc and all(re.fullmatch(r"[A-Z][a-z]{0,3}\.", t) for t in desc.split()):
             desc = ""
-        return {"text": text, "country": home_country, "country_name": country_name or "", "target_country": target_country,
+        return {"text": text, "country": self.name_to_iso3.get(home_country, home_country) or None, "country_name": country_name or "", "target_country": target_country,
                 "trimmed_text": trimmed, "core_query": core, "actor_desc": desc,
                 "ner_extracted_specific": bool(desc), "alt_query_terms": ([raw, trimmed] if desc else []) + getattr(self, "_alt", []),
                 "ents": [], "ent_text": core, "doc": None, "split_path": path}

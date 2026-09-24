@@ -121,6 +121,8 @@ def test_v3_keeps_the_description_v1_loses(nlp, detector, es_client_local):
     assert v3["core_query"] == "Colin Powell"
     assert v3["actor_desc"] == "former British economist"
     assert v3["country_name"] == "United Kingdom"
+    # an ISO-3 code, like v1's, not the name: the agent matcher reads it
+    assert v3["country"] == "GBR"
 
 
 @pytest.mark.substantive
