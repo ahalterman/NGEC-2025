@@ -44,14 +44,15 @@ events[0]["attributes"]
 # {'event_type': 'PROTEST', 'mode': 'riot',
 #  'anchor_quote': 'Police fired tear gas at protesters in Harare on Monday',
 #  'actor': ['protesters'], 'recipient': [], 'date': ['on Monday'],
-#  'location': ['in Harare'], 'killed': [], 'injured': []}
+#  'location': ['Harare'], 'killed': [], 'injured': []}
 ```
 
 `process` returns a **new** list: one record per event found, so a record can
 become several (two protests in one story) or none (the model found no such
 event; those are dropped). Ids get a `_0`, `_1`, ... suffix. Spans are copied
-verbatim and can keep a leading preposition ("in Harare"); the pipeline's
-geocoding and date steps allow for that.
+verbatim, except that a leading "in" is dropped from locations ("in Harare"
+becomes "Harare"). Other prepositions stay ("near Harare", "outside the
+capital"); the pipeline's geocoding and date steps allow for them.
 
 ## Resolving a date phrase
 

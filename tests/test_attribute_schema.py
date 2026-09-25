@@ -121,6 +121,19 @@ def test_v6_list_values_keep_semicolons_inside_a_span():
     assert events[0]["mode"] == ""
 
 
+def test_leading_in_is_dropped_from_locations_only():
+    """ "in Paris" -> "Paris"; "near" and "outside" say something and stay."""
+    events, failure = parse_response(
+        '[{"event_type": "PROTEST", "actor": ["in-laws"], "recipient": [], "date": ["in May"], '
+        '"location": ["in Paris", "near Kabul", "outside the capital", "in", "In Amenas", "Inner Mongolia"]}]')
+
+    assert failure is None
+    assert events[0]["location"] == ["Paris", "near Kabul", "outside the capital", "in",
+                                     "In Amenas", "Inner Mongolia"]
+    assert events[0]["date"] == ["in May"]
+    assert events[0]["actor"] == ["in-laws"]
+
+
 def test_truncated_repetition_keeps_the_distinct_finished_records():
     """The v6 failure shape: greedy decoding repeats records until the token
     limit cuts the response off mid-record."""

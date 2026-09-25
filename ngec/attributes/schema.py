@@ -25,6 +25,14 @@ SPAN_KEYS = ("actor", "recipient", "date", "location", "killed", "injured",
              "reporter")
 
 
+# The v6 model copies the word a place name follows ("in Haiti", "near Kabul"),
+# because that is how its answer keys were written. "near" and "outside" say
+# something about where the event was, so they stay; a plain "in" does not, and
+# is dropped from location spans. Only a lowercase "in" is dropped, so that a
+# place whose name starts with "In" (In Amenas, In Salah) is left alone.
+_LEADING_IN = re.compile(r"^in\s+")
+
+
 def normalize_spans(event: dict) -> dict:
     """Make every span attribute a list of stripped strings, in place.
 
@@ -32,6 +40,7 @@ def normalize_spans(event: dict) -> dict:
     v5 models ("the police; protesters") is split, and a JSON list from the v6
     model (["the police", "protesters"]) is kept, element by element. Empty
     strings and nulls inside a list are dropped, so an empty role is always [].
+    A leading "in" is dropped from location spans ("in Paris" -> "Paris").
     """
     for key in SPAN_KEYS:
         value = event.get(key)
@@ -40,6 +49,9 @@ def normalize_spans(event: dict) -> dict:
         elif isinstance(value, list):
             event[key] = [str(v).strip() for v in value
                           if v is not None and str(v).strip()]
+    if isinstance(event.get("location"), list):
+        event["location"] = [_LEADING_IN.sub("", span) or span
+                             for span in event["location"]]
     return event
 
 ATTRIBUTE_SCHEMA = {

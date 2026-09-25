@@ -50,8 +50,9 @@ def _first_attribute_value(value):
 
 
 # The v6 attribute model keeps the word a place name follows in the text
-# ("in Haiti", "near Kabul"), because that is how its answer keys were written.
-# The geoparser's place names have no such word, so it is dropped before the two
+# ("near Kabul"), because that is how its answer keys were written. A plain
+# "in" is already gone (normalize_spans), but the others stay in the span. The
+# geoparser's place names have no such word, so it is dropped before the two
 # are compared. The extracted span itself is left as it was.
 _LEADING_PREPOSITION = re.compile(
     r"^(?:in|at|on|near|from|to|into|across|outside|inside|around|within|throughout)\s+",
