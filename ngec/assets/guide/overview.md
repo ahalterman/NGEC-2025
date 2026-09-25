@@ -56,7 +56,9 @@ A list of dicts, one per news story:
 
 `pub_date` matters more than it looks. Relative dates ("last Wednesday",
 "yesterday") are resolved against it, and actors' Wikipedia offices are checked
-against it. Without it dates are unresolved, and nothing raises an error.
+against it. Without it dates are unresolved, and nothing raises an error. Use
+`None` for a missing date, never a string made from a blank spreadsheet cell
+(`ngec guide run` shows how to prepare the column).
 
 ## Output
 
@@ -67,14 +69,17 @@ record back to its story; `id` is a per-run label, not a stable key.
 
 The fields most people want:
 
-- `event_type`, `event_mode` (PLOVER categories, e.g. `PROTEST`, `demonstrate`)
+- `event_type`, `event_mode` (PLOVER categories, e.g. `PROTEST`, `demo`; the
+  classifier on its own writes modes as `PROTEST-demo`)
 - `attributes`: the text spans, a dict of lists, e.g.
   `{"actor": ["Protesters"], "recipient": ["the government"], "date": ["today"], "location": ["Paris"], "anchor_quote": "..."}`.
   For ASSAULT, PROTEST and COERCE the default model also returns `killed` and
   `injured` spans. Read keys with `.get()`: any may be missing.
 - `actor`, `recipient`: lists of coded actors, each with `country` (ISO3),
-  `code_1`, `code_2` (PLOVER actor codes such as `GOV`, `MIL`, `CVL`) and
-  `wiki` (the Wikipedia title, if linked).
+  `code_1`, `code_2` (PLOVER actor codes such as `GOV`, `MIL`, `CVL`; the
+  table in `ngec guide run` lists them), `wiki` (the Wikipedia title, if
+  linked) and `actor_wiki_job` (the office held on the story's date, for a
+  linked person).
 - `event_location["event_loc"]`: the geocoded place (`lat`, `lon`,
   `country_code3`, `geonameid`, ...), or None with a `reason`.
 - `date_resolved`: `resolved_date`, `granularity` (day/week/month/...),

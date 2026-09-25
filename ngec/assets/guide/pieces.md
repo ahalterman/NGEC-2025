@@ -3,7 +3,10 @@
 Every step can be used without the rest of the pipeline. `ngec guide setup`
 lists what each needs; only Wikipedia linking and geoparsing need
 Elasticsearch. Load a model once and reuse it: creating one takes seconds to a
-minute, using it takes milliseconds per item.
+minute. After that, classifying a document, resolving a date or coding a short
+description is fast (well under a second). Wikipedia linking takes several
+seconds per name on a CPU, so 500 names is an hour or more. Attribute
+extraction depends on the backend (`ngec guide setup`).
 
 ## Event types for a document
 
@@ -61,10 +64,16 @@ resolve_date_text("last Wednesday", "2025-05-16")
 
 The second argument is the publication date the phrase is relative to, as
 `YYYY-MM-DD` or a date object. Without it nothing is resolved
-(`resolved_date` is None), even for absolute dates. `granularity` says how
-precise the result is (`day`, `week`, `month`, ...), and `date_type` whether
-it is `exact`, `approximate`, a `range` (then `date_end` is set) or
-`unresolved`. No models or Elasticsearch are needed.
+(`resolved_date` is None), even for absolute dates. Other formats are risky:
+`03/04/2024` is read month first, and `20240315` is not understood at all (it
+counts as a missing date). `granularity` says how precise the result is
+(`day`, `week`, `month`, ...), and `date_type` whether it is `exact`,
+`approximate`, a `range` (then `date_end` is set) or `unresolved`. No models
+or Elasticsearch are needed.
+
+An empty or unreadable phrase returns the publication date itself, with
+`date_type` = `unresolved`. Filter on `date_type`, not on whether
+`resolved_date` is None.
 
 ## Coding a short actor description (no Elasticsearch)
 
@@ -76,7 +85,12 @@ matcher.short_text_to_agent("Latvian air force")
 # {'country': 'LVA', 'code_1': 'MIL', 'code_2': '', 'pattern': 'air force', 'conf': 1.0, ...}
 ```
 
-Returns None when nothing in the agents file is close enough. Pass
+`conf` is the cosine similarity between the text and the closest pattern in
+the agents file; below 0.625 (the default `threshold=`) the call returns None.
+The country comes only from words in the text ("Latvian", "(Kenya)"). A named
+group with no country word in it ("Rapid Support Forces") gets a category but
+no country; Wikipedia linking (below) is what supplies countries for names.
+The table in `ngec guide run` says what the codes mean. Pass
 `AgentMatcher(agents_file="my_agents.txt")` to use your own categories
 (`ngec guide customize`).
 
@@ -105,10 +119,33 @@ code["country"], code["code_1"], code["wiki"]     # ('USA', 'GOV', 'Antony Blink
 
 `query_date` matters: codes for people come from the offices they held on that
 date (Rishi Sunak is `GOV` in 2023, not in 2012). Pass the story's publication
-date. Give the sentence or story as `context`; a bare surname with no context
-("Bush") is often linked to the wrong article. The article dict also has
-`short_desc`, `intro_para` and `infobox`, and many ranking features that can be
-ignored.
+date. `code["actor_wiki_job"]` is the office the code came from (e.g.
+"Minister of Economics and Finance" for Emmanuel Macron in 2015).
+`actor_to_code` does its own Wikipedia search, so there is no need to call
+`query_wiki` as well unless the article itself is wanted.
+
+Give the sentence or story as `context`. Without one, build a short one from
+what the user has ("Angela Merkel, a politician from Germany, in 2003."), and
+pass the country name to `query_wiki(..., country="Germany")`. A bare surname
+is often linked to the wrong article ("Bush" to the plant) and can still come
+back with a confident code from the words alone; `code["wiki"] == ""` means no
+article was linked, and those rows deserve a second look.
+
+The article dict has `title`, `short_desc`, `intro_para` and `infobox`, and
+many ranking features that can be ignored. For every office a person held on a
+date, not only the one used for the code:
+
+```python
+offices = resolver.wiki_parser.parse_offices(article["infobox"])
+current, countries = resolver.wiki_parser.get_current_office(offices, "2003-06-30")
+[o["office"] for o in current]
+# ['Leader of the Christian Democratic Union', 'Leader of the Opposition', ...]
+```
+
+Offices come from the infobox's `office` fields, so people whose infobox has
+none get no office. Members of the US Congress are the common case: their
+infoboxes give a state and district instead, and the code then falls back to
+the article's short description.
 
 `examples/demo_wiki_resolution.py` in the repository is a longer worked
 example, including a failure.

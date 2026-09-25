@@ -84,16 +84,8 @@ for each story. Options, from least to most work:
    names) and `event_mode` (a list of `"TYPE-mode"` strings, possibly empty) on
    each story fits in step 1. The contract is in the module docstring of
    `ngec/classifiers/plover_sklearn.py`.
-3. **Train classifiers like the shipped ones**: sentence-embedding and TF-IDF
-   features with one logistic regression per type
-   (`ngec/classifiers/features.py` builds the features). This needs a few
-   hundred labeled stories per type. The model directory format is in the
-   docstring of `ngec/classifiers/plover_sklearn.py`. Load it with
-   `PloverSklearnClassifier(type_model_dir="my_models/",
-   codebook_path="my_types.csv")`. The event types come from the codebook
-   CSV (columns `event` and `mode`, one row per type or type-mode pair), not
-   from the directory: a model file for a type the CSV does not list is never
-   loaded.
+3. **Train a classifier from labeled stories** (a few hundred per type, with
+   both positives and negatives). See "Training a classifier" below.
 
 For options 1 and 2, a small class does it:
 
@@ -114,6 +106,76 @@ coder = PloverCoder(es_client=es_client,
 
 Whatever the classifier, check its output on a sample of the user's own
 stories before using counts from it.
+
+### Training a classifier
+
+For one or a few event types from the user's own yes/no labels, fit a model on
+the same features the shipped classifiers use and wrap it in a class like the
+one above:
+
+```python
+import numpy as np
+import pandas as pd
+from sentence_transformers import SentenceTransformer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_recall_curve
+from sklearn.model_selection import cross_val_predict
+
+from ngec.classifiers.features import combine_features, encode_documents
+
+labeled = pd.read_csv("labeled.csv")          # columns: text, land_dispute (1 or 0)
+texts = list(labeled["text"])
+y = labeled["land_dispute"].to_numpy()
+
+# The same features as the shipped classifiers: sentence embeddings of
+# overlapping chunks, averaged, plus TF-IDF word features.
+encoder = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")
+vectorizer = TfidfVectorizer(sublinear_tf=True, min_df=2, max_df=0.5,
+                             ngram_range=(1, 2), max_features=8000)
+vectorizer.fit(texts)
+X = combine_features(encode_documents(encoder, texts), vectorizer.transform(texts))
+
+model = LogisticRegression(penalty="l1", solver="liblinear", C=1.0,
+                           class_weight="balanced", max_iter=2000)
+
+# Pick the threshold on held-out predictions, not on the training fit.
+held_out = cross_val_predict(model, X, y, cv=5, method="predict_proba")[:, 1]
+precision, recall, thresholds = precision_recall_curve(y, held_out)
+f1 = 2 * precision * recall / np.maximum(precision + recall, 1e-9)
+threshold = float(thresholds[np.argmax(f1[:-1])])
+print(f"held-out F1 {f1[:-1].max():.2f} at threshold {threshold:.2f}")
+
+model.fit(X, y)
+
+
+class LandDisputeClassifier:
+    """Step 1 of the pipeline, for one event type."""
+    def process(self, story_list):
+        texts = [story["event_text"] for story in story_list]
+        X = combine_features(encode_documents(encoder, texts), vectorizer.transform(texts))
+        probabilities = model.predict_proba(X)[:, 1]
+        for story, p in zip(story_list, probabilities):
+            story["event_type"] = ["LAND_DISPUTE"] if p >= threshold else []
+            story["event_mode"] = []
+            story["event_type_confidence"] = {"LAND_DISPUTE": float(p)}
+        return story_list
+```
+
+Report the held-out F1, not a score on the training data. Save the fitted
+objects (`skops.io.dump`, or `joblib`) so the coding run uses exactly the
+model that was evaluated.
+
+The shipped classifiers were built by `setup/train_classifiers/codebook_llm/`
+in the repository: an LLM applied the PLOVER codebook to news articles, and
+`train_classifiers.py` fitted one model per type and mode from those labels.
+Adapt it to train many types and modes at once and write a model directory that
+`PloverSklearnClassifier(type_model_dir=..., codebook_path=...)` loads. That
+directory's `metadata.json` records the encoder (`"encoder"`) and each type's
+threshold (`"metrics": {"TYPE": {"threshold": ...}}`); without them the
+classifier falls back to `all-mpnet-base-v2` and a threshold of 0.5, without
+an error. `CLASSIFIERS.md` in the repository explains how the shipped models
+were made and what is still wrong with them.
 
 ## Your own actor categories
 
@@ -228,7 +290,18 @@ Before the user reports anything from customized output:
    recipient, date, location and actor categories.
 3. Compare step by step: event-type precision and recall, span agreement
    (exact, and allowing boundary differences such as "students" vs. "four
-   students"), and category accuracy.
+   students"), and category accuracy. For event types, with the hand codes in
+   a CSV with one row per story and a 0/1 column per type:
+
+   ```python
+   from sklearn.metrics import classification_report
+   gold = pd.read_csv("hand_coded.csv")          # story_id, PROTEST, ASSAULT, ...
+   found = table.groupby("story_id")["event_type"].apply(set)
+   for event_type in ["PROTEST", "ASSAULT"]:
+       predicted = [int(event_type in found.get(s, set())) for s in gold["story_id"]]
+       print(event_type)
+       print(classification_report(gold[event_type], predicted, digits=2))
+   ```
 4. Look at the disagreements, not only the scores. They show which step to fix
    (a definition, missing agent patterns, a classifier threshold).
 

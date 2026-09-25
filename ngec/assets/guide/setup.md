@@ -76,11 +76,18 @@ unpacks it to `~/ngec-es-data/wikigeo_index` and starts the container on port
 Docker installed and running; give the user the Docker install to do
 themselves. NGEC looks for Elasticsearch on `localhost:9200`. A `.env` file in the working directory
 (template: `.env.example` in the repository) changes the host, port and
-credentials; the doctor, tests and demo read it, but the user's own scripts must
-pass the values to `ngec.es_client.setup_es_client`.
+credentials. In scripts, `ngec.es_client.es_client_from_env()` connects using
+it (or `localhost:9200` without one) and fails straight away if Elasticsearch
+is not answering.
 
-An index present but far short of about 7.9 million (`wiki`) or 13.5 million
-(`geonames`) documents is a load that stopped partway, not a working install.
+Elasticsearch runs in Docker on Linux, macOS and Windows. Without Docker, the
+steps that need no Elasticsearch still work, on a Mac as elsewhere: event
+classification, attribute extraction, date resolution and coding short actor
+descriptions.
+
+`ngec doctor` compares the indices' document counts with what a complete
+index has. Trust its verdict: an older index has somewhat fewer documents
+and works, while one far short of that is a load that stopped partway.
 
 ## Choosing a backend for the attribute model
 
