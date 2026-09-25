@@ -107,7 +107,8 @@ whole word or phrase and takes the longest ("West Darfur" over "Darfur");
 names of three letters or fewer must match case exactly, so "us" is not "US".
 Only if none occurs does it fall back to the older character-alignment score
 (`word_overlap_fraction`, threshold 0.5) over the whole span. Either way the
-chosen place needs a geoparser score of at least 0.85. Before the
+chosen place needs a geoparser score of at least 0.7 (0.85 before mordecai3
+3.5, whose calibrated scores made 0.85 reject many correct places). Before the
 whole-word step, a span with more than a bare leading preposition ("through
 central Nairobi", "in the Mexican state of Guerrero", "outside the parliament
 in Tbilisi", "near the border with Chad") matched nothing, because the

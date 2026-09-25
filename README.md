@@ -147,12 +147,12 @@ date_type         exact
 location_text     Paris
 killed_text
 injured_text
-location_name
-location_country
-location_admin1
-lat
-lon
-geonameid
+location_name     Paris
+location_country  FRA
+location_admin1   Île-de-France
+lat               48.85341
+lon               2.3488
+geonameid         2988507
 actor_text        Protesters
 actor_code        CVL OPP
 actor_wiki
@@ -170,9 +170,8 @@ recipient_wiki
 - **`date`** is the resolved calendar date. `date_granularity` says how precise
   it is (day, week, month, quarter, year) and `date_type` whether it is exact,
   approximate or a range.
-- **`location_*`, `lat`, `lon` and `geonameid`** are the GeoNames place, when
-  the geocoder is confident enough about it. In this example it is not, so they
-  are empty.
+- **`location_*`, `lat`, `lon` and `geonameid`** are the GeoNames place. They
+  are empty when the geocoder is not confident enough about the place.
 - **`actor_code`** gives the PLOVER actor categories (here, civilians who are
   opposition), and `actor_wiki` gives the Wikipedia page when the actor is a
   named person or organization.

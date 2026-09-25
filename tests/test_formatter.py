@@ -83,3 +83,14 @@ def test_contained_place_still_needs_confidence():
     res = pick_event_loc("through central Nairobi", ents)
     assert res["event_loc"] is None
     assert res["reason"] == "no sufficient confidence in geo entity"
+
+
+def test_geo_confidence_cutoff_is_0_7():
+    # mordecai3 3.5 scored Paris 0.80 in the README's example; 0.85 rejected it.
+    paris = {"search_name": "Paris", "score": 0.80}
+    assert pick_event_loc("Paris", [paris])["event_loc"] is paris
+    low = {"search_name": "Paris", "score": 0.65}
+    assert pick_event_loc("Paris", [low])["reason"] == "no sufficient confidence in geo entity"
+    # A no-match result from mordecai3 has no score and is never picked.
+    no_match = {"search_name": "Paris", "no_match": True, "p_no_match": 0.9}
+    assert pick_event_loc("Paris", [no_match])["event_loc"] is None

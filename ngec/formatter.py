@@ -929,10 +929,19 @@ def _resolve_date(date_string: str | None=None,
 
 
 
+# The geoparser score a place needs before it becomes the event location. In
+# mordecai3 3.5 the score is a calibrated probability, slightly under-confident:
+# places it scored 0.79-0.88 were right 89% of the time. On mordecai3's
+# evaluation, 0.85 threw away about 10% of correct answers (12% on the news
+# sources); 0.7 throws away about 5% and still catches about half of the wrong
+# ones. A no-match result from mordecai3 has no score and is never picked.
+GEO_CONFIDENCE_THRESHOLD = 0.7
+
+
 def pick_event_loc(search_term: str | None, 
                    geolocated_ents: list[dict | None],
                    geo_overlap_threshold = 0.5,
-                   geo_confidence_threshold = 0.85) -> dict:
+                   geo_confidence_threshold = GEO_CONFIDENCE_THRESHOLD) -> dict:
     na_equiv = [None, "", "N/A", "NA", "n/a", "na"]
 
     # Handle all 4 combinations of missing search term or empty geo_entities
@@ -1045,7 +1054,7 @@ def _dumps_jsonl(record) -> str:
 
 
 class Formatter:
-    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=0.85,
+    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=GEO_CONFIDENCE_THRESHOLD,
                  output_dir: str | None=None):
         """
         output_dir: where process() writes events_processed.jsonl when it is not
