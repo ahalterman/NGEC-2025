@@ -500,15 +500,16 @@ def elasticsearch() -> list[Check]:
             checks.append(Check(
                 f"'{index}' index", FAIL, "missing",
                 "actor resolution" if index == "wiki" else "geolocation",
-                "load the prebuilt index (README, step 5); a cluster without it "
-                "is usually the wrong volume path in `docker run -v`"))
+                "`ngec download-index --start` fetches the pre-built index; if "
+                "you already have it, a cluster without it is usually the wrong "
+                "volume path in `docker run -v`"))
             continue
         count = client.count(index=index)["count"]
         if count == 0:
             checks.append(Check(
                 f"'{index}' index", FAIL, "exists but is empty",
                 "actor resolution" if index == "wiki" else "geolocation",
-                "reload the index (see elasticsearch/SETUP.md)"))
+                "replace it with `ngec download-index` (see elasticsearch/SETUP.md)"))
         else:
             checks.append(Check(f"'{index}' index", OK, f"{count:,} documents"))
 

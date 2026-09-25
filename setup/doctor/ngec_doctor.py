@@ -46,25 +46,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# TODO: THE DOWNLOAD URL FOR THE PRE-BUILT INDEX IS NOT KNOWN.
-# Nothing in the repo or on the reference machine records where the published
-# tarball lives, so this is deliberately a placeholder rather than a guess. The
-# console refuses to run any command containing "TODO", so the pre-built-index
-# fix is shown and copyable but not runnable until someone fills this in.
-# README.md currently points at https://andrewhalterman.com/files/... — that URL
-# has NOT been verified from here; treat it as a lead, not an answer.
-PREBUILT_INDEX_URL = "TODO"
-
-# Size of the packaged index, from the local artifact
-# ~/wiki_es_docker/wiki_index_data.tar.gz (10,045,172,774 bytes, July 2025).
-# The published tarball may differ; the extracted data directory is ~13 GB.
-PREBUILT_INDEX_BYTES = 10045172774
-PREBUILT_INDEX_DIRNAME = "geonames_index"   # top level inside the 2023 tarball
+# The published pre-built index: a tar of an Elasticsearch 7.10.1 data
+# directory holding both indices, with its checksum next to it as <url>.sha256.
+# `ngec download-index` (ngec/index_download.py) downloads the same archive;
+# keep INDEX_URL there and this in agreement (a test checks).
+PREBUILT_INDEX_URL = "https://andrewhalterman.com/files/wikigeo_index_2026-09.tar.gz"
+PREBUILT_INDEX_BYTES = 11604992023
+PREBUILT_INDEX_DIRNAME = "wikigeo_index"    # top level inside the tarball
 ATTRIBUTE_MODEL_BYTES = 1200000000          # ~1.2 GB of safetensors
-DISK_NEEDED_GB = 25                         # tarball + extracted index
+DISK_NEEDED_GB = 28                         # tarball + extracted index (15 GB)
 
 ES_IMAGE = "elasticsearch:7.10.1"
-EXPECTED_DOCS = {"wiki": 7601204, "geonames": 13250817}   # counts on the reference box
+EXPECTED_DOCS = {"wiki": 7936742, "geonames": 13472152}   # counts in the published index
 
 # Six months, the point at which the PI wants to be told the data is old. Both
 # indices are snapshots of a source that keeps moving, and neither updates
@@ -567,8 +560,13 @@ def docker_run_command(data_dir):
     mounted at /usr/share/elasticsearch/data. It sets no memory limit and no
     ES_JAVA_OPTS, so Elasticsearch uses the image's default 1 GB heap; that is
     enough to serve these indices.
+
+    `--user "$(id -u):0"`: the unpacked files belong to whoever unpacked them,
+    and the image otherwise runs as uid 1000 and cannot write to them. It
+    accepts any uid as long as the group is 0.
     """
     return ("docker run -d --name ngec-es \\\n"
+            "  --user \"$(id -u):0\" \\\n"
             "  -p 9200:9200 \\\n"
             "  -e discovery.type=single-node \\\n"
             "  --restart unless-stopped \\\n"
@@ -585,9 +583,8 @@ def shell_quote(path):
 def download_target_dir():
     """Where a freshly downloaded index should land.
 
-    Deliberately not the directory an existing container already uses: the
-    recipe ends in an `mv`, and moving the new index on top of a live one is
-    how you lose the old one. NGEC_ES_DATA, if it is set, is the user saying
+    Deliberately not the directory an existing container already uses:
+    unpacking a new index on top of a live one is how you lose the old one. NGEC_ES_DATA, if it is set, is the user saying
     where they want it, so that wins.
     """
     for value in (os.environ.get("NGEC_ES_DATA"), ENV.get("NGEC_ES_DATA")):
@@ -597,24 +594,23 @@ def download_target_dir():
 
 
 def download_index_command(target_dir):
-    """Download, unpack and rename the pre-built data directory.
+    """Download, verify and unpack the pre-built data directory.
 
-    Not runnable while PREBUILT_INDEX_URL is "TODO"; the console refuses it and
-    the command is shown for copying, with the placeholder visible.
+    With the ngec package installed, `ngec download-index` does the same; this
+    is the version that needs nothing but curl and tar.
     """
     parent = os.path.dirname(target_dir.rstrip("/")) or "."
     url = PREBUILT_INDEX_URL
-    tarball = os.path.basename(url) if url != "TODO" else "geonames_wiki_index_*.tar.gz"
-    lines = []
-    if url == "TODO":
-        lines.append("# TODO: the download URL is not recorded anywhere yet. Set")
-        lines.append("# PREBUILT_INDEX_URL in setup/doctor/ngec_doctor.py once it is known.")
-    lines.append("mkdir -p " + shell_quote(parent))
-    lines.append("cd " + shell_quote(parent))
-    lines.append("curl -LO " + url)
-    lines.append("tar -xzf " + tarball)
-    lines.append("mv " + PREBUILT_INDEX_DIRNAME + " "
-                 + shell_quote(os.path.basename(target_dir.rstrip("/"))))
+    tarball = os.path.basename(url)
+    lines = ["mkdir -p " + shell_quote(parent),
+             "cd " + shell_quote(parent),
+             "curl -LO -C - " + url,
+             "curl -LO " + url + ".sha256",
+             "sha256sum -c " + tarball + ".sha256",
+             "tar -xzf " + tarball + " && rm " + tarball]
+    name = os.path.basename(target_dir.rstrip("/"))
+    if name != PREBUILT_INDEX_DIRNAME:
+        lines.append("mv " + PREBUILT_INDEX_DIRNAME + " " + shell_quote(name))
     return "\n".join(lines)
 
 
@@ -807,13 +803,11 @@ def check_elasticsearch():
                                       + docker_run_command(target),
                                       "The " + index + " index is missing. The quickest "
                                       "route is the pre-built data directory, which carries "
-                                      "BOTH indices. The download URL is not recorded "
-                                      "anywhere in this repo yet (PREBUILT_INDEX_URL is "
-                                      "'TODO'), so fill it in before running this. Building "
-                                      "the indices yourself instead: elasticsearch/SETUP.md.",
+                                      "BOTH indices (`ngec download-index --start` does "
+                                      "the same once ngec is installed). Building the "
+                                      "indices yourself instead: elasticsearch/SETUP.md.",
                                       download_estimate(PREBUILT_INDEX_BYTES) + " for the ~"
-                                      + str(gb(PREBUILT_INDEX_BYTES)) + " GB tarball",
-                                      runnable=False)))
+                                      + str(gb(PREBUILT_INDEX_BYTES)) + " GB tarball")))
         else:
             try:
                 count = int(row.get("docs.count") or 0)

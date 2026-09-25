@@ -6,7 +6,8 @@ package.
 `ngec doctor` hands its arguments straight to `ngec/doctor.py`, which is also
 installed as `ngec-doctor`; its options are documented there. The doctor stays
 in its own module because the two kinds of command do opposite things: doctor
-only ever reports, and `download-models` changes the environment.
+only ever reports, and `download-models` / `download-index` change the
+environment.
 """
 
 from __future__ import annotations
@@ -14,9 +15,11 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from . import doctor
 from .guide import TOPICS, read_guide, write_agents_file
+from .index_download import DEFAULT_DEST, INDEX_URL, download_index
 from .models import download_models
 
 
@@ -53,6 +56,24 @@ def main(argv: list[str] | None = None) -> int:
     download.add_argument("--no-attribute-model", action="store_true",
                           help="skip the attribute model, e.g. when it runs on a "
                                "llama.cpp server")
+
+    index = subparsers.add_parser(
+        "download-index",
+        help="download the pre-built Elasticsearch index (wiki + geonames)",
+        description=(
+            "Download the pre-built Elasticsearch data directory holding the "
+            "`wiki` and `geonames` indices (about 11.6 GB, 15 GB unpacked), "
+            "check its checksum, unpack it, and print the `docker run` command "
+            "that serves it on port 9200. Needs Docker to run. Building the "
+            "indices yourself instead is described in elasticsearch/SETUP.md."))
+    index.add_argument("--dest", type=Path, default=DEFAULT_DEST,
+                       help=f"where to unpack it (default: {DEFAULT_DEST})")
+    index.add_argument("--url", default=INDEX_URL,
+                       help="where to download it from (default: the published archive)")
+    index.add_argument("--start", action="store_true",
+                       help="also start Elasticsearch over it with docker")
+    index.add_argument("--keep-archive", action="store_true",
+                       help="keep the downloaded .tar.gz after unpacking it")
 
     subparsers.add_parser(
         "doctor",
@@ -92,6 +113,13 @@ def main(argv: list[str] | None = None) -> int:
             download_models(force=args.force,
                             attribute_model=args.attribute_model,
                             include_attribute_model=not args.no_attribute_model)
+        except RuntimeError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+    if args.command == "download-index":
+        try:
+            download_index(dest=args.dest, url=args.url,
+                           keep_archive=args.keep_archive, start=args.start)
         except RuntimeError as exc:
             print(exc, file=sys.stderr)
             return 1
