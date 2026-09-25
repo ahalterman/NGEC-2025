@@ -336,6 +336,26 @@ candidates it gets back with a small XGBoost model
 (`ngec/assets/xgb_model.json`). Retrieval and ranking fail in different ways and
 were fixed separately.
 
+### Splitting the mention first: `split_mention`
+
+Before anything is searched, `actor_to_code` takes the mention apart into a
+country, a description and a core name ("former British economist | Colin
+Powell"), so that the name is what gets searched and the description is scored
+against each candidate. `SPLITTER` in `actor_resolution.py` picks the
+implementation. **v3 (`mention_split_v3.py`) has been the default since
+2026-09-24.** It decides the cut with the PLOVER agents file (what looks like a
+role), the wiki index (what is an article title) and capitalisation, with no
+list of English role words, so a deployment adapts it by editing the agents
+file. v1, the original, takes the longest spaCy PERSON/ORG entity as the name;
+it cannot find "Modi" in "Indian nationalist Prime Minister Modi" when spaCy
+tags no entity there. v3 needs the `.keyword` sub-fields of a wiki index built
+from 2026-09 on and warns once if it is given an older one. It costs about
+45 ms per mention on a CPU against v1's 2.5 ms (about 8% of actor resolution).
+
+Whatever splitter runs, `actor_to_code`'s gate reads a spaCy parse of the span
+to keep generic collectives ("protesters") and unlinkable references away from
+Wikipedia; `parse_span` supplies that parse for every splitter.
+
 ### Retrieval: `ngec/actors/wiki_matcher.py`, `WikiSearcher.run_wiki_search`
 
 **The three highest-boosted clauses in the search were dead.** They were `term`
@@ -413,6 +433,20 @@ all, three orders of magnitude cheaper, same accuracy). `WikiMatcher` applies th
 prefix to the story and the actor description only, never to article intros or
 short descriptions: those are the passages being searched, and getting it
 backwards is silent.
+
+### Two rankers: with and without the story
+
+A mention usually arrives with its story, and the ranker uses it (context
+similarity, people and places named in the story). A mention can also arrive
+alone -- the demo's single-actor lookup, or a caller with only a name -- and
+then every context feature is zero. `_call_ranker` therefore has a second slot
+for a ranker fit on rows generated with the story withheld
+(`xgb_model_static-mrl_nocontext.json`, named in `WIKI_ENCODERS` as
+`ranker_asset_no_context`, with its own threshold of 0.10). On the held-out
+gold documents it gets 78.7% top-1 without context, against 72.6% for the
+context ranker used in its place, which is what the pipeline did before
+2026-09-24. An encoder with no no-context ranker registered still uses its
+context ranker for both.
 
 ### The ranker asset and the features go together
 

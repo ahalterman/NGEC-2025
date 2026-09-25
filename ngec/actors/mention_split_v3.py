@@ -18,11 +18,12 @@ The mention is scanned at every split point j: prefix = tokens[:j] (description)
 (core). Apposition ("Robin Brooks, a senior fellow at ...") is handled first by scoring comma segments.
 Returns the same keys as the v1 splitter so it can be dropped in.
 
-Status: NOT the pipeline default. `actor_resolution.SPLITTER` is still "v1";
-pass `splitter="v3"` (or set that constant) to use this one. It came out of the
-NESS/Wikidata linking study of 2026-09-18/19 as the lexicon-free answer to the
-rejected v2 splitter, and it is committed here so the work is under version
-control and can be evaluated in place.
+Status: the pipeline default since 2026-09-24 (`actor_resolution.SPLITTER`);
+pass `splitter="v1"` for the original. It came out of the NESS/Wikidata linking
+study of 2026-09-18/19 as the lexicon-free answer to the rejected v2 splitter.
+Its name lookup reads the `.keyword` sub-fields that only wiki indices built
+from 2026-09 on have; against an older index it warns once and falls back to
+capitalisation, which is weaker.
 
 Measured when it was frozen (2026-09-19), each with the shipped ranker:
 
@@ -40,9 +41,11 @@ agent patterns are embedded once at construction) and one Elasticsearch
 `terms` query per mention. Build it once and keep it -- see
 `actor_resolution._v3_splitter`.
 """
-import re, unicodedata
+import logging, re, unicodedata
 from functools import lru_cache
 import numpy as np, requests
+
+logger = logging.getLogger(__name__)
 
 DETS = {"the", "a", "an", "this", "that", "these", "those", "its", "his", "her", "their", "our"}
 PREPS = {"of", "for", "to", "in", "at", "on", "from", "with", "under", "by"}
@@ -85,7 +88,10 @@ def load_agent_patterns(agents_file):
 
 
 class SplitterV3:
-    def __init__(self, country_detector, agents_file, es_url="http://localhost:9200/wiki", encoder=None, nlp=None):
+    def __init__(self, country_detector, agents_file, es_url="http://localhost:9200/wiki", encoder=None, nlp=None,
+                 es_client=None):
+        """`es_client` (an Elasticsearch client, the one the resolver searches with) is used for the name
+        lookup when given; otherwise `es_url`, the wiki index's URL, is queried directly."""
         from sentence_transformers import SentenceTransformer
         self.cd = country_detector
         # The splitter finds countries by name (it needs the name to tell "Bank
@@ -98,6 +104,26 @@ class SplitterV3:
         self.patterns = load_agent_patterns(agents_file)
         P = self.enc.encode(self.patterns, batch_size=256, normalize_embeddings=True, show_progress_bar=False)
         self.P = np.asarray(P)
+        self.es_client = es_client
+        self._warn_if_no_keyword_fields()
+
+    def _warn_if_no_keyword_fields(self):
+        """The name lookup needs `title.keyword`; a pre-2026-09 index has no such field, and the terms
+        query then silently matches nothing. Say so once, at construction."""
+        try:
+            if self.es_client is not None:
+                mapping = self.es_client.indices.get_mapping(index="wiki")
+            elif self.es_url:
+                mapping = requests.get(f"{self.es_url}/_mapping", timeout=5).json()
+            else:
+                return
+            props = list(mapping.values())[0]["mappings"]["properties"]
+        except Exception as e:
+            logger.warning(f"v3 splitter: could not read the wiki index mapping ({e}); the name lookup may not work.")
+            return
+        if "keyword" not in props.get("title", {}).get("fields", {}):
+            logger.warning("v3 splitter: this wiki index has no title.keyword field (it predates 2026-09), so "
+                           "names are recognised by capitalisation alone. Rebuild or point at a newer index.")
 
     # ---------------------------------------------------------------- signals
     @lru_cache(maxsize=100000)
@@ -110,9 +136,11 @@ class SplitterV3:
         return float((self.P @ v).max())
 
     def wiki_names(self, spans):
-        """subset of `spans` that is an exact article title / redirect / alternative name (any of 3 casings)."""
-        if not self.es_url or not spans:
-            return set()
+        """{span: "person" | "org" | False} for the `spans` that are an exact article title / redirect /
+        alternative name (any of 3 casings); False means the article is not about an actor. Empty when the
+        index cannot be asked."""
+        if (self.es_client is None and not self.es_url) or not spans:
+            return {}
         variants = {}
         for s in spans:
             forms = [s, s[:1].upper() + s[1:]] + ([s.title()] if s.isupper() else [])
@@ -123,9 +151,12 @@ class SplitterV3:
                                            {"terms": {"redirects.keyword": list(variants)}},
                                            {"terms": {"alternative_names.keyword": list(variants)}}]}}}
         try:
-            hits = requests.post(f"{self.es_url}/_search", json=q, timeout=5).json()["hits"]["hits"]
+            if self.es_client is not None:
+                hits = self.es_client.search(index="wiki", body=q)["hits"]["hits"]
+            else:
+                hits = requests.post(f"{self.es_url}/_search", json=q, timeout=5).json()["hits"]["hits"]
         except Exception:
-            return set()
+            return {}
         found = {}
         for h in hits:
             s = h["_source"]

@@ -766,27 +766,32 @@ class WikiSearcher:
 #######################################################
 
 
-def load_wiki_ranker_model(model_path: str | Path) -> tuple[XGBClassifier, XGBClassifier]:
+def load_wiki_ranker_model(model_path: str | Path,
+                           no_context_model_path: None | str | Path = None,
+                           ) -> tuple[XGBClassifier, XGBClassifier]:
     """
-    Load the Wikipedia ranker models
+    Load the Wikipedia ranker models.
 
-    One model has context-related features and the other doesn't.
-    (We need this to handle the case where the context is not provided)
-    
+    There are two: one for mentions that come with their story, and one for
+    mentions that arrive alone. The second is trained on rows generated with
+    the story withheld, so it does not lean on the context features, which are
+    all zero when there is no story.
+
     Args:
-        model_dir: Directory containing the ranker model
-        
+        model_path: the ranker for mentions with context
+        no_context_model_path: the ranker for mentions without it. If None,
+            the context ranker is used for both.
+
     Returns:
-        XGBoost models: Tuple of loaded ranker model
+        (context ranker, no-context ranker)
     """
-    model_path = Path(model_path)
-    
     wiki_ranker = XGBClassifier()
-    wiki_ranker.load_model(model_path)
-    logger.warning("Using context-based XGBoost model for *no context* ranking.")
-    wiki_ranker_no_context =  XGBClassifier()
-    wiki_ranker_no_context.load_model(model_path)
-    
+    wiki_ranker.load_model(Path(model_path))
+    if no_context_model_path is None:
+        logger.warning("No no-context ranker given; using the context ranker for mentions without context.")
+        return wiki_ranker, wiki_ranker
+    wiki_ranker_no_context = XGBClassifier()
+    wiki_ranker_no_context.load_model(Path(no_context_model_path))
     return wiki_ranker, wiki_ranker_no_context
 
 
@@ -834,6 +839,8 @@ class WikiMatcher:
                  actor_sim_model: None | str | Path=None, 
                  wiki_ranker_model: None | str | Path=None,
                  ranker_threshold: float | None = None,
+                 wiki_ranker_model_no_context: None | str | Path = None,
+                 ranker_threshold_no_context: float | None = None,
                  device=None,
                  use_folded: bool = True,
                  use_importance: bool = False,
@@ -847,6 +854,11 @@ class WikiMatcher:
             actor_sim_model: Actor similarity model
             ranker_threshold: Minimum ranker probability to accept the top
                 candidate as the article; below it the mention gets no page
+            wiki_ranker_model_no_context, ranker_threshold_no_context: the
+                same two, for mentions that arrive without a story. By default
+                they come from the encoder's WIKI_ENCODERS entry; an encoder
+                without a no-context ranker uses its context ranker and
+                threshold for these mentions too.
             device: Device to use for inference ('cuda', 'cpu', or None). Passed
                 to the actor-similarity model as well as the query encoder.
             wiki_sort_method: Method to use for sorting results
@@ -886,26 +898,37 @@ class WikiMatcher:
         # Wiki Ranker models (xgboost). The ranker was trained on one encoder's
         # similarity features, so pick the asset that matches the encoder in
         # use; fall back to xgb_model.json (a copy of the default encoder's).
+        # A caller who passes their own context ranker has told us nothing
+        # about a no-context one, so that ranker is then used for both.
+        assets = Path(str(resources.files("ngec"))) / "assets"
+        settings = {}
+        if trf_model is None and model_manager is not None:
+            settings = model_manager.encoder_settings
         if wiki_ranker_model is None:
-            assets = Path(str(resources.files("ngec"))) / "assets"
-            asset_name = "xgb_model.json"
-            if trf_model is None and model_manager is not None:
-                asset_name = model_manager.encoder_settings.get("ranker_asset", asset_name)
+            asset_name = settings.get("ranker_asset", "xgb_model.json")
             wiki_ranker_model = assets / asset_name
             if not wiki_ranker_model.exists():
                 logger.warning(f"No ranker asset {asset_name} for this encoder; using xgb_model.json")
                 wiki_ranker_model = assets / "xgb_model.json"
-        logger.info(f"Loading wiki ranker from {wiki_ranker_model}")
-        self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(wiki_ranker_model)
+            if wiki_ranker_model_no_context is None and settings.get("ranker_asset_no_context"):
+                wiki_ranker_model_no_context = assets / settings["ranker_asset_no_context"]
+        logger.info(f"Loading wiki rankers from {wiki_ranker_model} and {wiki_ranker_model_no_context}")
+        self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(
+            wiki_ranker_model, wiki_ranker_model_no_context)
         # Minimum ranker probability for the top candidate to be accepted as
         # the article. Encoder-specific (see WIKI_ENCODERS["ranker_threshold"]
         # in common.py for the measured values); a caller may override it.
         if ranker_threshold is None:
-            if trf_model is None and model_manager is not None:
-                ranker_threshold = model_manager.encoder_settings.get("ranker_threshold", 0.1)
-            else:
-                ranker_threshold = 0.1
+            ranker_threshold = settings.get("ranker_threshold", 0.1)
         self.ranker_threshold = ranker_threshold
+        # The no-context ranker has its own threshold, unless it is the
+        # context ranker standing in, which keeps the context threshold.
+        if ranker_threshold_no_context is None:
+            if wiki_ranker_model_no_context is None:
+                ranker_threshold_no_context = ranker_threshold
+            else:
+                ranker_threshold_no_context = settings.get("ranker_threshold_no_context", 0.1)
+        self.ranker_threshold_no_context = ranker_threshold_no_context
 
         self.wiki_sort_method = wiki_sort_method
             
@@ -1519,14 +1542,13 @@ class WikiMatcher:
     
     def _call_ranker(self, score_df, context):
         if context:
-            X = score_df[self.wiki_ranker.feature_names_in_]
-            y_proba = self.wiki_ranker.predict_proba(X)[:, 1]
+            ranker, threshold = self.wiki_ranker, self.ranker_threshold
         else:
-            X = score_df[self.wiki_ranker_no_context.feature_names_in_]
-            y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
-        score_df['ranker_score'] = y_proba
+            ranker, threshold = self.wiki_ranker_no_context, self.ranker_threshold_no_context
+        X = score_df[ranker.feature_names_in_]
+        score_df['ranker_score'] = ranker.predict_proba(X)[:, 1]
         score_df['is_max_for_task'] = (score_df['ranker_score'] == score_df['ranker_score'].max()).astype(int)
-        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > self.ranker_threshold)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > threshold)
         pick = score_df[score_df['is_predicted_match'] == True]
         if not pick.empty:
             pick = pick.iloc[0].to_dict()

@@ -45,3 +45,37 @@ def test_merge_ranked_results_keeps_primary_copy_of_shared_article():
     assert c["raw_es_score"] == 80 and c["from_alt_query"] == 0  # the primary's copy
     d = next(a for a in merged if a["title"] == "D")
     assert d["from_alt_query"] == 1
+
+
+def test_every_registered_ranker_asset_exists():
+    """A WIKI_ENCODERS entry naming a ranker that is not in assets/ would fall
+    back silently (the context ranker) or fail at load time."""
+    from importlib import resources
+    from pathlib import Path
+    from ngec.actors.common import WIKI_ENCODERS
+    assets = Path(str(resources.files("ngec"))) / "assets"
+    for name, settings in WIKI_ENCODERS.items():
+        for key in ("ranker_asset", "ranker_asset_no_context"):
+            if key in settings:
+                assert (assets / settings[key]).exists(), f"{name}: {settings[key]} missing"
+
+
+def test_no_context_ranker_is_its_own_model():
+    """The default encoder ships a separate ranker for mentions without a
+    story. It was fit without the context features, so it asks for fewer
+    columns than the context ranker; loading the context ranker twice (the old
+    behaviour) would make the two identical."""
+    from importlib import resources
+    from pathlib import Path
+    from ngec.actors.common import WIKI_ENCODERS, DEFAULT_ENCODER
+    from ngec.actors.wiki_matcher import load_wiki_ranker_model
+    assets = Path(str(resources.files("ngec"))) / "assets"
+    settings = WIKI_ENCODERS[DEFAULT_ENCODER]
+    ctx, noctx = load_wiki_ranker_model(assets / settings["ranker_asset"],
+                                        assets / settings["ranker_asset_no_context"])
+    assert noctx is not ctx
+    assert "context_sim_intro" in ctx.feature_names_in_
+    assert "context_sim_intro" not in noctx.feature_names_in_
+    # without a no-context path, the context ranker stands in
+    ctx2, noctx2 = load_wiki_ranker_model(assets / settings["ranker_asset"])
+    assert noctx2 is ctx2

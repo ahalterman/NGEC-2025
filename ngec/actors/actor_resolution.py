@@ -331,33 +331,41 @@ def country_from_context(country_detector, text, context, window=200):
 # the PLOVER agents file, the wiki index and capitalisation instead of a list
 # of role words. Flip this one line to switch the whole pipeline; individual
 # callers can override it with `splitter="v1"` / `splitter="v3"`.
-SPLITTER = "v1"
+# v3 became the default on 2026-09-24. It needs a wiki index built from
+# 2026-09 on (it reads the `.keyword` sub-fields) and warns if it gets an
+# older one.
+SPLITTER = "v3"
 
 # The v3 splitter embeds every agent pattern when it is built, so it is built
-# once per process and kept.
-_V3_SPLITTER = None
+# once and kept: one per agents file and Elasticsearch connection, so that a
+# resolver with a custom agents file, or pointed at a different index, gets a
+# splitter that uses the same ones.
+_V3_SPLITTERS = {}
 
 
-def _v3_splitter(nlp, country_detector):
-    """The process-wide v3 splitter, built on first use.
+def _v3_splitter(nlp, country_detector, es_client=None, agents_file=None):
+    """The v3 splitter for this agents file and Elasticsearch client, built on first use.
 
-    The wiki index it consults is the one NGEC_WIKI_URL names, defaulting to
-    the local node the rest of the pipeline uses.
+    With no client, the wiki index it consults is the one NGEC_WIKI_URL names,
+    defaulting to the local node. With no agents file, it uses the packaged
+    PLOVER_agents.txt.
     """
-    global _V3_SPLITTER
-    if _V3_SPLITTER is None:
-        from .mention_split_v3 import SplitterV3
+    if agents_file is None:
         agents_file = resources.files("ngec") / "assets" / "PLOVER_agents.txt"
-        _V3_SPLITTER = SplitterV3(
+    key = (str(agents_file), id(es_client))
+    if key not in _V3_SPLITTERS:
+        from .mention_split_v3 import SplitterV3
+        _V3_SPLITTERS[key] = SplitterV3(
             country_detector,
             str(agents_file),
             es_url=os.environ.get("NGEC_WIKI_URL", "http://localhost:9200/wiki"),
-            nlp=nlp)
-    return _V3_SPLITTER
+            nlp=nlp,
+            es_client=es_client)
+    return _V3_SPLITTERS[key]
 
 
 def split_mention(text, nlp, country_detector, context="", known_country="",
-                  splitter=None, doc=None):
+                  splitter=None, doc=None, es_client=None, agents_file=None):
     """
     Take an actor mention apart into country, description, and core entity.
 
@@ -370,12 +378,47 @@ def split_mention(text, nlp, country_detector, context="", known_country="",
             Neither splitter reads it today; it is accepted because
             `actor_to_code` has one to offer and a splitter that reads entities
             off by offset would want it.
+        es_client, agents_file: v3 only. The Elasticsearch client whose wiki
+            index it looks names up in, and the agents file it reads role
+            words from; `ActorResolver` passes its own, so the split uses the
+            same index and agents as the rest of resolution.
     """
     if (splitter or SPLITTER) == "v3":
-        return _v3_splitter(nlp, country_detector).split(
+        split = _v3_splitter(nlp, country_detector, es_client=es_client,
+                             agents_file=agents_file).split(
             text, context=context, known_country=known_country)
+        # v3 decides the cut without spaCy, but the gate in `actor_to_code`
+        # ("is this a generic collective? an unlinkable reference?") reads
+        # the parsed span, and without it every mention would go to
+        # Wikipedia -- "protesters" included.
+        split["doc"], split["ents"], _ = parse_span(split["trimmed_text"], nlp)
+        return split
     return _split_mention_v1(text, nlp, country_detector, context=context,
                              known_country=known_country)
+
+
+def parse_span(trimmed_text, nlp):
+    """
+    Parse a mention (after nationality stripping) with spaCy.
+
+    Returns (doc, ents, ent_text): the parsed span, its named entities, and
+    their text joined. `actor_to_code`'s gate reads all three to decide
+    whether the span names anyone in particular ("the police" does not), so
+    every splitter has to supply them. `doc` is None when the span is empty
+    or spaCy fails on it.
+    """
+    doc, ents, ent_text = None, [], ""
+    if trimmed_text:
+        try:
+            doc = nlp(trimmed_text)
+            ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
+            ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ != ""])
+            logger.debug(f"Found named entities: {ents}")
+        except IndexError:
+            # Usually caused by a mismatch between token and embedding
+            logger.info(f"Token alignment error on {trimmed_text}")
+            doc = None
+    return doc, ents, ent_text
 
 
 def _split_mention_v1(text, nlp, country_detector, context="", known_country=""):
@@ -436,19 +479,7 @@ def _split_mention_v1(text, nlp, country_detector, context="", known_country="")
 
     # Parse what is left. A country-only span ("Israeli", "the U.N.") leaves
     # nothing to parse.
-    doc = None
-    ents = []
-    ent_text = ""
-    if trimmed_text:
-        try:
-            doc = nlp(trimmed_text)
-            ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
-            ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ != ""])
-            logger.debug(f"Found named entities: {ents}")
-        except IndexError:
-            # Usually caused by a mismatch between token and embedding
-            logger.info(f"Token alignment error on {trimmed_text}")
-            doc = None
+    doc, ents, ent_text = parse_span(trimmed_text, nlp)
 
     # The country to narrow the Wikipedia search to, as a name.
     country_name = known_country or ""
@@ -1496,6 +1527,10 @@ class ActorResolver:
             wiki_sort_method=wiki_sort_method,
             device=self.device, 
         )
+        # Kept for the v3 mention splitter, which looks names up in the same
+        # index and reads role words from the same agents file.
+        self.es_client = es_client
+        self.agents_file = agents_file
         self.wiki_parser = WikiParser(
             self.country_detector,
             self.agent_matcher,
@@ -1526,7 +1561,8 @@ class ActorResolver:
         """
         return split_mention(text, self.nlp, self.country_detector,
                              context=context, known_country=known_country,
-                             splitter=splitter)
+                             splitter=splitter, es_client=self.es_client,
+                             agents_file=self.agents_file)
 
     def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term="") -> dict | None:
         """
@@ -1566,7 +1602,8 @@ class ActorResolver:
         # below works from these pieces.
         split = split_mention(text, self.nlp, self.country_detector,
                               context=context, known_country=known_country,
-                              doc=doc)
+                              doc=doc, es_client=self.es_client,
+                              agents_file=self.agents_file)
         country = split["country"]
         trimmed_text = split["trimmed_text"]
         known_country = split["country_name"]
@@ -1648,6 +1685,10 @@ class ActorResolver:
             skip_wiki_reason = "unlinkable reference"
         elif (code_full_text and doc is not None
                 and not ents
+                # a splitter that cut a name off a description ("Indian
+                # nationalist Prime Minister | Modi") has found someone in
+                # particular even when spaCy tags no entity
+                and not split["ner_extracted_specific"]
                 and not (span_names_an_institution(doc) and known_country)
                 and (code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
                      # With no context and no country there is nothing to
