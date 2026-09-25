@@ -1,12 +1,11 @@
 from mordecai3 import Geoparser
-from rich.progress import track
-import time
-import jsonlines
 import pandas as pd
 import os
 import logging
 
 from importlib import resources
+
+from .utilities import write_intermediate
 
 
 logger = logging.getLogger(__name__)
@@ -33,7 +32,8 @@ class GeolocationModel:
                 geo_path=None,
                 es_client=None,
                 save_intermediate=False,
-                quiet=False):
+                quiet=False,
+                intermediate_dir=None):
         """
         Wrapper around the mordecai3 geoparser.
 
@@ -51,6 +51,10 @@ class GeolocationModel:
             mordecai3 uses the assets shipped inside the package.
         es_client: an Elasticsearch client. If None, mordecai3 connects to
             localhost:9200 itself.
+        save_intermediate: write this step's output to a timestamped
+            "*_geolocation_output.jsonl" file, for debugging.
+        intermediate_dir: the directory that file goes in. If None (default),
+            the current working directory.
         """
         self.geo = Geoparser(model_path=geo_model,
                             geo_asset_path=geo_path,
@@ -60,18 +64,32 @@ class GeolocationModel:
                             debug=False)
         self.quiet = quiet
         self.save_intermediate = save_intermediate
+        self.intermediate_dir = intermediate_dir
         self.iso_to_name = country_name_dict(base_path)
 
 
-    def process(self, story_list, doc_list):
+    def process(self, story_list, doc_list=None, batch_size=32, chunk_size=200):
         """
-        Wrap the Mordecai3 geoparser function.
+        Geoparse every story's event_text with mordecai3, in batches.
+
+        All stories go through mordecai3's batched pipeline: named places are
+        looked up in Elasticsearch from a shared thread pool across documents,
+        and the ranking model scores every place in a chunk in one pass. This
+        is the same code mordecai3's `geoparse_doc` runs on one document at a
+        time, so the results are the same; only the speed differs (roughly 60
+        to 110 documents a second on one GPU, against a few a second one at a
+        time).
 
         Parameters
         --------
-        story_list: list of story dicts. See example
-        doc_list: list of spaCy docs
-        
+        story_list: list of story dicts, each with an "event_text". See example.
+        doc_list: optional list of spaCy docs for those texts, made with the
+            pipeline's own spaCy model (ngec.utilities.load_nlp). If given,
+            they are used as they are. If None (the default), mordecai3 parses
+            the texts itself with nlp.pipe, on the GPU when there is one.
+        batch_size: spaCy batch size when mordecai3 parses the texts itself.
+        chunk_size: documents per chunk; bounds memory on long lists.
+
         Example
         ------
         event = {'id': '20190801-2227-8b13212ac6f6', 
@@ -89,36 +107,38 @@ class GeolocationModel:
                                 'LOC': {'text': 'Paraguay', 'score': 0.24138706922531128}}}
         gp.process([event])
         """
-        if len(doc_list) != len(story_list):
+        if doc_list is not None and len(doc_list) != len(story_list):
             raise ValueError(f"story_list length does not match spaCy doc list len: {len(story_list)} vs. {len(doc_list)}.")
 
-        for n, story in track(enumerate(story_list), total=len(story_list), description="Geoparsing stories..."):
-            doc = doc_list[n]
-            res = self.geo.geoparse_doc(doc)
+        if doc_list is None:
+            texts = [story["event_text"] for story in story_list]
+            results = self.geo.geoparse_batch(texts, batch_size=batch_size,
+                                              chunk_size=chunk_size,
+                                              show_progress=not self.quiet)
+        else:
+            # geoparse_batch takes texts; with docs already parsed we call the
+            # batched core it shares with geoparse_doc, chunk by chunk as
+            # geoparse_batch does.
+            self.geo.geonames.clear_cache()
+            results = []
+            for start in range(0, len(doc_list), chunk_size):
+                results.extend(self.geo._geoparse_docs(doc_list[start:start + chunk_size]))
+
+        for story, res in zip(story_list, results):
+            if res.get("error"):
+                logger.warning(f"Geoparsing failed for story {story.get('id')}: {res['error']}")
             for r in res['geolocated_ents']:
                 try:
                     r['country_name'] = self.iso_to_name[r['country_code3']]
                 except KeyError:
-                    #logger.warning(f"Missing country code for {r}")
                     r['country_name'] = None
-                #if 'placename' not in r.keys(): 
-                #    print("'placename' key missing from geolocation results")
-                #    #print(r)
-                #    continue
-                #r['search_placename'] = r['placename']
-                #if 'resolved_placename' not in r.keys() and 'name' in r.keys():
-                #    r['resolved_placename'] = r['name']
-                #    del r['name']
                 if 'name' in r.keys():
                     r['resolved_placename'] = r['name']
                     del r['name']
             story['geolocated_ents'] = res['geolocated_ents']
 
-
         if self.save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H") + "_geolocation_output.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(story_list)
+            write_intermediate(story_list, "geolocation_output", self.intermediate_dir)
 
         return story_list
 

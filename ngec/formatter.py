@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta
 from importlib import resources
+import json
 import logging
 import os
 import re
@@ -48,22 +49,88 @@ def _first_attribute_value(value):
     return value  # str or None
 
 
+# The v6 attribute model keeps the word a place name follows in the text
+# ("near Kabul"), because that is how its answer keys were written. A plain
+# "in" is already gone (normalize_spans), but the others stay in the span. The
+# geoparser's place names have no such word, so it is dropped before the two
+# are compared. The extracted span itself is left as it was.
+_LEADING_PREPOSITION = re.compile(
+    r"^(?:in|at|on|near|from|to|into|across|outside|inside|around|within|throughout)\s+",
+    re.IGNORECASE)
+
+
+def _location_search_term(value) -> str | None:
+    """The location span to match against geoparsed places, minus a leading preposition."""
+    term = _first_attribute_value(value)
+    if not isinstance(term, str):
+        return term
+    return _LEADING_PREPOSITION.sub("", term.strip()) or term
+
+
+def resolve_date_text(text: str | None, pub_date) -> dict:
+    """
+    Resolve a date phrase ("last Wednesday", "March 15-20", "over the weekend")
+    to a calendar date, relative to the publication date of the story it came
+    from.
+
+    This is the date resolution the pipeline runs in step 6, for use on its
+    own: the result is exactly what the pipeline stores in an event's
+    'date_resolved'.
+
+    Parameters
+    ----------
+    text : str | None
+        The date phrase, e.g. the 'date' the attribute model extracted.
+    pub_date : str | datetime.date | datetime.datetime | pandas.Timestamp | None
+        The publication date, which relative phrases are counted back from.
+        A date or datetime object is safest. A string is read by `dateparser`:
+        ISO "2024-06-12" (preferred), "June 12, 2024" and "12 June 2024" all
+        work, and any time or timezone is dropped. Beware two string forms:
+        an all-numeric date like "05/06/2024" is read month first (May 6),
+        and a relative one like "yesterday" is counted from the day you run
+        the code, not the day the story appeared. "20240612" (no separators)
+        cannot be read.
+
+    Returns
+    -------
+    dict
+        The fields of :class:`ResolvedDate`: 'resolved_date' (a datetime, or
+        the start of a range), 'date_end', 'granularity' (day, week, month,
+        quarter, year), 'date_type' (exact, approximate, range, unresolved),
+        and 'reason', a trail of how the date was reached.
+
+    Missing inputs do not raise. Check 'date_type' == "unresolved":
+
+    - no `pub_date` (None, "", a pandas NaN/NaT, a string that stands for a
+      missing value such as "nan", "NaT", "None" or "null", or a string that
+      cannot be read, which also logs a warning): 'resolved_date' is None, whatever the
+      phrase says, because a relative phrase has nothing to count from. The
+      reason is "<No publication date>". An absolute date such as "March 3,
+      2021" is not resolved either.
+    - no `text` (None or ""), or a phrase that cannot be resolved ("last
+      Ramadan"): 'resolved_date' is the publication date.
+
+    Examples
+    --------
+    >>> resolve_date_text("last Wednesday", "2025-05-16")["resolved_date"]
+    datetime.datetime(2025, 5, 14, 0, 0)
+    """
+    return asdict(_resolve_date(date_string=text, ref_date=pub_date))
+
+
 def resolve_date(event: dict) -> dict:
     """
     Add a top-level 'date_resolved' key to an event, resolved from its
-    attributes' 'date' value and the event's publication date.
+    attributes' 'date' value and the event's publication date ('pub_date').
 
     One record is one event, so 'attributes' is a single dict and there is a
-    single date to resolve. The value stored is ``asdict()`` of a
-    :class:`ResolvedDate`.
-
-    >>> DateDataParser().get_date_data('March 2015')
-    DateData(date_obj=datetime.datetime(2015, 3, 16, 0, 0), period='month', locale='en')
+    single date to resolve. The value stored is the dict that
+    :func:`resolve_date_text` returns; see there for what it holds and for the
+    'pub_date' formats that work.
     """
     attributes = event.get('attributes') or {}
     date_string = _first_attribute_value(attributes.get('date'))
-    res = _resolve_date(date_string=date_string, ref_date=event.get('pub_date'))
-    event['date_resolved'] = asdict(res)
+    event['date_resolved'] = resolve_date_text(date_string, event.get('pub_date'))
     return event
 
 
@@ -217,20 +284,24 @@ def _same_day_weekday(raw: str, base_date: datetime) -> ResolvedDate | None:
     normal past-preference parse and still lands on its most recent occurrence
     before publication.
 
-    Deliberately narrow: it fires only when the *whole* span is a weekday name
-    (optionally prefixed with "on" or "this"). Anything carrying a modifier
-    ("last Tuesday", "next Tuesday"), a time of day ("Thursday evening"), a
-    month, or a digit goes through the cascade untouched.
+    Deliberately narrow: it fires only when the *whole* span is a weekday name,
+    optionally prefixed with "on" or "this", with "early", "late" or
+    "overnight", and optionally followed by a part of the day ("late Monday",
+    "Monday night", "on Monday evening"). Anything carrying a relative modifier
+    ("last Tuesday", "next Tuesday"), a month, or a digit goes through the
+    cascade untouched.
     """
-    m = re.fullmatch(rf"(?:on\s+|this\s+)?({_WEEKDAYS})", raw.strip(" -,."),
-                     re.IGNORECASE)
+    m = re.fullmatch(rf"(?:on\s+|this\s+)?(?:(?:early|late|overnight)\s+)?({_WEEKDAYS})"
+                     rf"(?:\s+(?:morning|afternoon|evening|night))?",
+                     raw.strip(" -,."), re.IGNORECASE)
     if m is None or _WEEKDAY_INDEX[m.group(1).lower()] != base_date.weekday():
         return None
     return ResolvedDate(resolved_date=base_date, granularity="day", date_type="exact",
-                        reason="<Bare weekday naming the publication day, resolved to the pub date>")
+                        reason="<Weekday naming the publication day, resolved to the pub date>")
 
 
-def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> ResolvedDate | None:
+def _anchor_bare_period(modifier: str, period: str, base_date: datetime,
+                        previous: bool = False) -> ResolvedDate | None:
     """
     Resolve a within-period modifier applied to a *bare* period word
     ("beginning of the year", "end of the year", "mid-year", "beginning of the
@@ -238,8 +309,22 @@ def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> Reso
     "the year" to *today*, so we anchor to the current period derived from
     ``base_date`` instead. Returns ``None`` for periods we don't anchor (safe:
     the caller falls through rather than emitting today).
+
+    With ``previous=True`` the period is the one before the pub date's: "late
+    last year" is the end of the year before the pub-date year, and "early last
+    month" the start of the month before the pub-date month.
     """
     modifier = modifier.lower()
+    label = "pub-date"
+    if previous:
+        label = "previous"
+        if period == "year":
+            base_date = datetime(base_date.year - 1, base_date.month, 1)
+        elif period == "month":
+            # The first of the pub-date month, minus one day, is in the month before.
+            base_date = datetime(base_date.year, base_date.month, 1) - timedelta(days=1)
+        else:
+            return None
     if "early" in modifier or "begin" in modifier:
         pos = "start"
     elif "mid" in modifier:
@@ -252,7 +337,7 @@ def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> Reso
         day = 31 if pos == "end" else 1
         return ResolvedDate(resolved_date=datetime(base_date.year, month, day),
                             granularity="year", date_type="approximate",
-                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the pub-date year>")
+                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the {label} year>")
     if period == "month":
         if pos == "end":
             nxt = datetime(base_date.year + 1, 1, 1) if base_date.month == 12 \
@@ -262,7 +347,7 @@ def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> Reso
             anchored = datetime(base_date.year, base_date.month, 15 if pos == "mid" else 1)
         return ResolvedDate(resolved_date=anchored,
                             granularity="month", date_type="approximate",
-                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the pub-date month>")
+                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the {label} month>")
     return None
 
 
@@ -629,6 +714,18 @@ def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
                                 date_type="approximate" if vague else "exact",
                                 reason="<Resolved relative date with future reference>")
 
+    # 10b. A within-period modifier on the *previous* year or month ("late last
+    #     year", "early last month", "the end of the previous year"). This has to
+    #     come before step 11, which would strip "last" and leave "late year",
+    #     and step 13 would then anchor that to the pub-date year: "late last
+    #     year" in a March 2024 story came out as December 2024, after the story.
+    #     "late last week" is not caught here; step 13 already resolves it.
+    prev = re.fullmatch(r"(?:the\s+)?(early|mid|late|beginning of|end of)[\s-]+(?:the\s+)?"
+                        r"(?:last|previous|prior|past)\s+(year|month)",
+                        raw.strip(" -,."), re.IGNORECASE)
+    if prev:
+        return _anchor_bare_period(prev.group(1), prev.group(2).lower(), base_date, previous=True)
+
     # 11. Past-tense modifiers. dateparser handles "last year/month/week/decade"
     #     natively but not the synonyms ("previous year") nor "last <weekday>".
     #     First normalize the synonyms to "last" and retry the raw parse; if that
@@ -696,6 +793,27 @@ def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
     return None
 
 
+# Strings that stand for a missing value. They turn up when a table column with
+# blanks is turned into text, e.g. str(row.date)[:10] on a pandas NaN gives
+# "nan". dateparser reads some of them as real dates ("nan" as about a month
+# before today, "NA" and "n/a" as today), so they must not reach it.
+_MISSING_STRINGS = {"", "nan", "nat", "none", "null", "na", "n/a", "<na>", "#n/a"}
+
+
+def _is_missing(value) -> bool:
+    """True for None, pandas' missing values (NaN, NaT), and strings that
+    stand for a missing value ("", "nan", "NaT", "None", "null", "N/A", ...,
+    in any case and with surrounding spaces)."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in _MISSING_STRINGS
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_date(date_string: str | None=None,
                   ref_date: str | datetime | date | None=None
                   ) -> ResolvedDate:
@@ -731,6 +849,18 @@ def _resolve_date(date_string: str | None=None,
     ResolvedDate(resolved_date=datetime(2021, 1, 1), date_end=None, granularity="day", date_type="exact", reason="...")
     """
     na = set([None, ""])
+
+    # A missing value read from a pandas column arrives as NaN or NaT, not None,
+    # or, once turned into text, as the string "nan", "NaT" or "None". Treat all
+    # of those as missing: dateparser reads the string "nan" as a real date
+    # (about a month before today), which would silently misdate every event.
+    # For the phrase, only a non-string NaN/NaT is treated as missing here: a
+    # phrase such as "N/A" or "nan" already comes back as the pub date flagged
+    # unresolved (see _NOISE_PHRASES), with a reason that quotes it.
+    if not isinstance(date_string, str) and _is_missing(date_string):
+        date_string = None
+    if _is_missing(ref_date):
+        ref_date = None
 
     # Either or both of the inputs might be missing, however, before we handle
     # those possibilities, we need make sure we don't end up with a missing
@@ -799,10 +929,38 @@ def _resolve_date(date_string: str | None=None,
 
 
 
+# The geoparser score a place needs before it becomes the event location. In
+# mordecai3 3.5 the score is a calibrated probability, slightly under-confident:
+# places it scored 0.79-0.88 were right 89% of the time. On mordecai3's
+# evaluation, 0.85 threw away about 10% of correct answers (12% on the news
+# sources); 0.7 throws away about 5% and still catches about half of the wrong
+# ones. A no-match result from mordecai3 has no score and is never picked.
+GEO_CONFIDENCE_THRESHOLD = 0.7
+
+# A score threshold cannot catch the worst geocoding errors: a mention whose
+# correct place is not among the gazetteer candidates at all, where mordecai3
+# still scores about 30% of its answers above 0.9. mordecai3 3.5 also reports
+# `p_no_match`, its probability that the correct place is missing. On its
+# evaluation, answers with p_no_match above 0.5 were wrong 85% of the time, so
+# those are rejected too. Set it to 1 to turn the check off.
+GEO_MAX_P_NO_MATCH = 0.5
+
+
+def _geo_rejection(geo_entity: dict, geo_confidence_threshold: float,
+                   geo_max_p_no_match: float) -> str | None:
+    """Why a geoparsed place is not good enough to be the event location, or None if it is."""
+    if geo_entity.get("score", 0.0) < geo_confidence_threshold:
+        return "no sufficient confidence in geo entity"
+    if geo_entity.get("p_no_match", 0.0) > geo_max_p_no_match:
+        return "geoparser thinks the correct place may not be in the gazetteer"
+    return None
+
+
 def pick_event_loc(search_term: str | None, 
                    geolocated_ents: list[dict | None],
                    geo_overlap_threshold = 0.5,
-                   geo_confidence_threshold = 0.85) -> dict:
+                   geo_confidence_threshold = GEO_CONFIDENCE_THRESHOLD,
+                   geo_max_p_no_match = GEO_MAX_P_NO_MATCH) -> dict:
     na_equiv = [None, "", "N/A", "NA", "n/a", "na"]
 
     # Handle all 4 combinations of missing search term or empty geo_entities
@@ -818,15 +976,46 @@ def pick_event_loc(search_term: str | None,
         case (True, True):
             return {"event_loc": None, "reason": "no search term and no geo entities"}
 
-    # Calculate word overlap fraction between search term and each geo entity 
-    # search name
+    # First look for geoparsed places whose name appears as a whole word or
+    # phrase inside the location span: "Nairobi" in "through central Nairobi",
+    # "Guerrero" in "the Mexican state of Guerrero". If several do, take the
+    # longest name, the most specific place the span mentions ("West Darfur"
+    # over "Darfur").
+    contained = [geo_entity for geo_entity in geolocated_ents
+                 if _name_in_span(geo_entity.get("search_name"), search_term)]
+    if contained:
+        best_match = max(contained, key=lambda geo_entity: len(geo_entity["search_name"]))
+        rejection = _geo_rejection(best_match, geo_confidence_threshold, geo_max_p_no_match)
+        if rejection:
+            return {"event_loc": None, "reason": rejection}
+        return {"event_loc": best_match, "reason": "success"}
+
+    # Otherwise compare the whole span with each place name, character by
+    # character, as before. This still matches a span that differs from the
+    # place name only slightly, e.g. in spelling or punctuation.
     overlaps = [word_overlap_fraction(search_term, geo_entity.get("search_name", "")) for geo_entity in geolocated_ents]
     if max(overlaps) < geo_overlap_threshold:
         return {"event_loc": None, "reason": "no sufficient overlap in search terms"}
     best_match = geolocated_ents[overlaps.index(max(overlaps))]
-    if best_match.get("score", 0.0) < geo_confidence_threshold:
-        return {"event_loc": None, "reason": "no sufficient confidence in geo entity"}
+    rejection = _geo_rejection(best_match, geo_confidence_threshold, geo_max_p_no_match)
+    if rejection:
+        return {"event_loc": None, "reason": rejection}
     return {"event_loc": best_match, "reason": "success"}
+
+
+def _name_in_span(name: str | None, span: str) -> bool:
+    """
+    True if a place name occurs in the span as a whole word or phrase: "Chad"
+    is in "near the border with Chad", but not in "Chadian border", and "Niger"
+    is not in "northern Nigeria". Case is ignored, except for names of three
+    letters or fewer ("US", "UAE"), which must match exactly so that the
+    pronoun "us" does not count as the United States.
+    """
+    if not name or not name.strip():
+        return False
+    name = name.strip()
+    flags = 0 if len(name) <= 3 else re.IGNORECASE
+    return re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", span, flags) is not None
 
 
 def word_overlap_fraction(word1: str, word2: str) -> float:
@@ -869,11 +1058,40 @@ def word_overlap_fraction(word1: str, word2: str) -> float:
 
 
 
+def _json_default(value):
+    """How to write the values the json module can't: dates (the resolved
+    dates are datetimes) become ISO strings, and numpy numbers plain ones."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _dumps_jsonl(record) -> str:
+    """One line of events_processed.jsonl. The events in memory keep their
+    datetimes; only the file holds strings."""
+    return json.dumps(record, default=_json_default)
+
+
 class Formatter:
-    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=0.85):
+    def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=GEO_CONFIDENCE_THRESHOLD,
+                 output_dir: str | None=None, geolocation_max_p_no_match=GEO_MAX_P_NO_MATCH):
+        """
+        geolocation_threshold: the geoparser score a place needs to become
+          the event location (see GEO_CONFIDENCE_THRESHOLD).
+        geolocation_max_p_no_match: a place is also rejected when the
+          geoparser's probability that the correct place is missing from the
+          gazetteer is above this (see GEO_MAX_P_NO_MATCH). 1 turns it off.
+        output_dir: where process() writes events_processed.jsonl when it is not
+          asked to return the events raw. The default None uses the current
+          working directory.
+        """
         self.quiet = quiet
         self.iso_to_name = country_name_dict(country_csv_path)
         self.geo_threshold = geolocation_threshold
+        self.geo_max_p_no_match = geolocation_max_p_no_match
+        self.output_dir = output_dir
 
     """
     event = {   'attributes': {   'ACTOR': [{   'qa_end_char': 53,
@@ -1145,25 +1363,33 @@ class Formatter:
         event_list: list of dicts
           list of events after being passed through each of the processing steps
         return_raw: bool
-          If true, don't write to a final and instead return the final version. Useful for 
-          debugging. Defaults to False.
+          If true, only return the events. If false (the default), also write
+          them to events_processed.jsonl in the formatter's output_dir.
+
+        Returns
+        -------
+        The list of formatted events, in both cases.
         """
         for n, event in enumerate(event_list):
             # 'attributes' is a single dict (one event per record).
             attributes = event.get('attributes') or {}
             event["event_location"] = pick_event_loc(
-                _first_attribute_value(attributes.get('location')),
+                _location_search_term(attributes.get('location')),
                 event.get('geolocated_ents', []),
-                geo_confidence_threshold=self.geo_threshold
+                geo_confidence_threshold=self.geo_threshold,
+                geo_max_p_no_match=self.geo_max_p_no_match
             )
             try:
                 resolve_date(event)
             except Exception as exception:
                 logger.warning(f"{exception} parsing date for event number {n}")
 
-        if return_raw:
-            return event_list
-        else:
-            with jsonlines.open("events_processed.jsonl", "w") as f:
+        if not return_raw:
+            output_dir = self.output_dir if self.output_dir is not None else os.getcwd()
+            os.makedirs(output_dir, exist_ok=True)
+            path = os.path.abspath(os.path.join(output_dir, "events_processed.jsonl"))
+            with jsonlines.open(path, "w", dumps=_dumps_jsonl) as f:
                 f.write_all(event_list)
+            logger.info(f"Wrote {len(event_list)} event(s) to {path}")
+        return event_list
 

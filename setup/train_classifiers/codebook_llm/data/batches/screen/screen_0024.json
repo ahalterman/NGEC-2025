@@ -1,0 +1,81 @@
+[
+  {"id": "science-health_potential-new-malaria-vaccine-shows-77-efficacy-tria", "candidates": [], "quotes": {}},
+  {"id": "usa_experts-only-workers-rights-revolution-will-end-slavery", "candidates": [], "quotes": {}},
+  {"id": "east-asia-pacific_stars-come-out-china-mogul-announces-8-billion-film-park", "candidates": [], "quotes": {}},
+  {"id": "a_tillerson-meets-qatari-foreign-minister-on-persian-gulf-crisis_3918477", "candidates": ["CONSULT", "SUPPORT", "AGREE", "REQUEST", "ACCUSE", "SANCTION", "COERCE", "REJECT"], "quotes": {
+    "CONSULT": "met with top Qatari and Kuwaiti officials Tuesday",
+    "SUPPORT": "reaffirmed his strong support for Kuwait’s efforts to mediate the dispute",
+    "AGREE": "agreed that stopping terrorism and confronting extremism should be the shared and primary focus",
+    "REQUEST": "urged all sides to remain open to negotiations",
+    "ACCUSE": "accused Qatar on June 5 of supporting extremist groups and destabilizing the region",
+    "SANCTION": "imposed trade and diplomatic embargoes on Qatar",
+    "COERCE": "instituted a land, air and sea blockade of Qatar",
+    "REJECT": "have shown no willingness to ease their 13-point list of demands"
+  }},
+  {"id": "a_france-reveals-new-african-strategy_6980382", "candidates": ["PROTEST", "SANCTION"], "quotes": {
+    "PROTEST": "anti-France sentiment that has included street protests in some West and North African countries",
+    "SANCTION": "Mali has replaced the French troops stationed there with Russian military contractors"
+  }},
+  {"id": "a_israeli-pm-rejects-calls-for-cease-fire-in-war-on-hamas_7334061", "candidates": ["ASSAULT", "REJECT", "ACCUSE", "REQUEST", "RETREAT", "AID"], "quotes": {
+    "ASSAULT": "attacked the group's tunnel network in the northern Gaza Strip",
+    "REJECT": "Netanyahu has rejected calls from around the world for a cease-fire",
+    "ACCUSE": "accuses Hamas, a U.S.-designated terrorist group, of using civilians as shields",
+    "REQUEST": "reiterating his call for a humanitarian truce",
+    "RETREAT": "a female soldier held captive by Hamas militants was freed during Monday's ground operation",
+    "AID": "The number of aid trucks arriving in Gaza averages 14 a day"
+  }},
+  {"id": "economy-business_california-debates-future-uber-lyft-drivers", "candidates": ["PROTEST"], "quotes": {
+    "PROTEST": "Uber and Lyft drivers and supporters have held protests throughout the year demanding full benefits"
+  }},
+  {"id": "africa_stability-goal-lesotho-polls", "candidates": ["REJECT", "AGREE"], "quotes": {
+    "REJECT": "he denies there was ever a coup",
+    "AGREE": "we approached DC and we agreed to work together"
+  }},
+  {"id": "a_china-satellites-control-south-china-sea_4193499", "candidates": [], "quotes": {}},
+  {"id": "africa_suspected-boko-haram-insurgents-attack-cameroon-village", "candidates": ["ASSAULT", "MOBILIZE", "COERCE", "REQUEST"], "quotes": {
+    "ASSAULT": "attacked the locality of Gorsi Tourou in North Cameroon, burning churches and looting property",
+    "MOBILIZE": "deployed troops to areas where the militants attacked in the past",
+    "COERCE": "one of their vehicles and a war weapon of Kalashnikov type was seized",
+    "REQUEST": "to watch out and accompany our authorities and forces and defense forces"
+  }},
+  {"id": "economy-business_vietnams-focus-luxury-housing-risks-affordability-crisis", "candidates": ["AID"], "quotes": {
+    "AID": "it has allocated a package for what it calls dự án nhà ở xã hội"
+  }},
+  {"id": "usa_book-chronicles-mens-evolution-bread-winners-bread-bakers", "candidates": [], "quotes": {}},
+  {"id": "archive_south-african-legislator-calls-intensified-anti-corruption-fig", "candidates": ["ACCUSE", "REQUEST", "SANCTION"], "quotes": {
+    "ACCUSE": "has often accused the ruling African National Congress (ANC) of failing to aggressively prosecute offenders",
+    "REQUEST": "called on President Jacob Zuma to lead from the front in the fight against graft",
+    "SANCTION": "its leader, Julius Malema, was expelled from the ruling party"
+  }},
+  {"id": "europe_osce-agency-expresses-regret-over-death-kyrgyz-human-rights-defender", "candidates": ["REQUEST", "ACCUSE", "COERCE"], "quotes": {
+    "REQUEST": "I call on the authorities of Kyrgyzstan to implement the UN Human Rights Committee decision",
+    "ACCUSE": "noted serious violations of “fair trial standards and the failure of the authorities to address",
+    "COERCE": "the decision of Kyrgyzstan’s Supreme Court to uphold the life sentence imposed on Askarov"
+  }},
+  {"id": "usa_obama-urges-senators-delay-new-iran-sanctions", "candidates": ["REQUEST", "CONSULT"], "quotes": {
+    "REQUEST": "has asked lawmakers to delay any new sanctions against Iran",
+    "CONSULT": "President Obama hosted top senators at the White House Tuesday for talks"
+  }},
+  {"id": "europe_europe-races-reopen-schools-amid-covid-19-resurgence", "candidates": ["THREATEN", "COERCE"], "quotes": {
+    "THREATEN": "has threatened to fine parents who refuse to send their children back to school",
+    "COERCE": "high school pupils must now wear masks in communal areas"
+  }},
+  {"id": "iddle-east_syrian-opposition-groups-say-rebels-break-aleppo-siege", "candidates": ["ASSAULT"], "quotes": {
+    "ASSAULT": "rebels have broken the government siege of the northern city of Aleppo after fierce fighting"
+  }},
+  {"id": "europe_four-leaders-discuss-fragile-ukraine-cease-fire", "candidates": ["CONSULT", "AGREE", "CONCEDE", "REQUEST", "REJECT", "ACCUSE", "RETREAT", "ASSAULT", "AID"], "quotes": {
+    "CONSULT": "discussed the shaky cease-fire in eastern Ukraine in a four-way telephone conversation Thursday",
+    "AGREE": "the four leaders agreed that the \"fragile\" cease-fire needs to be \"stabilized,\"",
+    "CONCEDE": "agreed with the possibility of stationing a peacekeeping contingent",
+    "REQUEST": "calling for \"the deployment of a European Union operation\"",
+    "REJECT": "it would be \"impossible\" to send a \"military mission.”",
+    "ACCUSE": "Russian officials have sharply criticized Poroshenko's call for peacekeepers",
+    "RETREAT": "the withdrawal of heavy weapons from the conflict zone",
+    "ASSAULT": "reported observing intense fighting Sunday near Shyrokyne",
+    "AID": "the bloc will send a civilian \"assessment\" mission to explore ways to assist Ukraine"
+  }},
+  {"id": "usa_sheriff-las-vegas-gunman-fired-more-1100-rounds", "candidates": [], "quotes": {}},
+  {"id": "a_somalia-inches-toward-famine-amid-extreme-drought-_6876319", "candidates": ["AID"], "quotes": {
+    "AID": "the staff works to stabilize them and send them to hospitals"
+  }}
+]

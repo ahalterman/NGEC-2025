@@ -42,47 +42,56 @@ Create a `.env` file with the ES credentials.
 
 ## llama.cpp backend
 
-`backend="llamacpp"` talks to a *running* `llama-server` over HTTP — this
-repo never builds, quantizes, or launches one itself. For building llama.cpp
-and quantizing a checkpoint to GGUF, see the "Run locally on CPU" section of
-`demo/README.md`; `demo/deploy/README.md` covers the systemd unit for a
-deployed host.
-
-(Andy): to set up the llama.cpp server on my macbook, I had to clone the 
-llama.cpp repo to get access to a tool for converting the model from HF.
+`backend="llamacpp"` runs the model in-process through llama-cpp-python:
 
 ```shell
-uv run hf download ahalt/qwen3-event-extraction-exp5.1 \
-    --local-dir models/qwen3-event-extraction-exp5.1
-NGEC_DIR=$PWD
-cd ~/projects
-git clone --depth 1 https://github.com/ggml-org/llama.cpp llama.cpp
-LLAMA_DIR=$PWD/llama.cpp
-cd $NGEC_DIR
-uv run --with gguf --with safetensors --with sentencepiece python "$LLAMA_DIR"/convert_hf_to_gguf.py \
-    models/qwen3-event-extraction-exp5.1 \
-    --outfile attr-exp5.1-bf16.gguf --outtype bf16
-
-llama-quantize attr-exp5.1-bf16.gguf attr-exp5.1-q8.gguf Q8_0
-rm attr-exp5.1-bf16.gguf
+uv sync --extra cpu --extra llamacpp --group dev     # or add it to the extras you already use
 ```
 
-(I installed llama.cpp with homebrew otherwise, did not build from the cloned
-repo.)
+```python
+from ngec import AttributeModel
 
-To run the server:
+am = AttributeModel(backend="llamacpp")   # fetches the published Q8_0 GGUF on first use
+```
+
+pyproject.toml points `llama-cpp-python` at the project's own CPU wheel index,
+so nothing is compiled. The GGUF comes from `KNOWN_GGUF_FILES` in
+`ngec/llm/llamacpp.py` (or `gguf_path=` / `NGEC_ATTRIBUTE_GGUF`), and the HF
+model is still loaded for its tokenizer and chat template. Threads default to
+the performance cores, at most 8 (`NGEC_LLAMACPP_THREADS`).
+
+### Using a llama-server instead
+
+With `llamacpp_url=` or `NGEC_LLAMACPP_URL` set, the same backend talks to a
+running `llama-server` over HTTP instead. This is what the demo deployment
+does. This repo never builds or launches a server itself. For building
+llama.cpp and quantizing a checkpoint to GGUF, see the "Run locally on CPU"
+section of `demo/README.md`; `demo/deploy/README.md` covers the systemd unit
+for a deployed host.
+
+The default attribute model is published as a Q8_0 GGUF, so there is nothing
+to convert. Download it, and install llama.cpp (on a Mac, `brew install
+llama.cpp`):
 
 ```shell
-llama-server -m attr-exp5.1-q8.gguf --port 8080 -c 8192 -t 16 
+uv run hf download ahalt/qwen3.5-event-extraction-0.8b-GGUF \
+    qwen3.5-event-extraction-0.8b-Q8_0.gguf --local-dir models
 ```
 
-To try it out:
+To run the server, with `-t` set to the number of performance cores (letting
+llama.cpp use every core made this model much slower on a hybrid CPU):
+
+```shell
+llama-server -m models/qwen3.5-event-extraction-0.8b-Q8_0.gguf --port 8080 -c 8192 -t 8
+```
+
+To use it:
 
 ```python
 from ngec import AttributeModel
 
 am = AttributeModel(backend="llamacpp",
-                    model_name="ahalt/qwen3-event-extraction-exp5.1",
+                    model_name="ahalt/qwen3.5-event-extraction-0.8b",
                     llamacpp_url="http://127.0.0.1:8080")  # or set NGEC_LLAMACPP_URL
 ```
 

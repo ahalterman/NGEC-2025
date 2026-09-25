@@ -7,9 +7,21 @@ robust. It was written as part of the journal-article revise-and-resubmit, after
 a reviewer had trouble running the code.
 
 The reference orchestrator is `PloverCoder.process()` in `ngec/plover_coder.py`,
-which is also what the README and `tests/test_end_to_end.py` exercise. (The
-top-level `ngec_process.py` is an older CLI entry point that predates
-`PloverCoder` and is not the maintained path.)
+which is also what the README and `tests/test_end_to_end.py` exercise. (An
+older top-level `ngec_process.py` CLI that predated `PloverCoder` has been
+removed.)
+
+`PloverCoder` builds the six components itself. Its customization arguments
+pass straight through to them, so the data contracts below are unchanged by
+using them: `event_classifier` (any object whose `process()` adds
+`event_type`/`event_type_confidence`/`event_mode`, replacing step 1),
+`attribute_model_name` and `event_definitions_file` (step 4), and
+`agents_file` + `priorities_file` (step 5). For the default v6 model,
+`event_definitions_file` is a JSON file in the format of
+`ngec/assets/event_definitions_v6.json`, whose entries are added to (or
+replace, for the same type and mode) the definitions the model was trained on;
+a CSV is ignored under v6, with a warning. The legacy and v5 formats read a
+codebook CSV instead.
 
 ## The six steps
 
@@ -80,9 +92,30 @@ through to the raw output. Clean.
 
 ### Step 6: formatter (terminal) ⚠️ partial
 The active `process()` sets `event_location` (via `pick_event_loc`) and
-`date_resolved` (via `resolve_date`). Two other methods — `find_event_loc` and
+`date_resolved` (via `resolve_date`, which calls the public
+`resolve_date_text(text, pub_date)`). Two other methods — `find_event_loc` and
 `add_meta` — are **commented out** and expect an older attribute format (see
-"Format drift" below).
+"Format drift" below). With `return_raw=False` it writes
+`events_processed.jsonl`; the resolved dates are written as ISO strings there
+(an earlier version crashed on them with `TypeError: Object of type datetime is
+not JSON serializable`), while the returned events keep their `datetime`s.
+
+`pick_event_loc` matches the extracted location span ("through central
+Nairobi") to one of the places the geoparser found (`geolocated_ents`, by
+`search_name`). It first looks for places whose name occurs in the span as a
+whole word or phrase and takes the longest ("West Darfur" over "Darfur");
+names of three letters or fewer must match case exactly, so "us" is not "US".
+Only if none occurs does it fall back to the older character-alignment score
+(`word_overlap_fraction`, threshold 0.5) over the whole span. Either way the
+chosen place needs a geoparser score of at least 0.7 (0.85 before mordecai3
+3.5, whose calibrated scores made 0.85 reject many correct places), and a
+`p_no_match` (mordecai3's probability that the correct place is not in the
+gazetteer at all) of at most 0.5. Both are `PloverCoder` arguments
+(`geolocation_threshold`, `geolocation_max_p_no_match`). Before the
+whole-word step, a span with more than a bare leading preposition ("through
+central Nairobi", "in the Mexican state of Guerrero", "outside the parliament
+in Tbilisi", "near the border with Chad") matched nothing, because the
+alignment score divides by the length of the whole span.
 
 ---
 
@@ -315,6 +348,26 @@ on the string `"uncertain"` must switch to `date_type == "unresolved"`.
   with times and timezones, and without normalizing, branches that do arithmetic
   off the reference return tz-aware datetimes while branches that construct a
   date return naive ones — a column holding both is unusable in pandas.
+- **A missing publication date resolves nothing.** With no `pub_date`, every
+  span — even an absolute one like "March 3, 2021" — comes back
+  `resolved_date=None`, `date_type="unresolved"`, reason `<No publication
+  date>`, and nothing is logged, so a corpus loaded without its dates loses
+  them silently. A pandas NaN/NaT counts as missing, and so does a
+  `pub_date` string that stands for one ("nan", "NaT", "None", "null", "NA",
+  "N/A", in any case), which is what `str(row.date)` gives for a blank cell:
+  before this was checked, `dateparser` read the string `"nan"` as a real date
+  about a month before the day of the run (and "NA" as today), and misdated
+  every event. An unreadable `pub_date` string
+  ("20240612", "garbage") is also treated as missing, with a warning. Note
+  that an all-numeric `pub_date` like "05/06/2024" is read month first.
+- **"late last year" is late in the previous year.** A within-period
+  modifier on "last/previous year" or "last/previous month" ("early last
+  month", "the end of last year") is anchored to the period before the pub
+  date's. Before this had its own step, "last" was stripped as a past-tense
+  modifier and "late year" anchored to the pub-date year, so "late last year"
+  in a March 2024 story resolved to 2024-12-31, after the story.
+- **Standalone use.** `ngec.resolve_date_text(text, pub_date)` resolves one
+  phrase and returns the same dict the pipeline stores in `date_resolved`.
 - **A bare `-` is not a range separator** (it would wreck "mid-March", "Covid-19",
   and ISO dates). A hyphen with whitespace on both sides is, and day-of-month
   hyphen ranges ("March 15-20") get their own step that requires a flanking month
@@ -335,6 +388,26 @@ mentions by searching an Elasticsearch index of Wikipedia and then *ranking* the
 candidates it gets back with a small XGBoost model
 (`ngec/assets/xgb_model.json`). Retrieval and ranking fail in different ways and
 were fixed separately.
+
+### Splitting the mention first: `split_mention`
+
+Before anything is searched, `actor_to_code` takes the mention apart into a
+country, a description and a core name ("former British economist | Colin
+Powell"), so that the name is what gets searched and the description is scored
+against each candidate. `SPLITTER` in `actor_resolution.py` picks the
+implementation. **v3 (`mention_split_v3.py`) has been the default since
+2026-09-24.** It decides the cut with the PLOVER agents file (what looks like a
+role), the wiki index (what is an article title) and capitalisation, with no
+list of English role words, so a deployment adapts it by editing the agents
+file. v1, the original, takes the longest spaCy PERSON/ORG entity as the name;
+it cannot find "Modi" in "Indian nationalist Prime Minister Modi" when spaCy
+tags no entity there. v3 needs the `.keyword` sub-fields of a wiki index built
+from 2026-09 on and warns once if it is given an older one. It costs about
+45 ms per mention on a CPU against v1's 2.5 ms (about 8% of actor resolution).
+
+Whatever splitter runs, `actor_to_code`'s gate reads a spaCy parse of the span
+to keep generic collectives ("protesters") and unlinkable references away from
+Wikipedia; `parse_span` supplies that parse for every splitter.
 
 ### Retrieval: `ngec/actors/wiki_matcher.py`, `WikiSearcher.run_wiki_search`
 
@@ -413,6 +486,20 @@ all, three orders of magnitude cheaper, same accuracy). `WikiMatcher` applies th
 prefix to the story and the actor description only, never to article intros or
 short descriptions: those are the passages being searched, and getting it
 backwards is silent.
+
+### Two rankers: with and without the story
+
+A mention usually arrives with its story, and the ranker uses it (context
+similarity, people and places named in the story). A mention can also arrive
+alone -- the demo's single-actor lookup, or a caller with only a name -- and
+then every context feature is zero. `_call_ranker` therefore has a second slot
+for a ranker fit on rows generated with the story withheld
+(`xgb_model_static-mrl_nocontext.json`, named in `WIKI_ENCODERS` as
+`ranker_asset_no_context`, with its own threshold of 0.10). On the held-out
+gold documents it gets 78.7% top-1 without context, against 72.6% for the
+context ranker used in its place, which is what the pipeline did before
+2026-09-24. An encoder with no no-context ranker registered still uses its
+context ranker for both.
 
 ### The ranker asset and the features go together
 

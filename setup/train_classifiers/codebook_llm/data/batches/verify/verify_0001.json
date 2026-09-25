@@ -1,0 +1,213 @@
+[
+  {
+    "id": "iddle-east_top-tunisian-opposition-leader-murdered",
+    "label": 1,
+    "quote": "But some critics, including members of his family, are openly accusing Ennahda of being responsible for his death.",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "a_pakistan-arrests-opposition-senator-for-tweeting-against-powerful-military-chief-_6788132",
+    "label": 1,
+    "quote": "The party alleged the arrest was part of a government crackdown on political opponents and dissenting voices in Pakistan.",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "europe_us-blacklists-bulgarian-judge-over-alleged-involvement-significant-corruption",
+    "label": 1,
+    "quote": "accusing it of failing to tackle endemic corruption",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "americas_venezuelan-congress-rejects-constituent-assemblys-power-seizure",
+    "label": 1,
+    "quote": "denounced the decision, stressing that the constituent assembly had not provided any solutions to the problems of everyday people",
+    "modes": [
+      "disapprove"
+    ]
+  },
+  {
+    "id": "a_sen-katie-britt-calls-biden-diminished-leader-in-republican-response-to-state-of-the-union_7518934",
+    "label": 1,
+    "quote": "Britt slammed Biden’s foreign policy record, citing actions like the chaotic withdrawal from Afghanistan in 2021",
+    "modes": [
+      "disapprove"
+    ]
+  },
+  {
+    "id": "archive_ethiopian-un-security-official-trial-terroris",
+    "label": 1,
+    "quote": "accuses him of intent to forcefully overthrow Ethiopia's government as a leader of the banned Ogaden National Liberation Front",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "africa_zambia-official-demands-graft-inquiry-over-accusations",
+    "label": 1,
+    "quote": "critics accused him of nepotism and embezzling state funds",
+    "modes": [
+      "allege",
+      "investigate"
+    ]
+  },
+  {
+    "id": "student-union_new-glossary-essay-question-words",
+    "label": 0,
+    "quote": "",
+    "modes": []
+  },
+  {
+    "id": "arts-culture_metoo-casts-long-shadow-over-cosbys-sexual-assault-retria",
+    "label": 1,
+    "quote": "More than 60 women have accused Cosby of sexual assaults dating back decades.",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "africa_icc-we-wont-forget-kenyas-post-poll-violence-victims",
+    "label": 1,
+    "quote": "They accused the prosecutor and her team of appearing to be in a haste to make history by being the first to successfully prosecute a",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "a_azerbaijan-jailing-of-opposition-party-leader-highlights-criminalization-of-slander-_6496390",
+    "label": 1,
+    "quote": "his imprisonment is a violation of his freedom of expression and retaliation for his political activities",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "africa_ethiopia-supports-campaign-against-international-cour",
+    "label": 1,
+    "quote": "accused the ICC earlier this year of race hunting",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "archive_prosecution-rests-jackson-tria",
+    "label": 1,
+    "quote": "building a case that accused the singer of several felony crimes related to his alleged illicit relationship with a 13-year-old boy",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_white-house-adviser-conway-im-victim-sexual-assau",
+    "label": 1,
+    "quote": "who has been accused of sexual assault by one woman and sexual misconduct by two other women",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_prosecutors-want-call-19-other-accusers-cosby-retria",
+    "label": 1,
+    "quote": "The 80-year-old comedian is charged with knocking out a Temple University employee with pills and sexually assaulting her in 2004.",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_trump-impeachment_trumps-lawyers-defend-him-senate-impeachment-tria",
+    "label": 1,
+    "quote": "Trump is accused of pressuring Ukrainian President Volodymyr Zelenskiy during the July 25 call to open a corruption investigation into former Vice President Joe Biden",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "usa_white-house-adviser-defends-handling-abuse-accusations-against-key-aide",
+    "label": 1,
+    "quote": "his two ex-wives offered evidence that he struck them during their marriages",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_witness-stand-accuser-calls-bill-cosby-serial-rapis",
+    "label": 1,
+    "quote": "I want to see a serial rapist convicted",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_impeachment-whistleblower-agrees-answer-republican-questions",
+    "label": 1,
+    "quote": "We have serious questions about this individual's political bias and partisan motivations",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "africa_kenya-deputy-president-rutos-icc-trial-begin-tuesday",
+    "label": 1,
+    "quote": "The ICC accuses Ruto and President Uhuru Kenyatta of human rights abuses through involvement in Kenya’s 2007-2008 post-election violence",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "a_key-question-in-two-trump-cases-did-he-know-he-lost-_7234849",
+    "label": 1,
+    "quote": "issued a four-count indictment, accusing Trump of conspiracy to defraud the United States, conspiracy against the rights of citizens",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_trump-impeachment_fired-trump-basks-impeachment-acquitta",
+    "label": 1,
+    "quote": "The president singled out for criticism the lone Republican senator, Mitt Romney, who voted to remove him from office on the first article of impeachment",
+    "modes": [
+      "disapprove"
+    ]
+  },
+  {
+    "id": "usa_trump-impeachment_senators-be-sworn-trump-impeachment-tria",
+    "label": 1,
+    "quote": "Trump is accused of abusing his power by pressuring Ukraine to investigate former Vice President Joe Biden and his son, Hunter Biden",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "usa_trump-impeachment_voa-explains-trump-impeachmen",
+    "label": 1,
+    "quote": "allegations that Trump used the power of his office to solicit Ukrainian interference in the 2020 U.S. presidential election",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "a_trump-assails-prosecutor-judge-at-business-fraud-trial-_7436354",
+    "label": 1,
+    "quote": "The state has alleged that he and company officials routinely inflated the value of their company’s properties to get favorable rates on new bank loans",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  }
+]

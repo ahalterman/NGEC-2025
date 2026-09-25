@@ -1,6 +1,9 @@
 
 
-from ngec.utilities import stories_to_events, explode_events
+import json
+import os
+
+from ngec.utilities import stories_to_events, explode_events, write_intermediate
 
 
 
@@ -126,3 +129,58 @@ def test_events_without_mode_key():
     event_list = stories_to_events(story_list, doc_list=None)
 
     assert event_list == expected_output
+
+
+def test_write_intermediate_goes_to_given_dir(tmp_path):
+    out_dir = tmp_path / "debug" / "run1"   # does not exist yet
+    records = [{"id": "a"}, {"id": "b"}]
+    path = write_intermediate(records, "geolocation_output", str(out_dir))
+    assert os.path.isabs(path)
+    assert os.path.dirname(path) == str(out_dir)
+    assert path.endswith("_geolocation_output.jsonl")
+    with open(path) as f:
+        assert [json.loads(line) for line in f] == records
+
+
+def test_write_intermediate_defaults_to_cwd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = write_intermediate([{"id": "a"}], "attribute_output")
+    assert os.path.samefile(os.path.dirname(path), tmp_path)
+
+
+def test_events_to_table():
+    from datetime import datetime
+    from ngec.utilities import events_to_table
+
+    event = {
+        "id": "story1_PROTEST_demo_0", "orig_id": "story1", "pub_date": "2016-05-01",
+        "event_type": "PROTEST", "event_mode": "demo",
+        "attributes": {"anchor_quote": "Protesters marched",
+                       # "N/A" is skipped by actor resolution, so the table
+                       # must skip it too to keep text and codes aligned
+                       "actor": ["N/A", "Protesters", "union leaders"],
+                       "recipient": ["government"], "date": ["today"],
+                       "location": ["Paris"]},
+        "actor": [{"country": "", "code_1": "CVL", "code_2": "OPP", "wiki": ""},
+                  {"country": "FRA", "code_1": "LAB", "code_2": "", "wiki": ""}],
+        "recipient": [{"country": "FRA", "code_1": "GOV", "code_2": "", "wiki": "Government of France"}],
+        "event_location": {"event_loc": {"resolved_placename": "Paris", "country_code3": "FRA",
+                                         "lat": 48.85, "lon": 2.35, "geonameid": "2988507"},
+                           "reason": "success"},
+        "date_resolved": {"resolved_date": datetime(2016, 5, 1), "granularity": "day",
+                          "date_type": "exact"},
+    }
+    no_location = {"id": "story2_AID__0", "orig_id": "story2", "event_type": "AID",
+                   "attributes": {}, "event_location": {"event_loc": None, "reason": "no search term"}}
+
+    table = events_to_table([event, no_location])
+
+    row = table.iloc[0]
+    assert row["actor_text"] == "Protesters; union leaders"
+    assert row["actor_code"] == "CVL OPP; FRA LAB"
+    assert row["recipient_code"] == "FRA GOV"
+    assert row["recipient_wiki"] == "Government of France"
+    assert row["date"] == "2016-05-01"
+    assert row["location_name"] == "Paris"
+    assert len(table) == 2
+    assert table.iloc[1]["location_name"] is None

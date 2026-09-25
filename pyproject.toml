@@ -24,11 +24,18 @@ dependencies = [
     'elasticsearch-dsl==7.4.1',
     'hf-xet>=1.2.0,<2.0',
     'jsonlines>=4.0.0,<5.0',
-    'mordecai3>=3.4.0',
+    'mordecai3>=3.5.0',
     'numpy>=2.0.0,<3.0',
     'pandas>=2.2.0,<3.0',
+    # Not imported by NGEC itself. transformers 5.17 fails on import when Pillow
+    # is missing (NameError: PILImageResampling), and loading the event
+    # classifiers with skops imports it. torchvision brings Pillow in too, but
+    # this says so directly.
+    'pillow>=10.0',
     'platformdirs>=4.0.0,<5.0',
     'pylcs>=0.1.1,<1.0',
+    # Reads ES_HOST etc. from a .env file (ngec.es_client.es_client_from_env).
+    'python-dotenv>=1.0,<2.0',
     'rich>=14.0.0,<15.0',
     "scikit-learn<=1.7.2",  # see #24
     'sentence_transformers>=5.0.0,<6.0',
@@ -37,7 +44,18 @@ dependencies = [
     'tqdm>=4.60.0,<5.0',
     'textacy>=0.13.0,<1.0',
     'torch>=2.6.0,<3.0',
-    'transformers>=4.53.3,<5.0',
+    # Not imported by NGEC itself, and needed for the same reason as Pillow.
+    # Importing skops.io (to load the event classifiers) looks up scipy's ufuncs
+    # by name in every loaded module; if transformers 5 is already loaded, that
+    # lookup makes it import image processors that need torchvision, and
+    # without it the classifiers fail to load with
+    # "ModuleNotFoundError: No module named 'torchvision'". It is compiled
+    # against torch, so [tool.uv.sources] sends it to the same index.
+    'torchvision',
+    # 5.x is needed for the Qwen3.5 architecture of the default attribute model
+    # (ahalt/qwen3.5-event-extraction-0.8b) on the transformers backend.
+    # vLLM 0.19.1 excludes 5.0 through 5.5.0, hence the floor.
+    'transformers>=5.5.1,<6.0',
     'Unidecode>=1.4.0,<2.0',
     # The wiki ranker in assets/ is a saved xgboost model, so a major bump risks
     # a load failure or changed predictions.
@@ -65,12 +83,15 @@ ngec-doctor = "ngec.doctor:main"
 # [tool.uv.sources] below, so these extras only do their job under uv.
 cpu = [
     'torch>=2.6.0,<3.0',
+    'torchvision',
 ]
 cu12 = [
     'torch>=2.6.0,<3.0',
+    'torchvision',
 ]
 cu13 = [
     'torch>=2.6.0,<3.0',
+    'torchvision',
 ]
 
 # The two spaCy models the pipeline needs are deliberately not an extra; they are
@@ -87,7 +108,9 @@ vllm = [
     # CUDA 12 build (`libcudart.so.12`), and a CUDA 12 binary runs on CUDA 13
     # drivers too, so this ceiling is what makes the extra installable on the
     # widest set of machines. See the vLLM section of RUNNING.md.
-    'vllm>=0.19.0,<0.20',
+    # 0.19.0 requires transformers<5, which cannot load Qwen3.5 on the
+    # transformers backend; 0.19.1 allows transformers 5.5.1 and later.
+    'vllm>=0.19.1,<0.20',
     # vLLM only asks for xgrammar>=0.2.0, and uv locks the newest match. But
     # xgrammar 0.2.4 dropped Python 3.13 wheels and 0.2.5 ships 3.10 only, so
     # the unconstrained lock can't be installed. 0.2.3 has wheels for every
@@ -101,6 +124,18 @@ vllm = [
     'torchaudio',
 ]
 
+# llama.cpp backend, run in-process: the recommended backend on a CPU. It runs
+# the attribute model's 8-bit GGUF file, which AttributeModel downloads from
+# Hugging Face the first time. PyPI has only the source of llama-cpp-python, so
+# pip compiles llama.cpp unless pointed at the project's ready-built CPU wheels:
+#   pip install "ngec[llamacpp]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+# uv goes there on its own ([tool.uv.sources] below). 0.3.35 is the release
+# tested with the Qwen3.5 GGUF (architecture "qwen35"); older releases bundle a
+# llama.cpp that may predate it, and 0.4 may change the API.
+llamacpp = [
+    'llama-cpp-python>=0.3.35,<0.4',
+]
+
 # MLX backend (macOS only)
 mlx = [
     'mlx>=0.1.0; sys_platform == "darwin"',
@@ -110,6 +145,10 @@ mlx = [
 
 [tool.setuptools.packages.find]
 where = ["."] # Search for packages in the current directory
+# Only ship the `ngec` package. Without this, setuptools also picks up every
+# other top-level folder (tests/, setup/, demo/, elasticsearch/, ...) as a
+# namespace package and installs them into site-packages under those names.
+include = ["ngec*"]
 
 [tool.setuptools.package-data]
 ngec = [
@@ -160,8 +199,15 @@ name = "pytorch-cu13"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+# Ready-built CPU wheels of llama-cpp-python (PyPI has only the source), for
+# Linux x86-64 and ARM, Windows, and Apple Silicon Macs.
+[[tool.uv.index]]
+name = "llama-cpp-python-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
-# Send torch (and the two companion packages vllm pulls in) to whichever index
+# Send torch (and torchvision, and torchaudio for vllm) to whichever index
 # matches the extra that was selected. cu129 covers every 12.x driver: CUDA's
 # minor version compatibility means a 12.9 build runs on any driver from 525 on.
 torch = [
@@ -169,19 +215,23 @@ torch = [
     { index = "pytorch-cu12", extra = "cu12" },
     { index = "pytorch-cu13", extra = "cu13" },
 ]
-# torchvision and torchaudio only come in with vllm, which is CUDA 12 only, so
-# they have a single destination rather than one per extra.
+# torchvision is compiled against torch, so it follows torch. vllm is CUDA 12
+# only, so it sends torchvision (and torchaudio below) to cu12.
 torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu12", extra = "cu12" },
+    { index = "pytorch-cu13", extra = "cu13" },
     { index = "pytorch-cu12", extra = "vllm" },
 ]
 torchaudio = [
     { index = "pytorch-cu12", extra = "vllm" },
 ]
+llama-cpp-python = { index = "llama-cpp-python-cpu" }
 # Pinned to a specific commit, not to the default branch. mordecai3 is installed
 # from git and its Geoparser signature has changed under us before (which breaks
 # ngec/geolocation.py); since uv.lock is not committed, this rev is the only
 # thing recording which version the pipeline was run and tested against.
-mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "bc62487930793c059f34b92f0426a68dbd6ef5ff" }
+mordecai3 = { git = "https://github.com/ahalterman/mordecai3", rev = "ebc164a9a48952ec64a6e1a237409617bedfddf3" }
 
 [dependency-groups]
 # The spaCy models, as a dependency group rather than an extra, because a group

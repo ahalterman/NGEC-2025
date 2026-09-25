@@ -1,85 +1,89 @@
-"""NGEC demonstration app.
+"""Entry point: `streamlit run app.py`.
 
-Run it from this directory so that Streamlit picks up .streamlit/config.toml:
-
-    cd demo && uv run --group demo-app streamlit run app.py
-
-The app is organised in three sections. "See it work" is for someone who wants
-to know what the pipeline produces; "Look inside" walks the five steps of the
-framework, one page each, cross-referenced to the manuscript; "Make it yours"
-covers the customisations the paper claims are cheap, and shows what they
-actually cost.
+Eight pages -- one end-to-end run, one per pipeline step, a bulk uploader and a
+timing page. The sidebar says what is up, because half the demo needs
+Elasticsearch and a page that quietly returns nothing is worse than one that
+says the index is down. It also carries the GPU/CPU toggle -- both model sets
+stay loaded, so switching is a radio button rather than a restart -- and the
+button that loads the models.
 """
 
-import logging
+import os
 import sys
-from pathlib import Path
 
 import streamlit as st
 
-# The package needs Python 3.10+. The usual way to get this wrong is to run
-# `streamlit run app.py` with whichever streamlit happens to be on PATH (often a
-# system or conda 3.9) instead of `uv run --group demo-app streamlit run app.py`.
-# Without this check the first 3.10-only annotation raises a TypeError several
-# imports deep, which does not point at the cause.
-# (A linter will call this block dead code, because it checks against the version
-# in pyproject.toml. The whole point is the interpreter that ignored that.)
-if sys.version_info < (3, 10):  # noqa: UP036
-    st.error(
-        "This demo needs Python 3.10 or newer; it is running under "
-        f"Python {sys.version_info.major}.{sys.version_info.minor} "
-        f"({sys.executable}).\n\n"
-        "Streamlit was probably launched from a different environment than the "
-        "project's. From the `demo/` directory, run:\n\n"
-        "```shell\n"
-        "uv run --group demo-app streamlit run app.py\n"
-        "```"
-    )
-    st.stop()
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Allow `import ngec_demo` when Streamlit runs this file directly.
-sys.path.insert(0, str(Path(__file__).parent))
-
-from ngec_demo import ui  # noqa: E402
-
-ui.boot()
-
-try:
-    from ngec.logging import setup_logging
-
-    setup_logging(level=logging.WARNING, quiet_third_party=True)
-except Exception:  # noqa: BLE001 - logging setup must never block the app
-    logging.basicConfig(level=logging.WARNING)
+from ngec_demo import resources as R  # noqa: E402
+from ngec_demo.style import (gate, health_sidebar, inject_css,  # noqa: E402
+                             load_models_button, mode_badge)
 
 
-def page(path: str, title: str, url_path: str, icon: str = "", default: bool = False):
-    return st.Page(f"pages/{path}", title=title, url_path=url_path,
-                   icon=icon or None, default=default)
+def main() -> None:
+    st.set_page_config(page_title="NGEC", page_icon=":material/schema:",
+                       layout="centered")
+    inject_css()
+
+    # Before the navigation is built, so that no page runs for a visitor
+    # who has not entered the password.
+    gate()
+
+    # No icons: the step pages are already numbered, and a rail of emoji is the
+    # first thing that breaks the deadpan look.
+    pages = [
+        st.Page("views/home.py", title="NGEC", default=True),
+        st.Page("views/step1.py", title="1. Event Detection"),
+        st.Page("views/step2.py", title="2. Attribute Extraction"),
+        st.Page("views/step3.py", title="3. Linking Entities to Wikipedia"),
+        st.Page("views/step4.py", title="4. Categorizing Entities"),
+        st.Page("views/step5.py", title="5. Dates and Locations"),
+        st.Page("views/bulk.py", title="Bulk"),
+        st.Page("views/timing.py", title="Timing"),
+    ]
+
+    page = st.navigation(pages)
+
+    # The toggle writes st.session_state["mode"] itself, and it is drawn before
+    # anything else so that R.current_mode() -- which reads that key -- is right for
+    # the health block and for the page.
+    MODES = R.available_modes()
+    if len(MODES) > 1:
+        _env = os.environ.get("NGEC_DEMO_MODE", "").strip().lower()
+        st.sidebar.radio("Compute", MODES, key="mode", horizontal=True,
+                         index=MODES.index(_env) if _env in MODES else 0,
+                         format_func=mode_badge)
+    else:
+        st.session_state["mode"] = MODES[0]
+        st.sidebar.caption(f"Compute · {mode_badge(MODES[0])}")
+
+    # Both blocks below say whether the models are loaded, and the page is what
+    # loads them: a run that starts cold finishes warm, and a sidebar drawn
+    # first would still say "not loaded" beside a page saying "models loaded in
+    # 11 s". So their places in the sidebar are reserved here, the page runs,
+    # and the slots are filled afterwards, with the state at the end of the run.
+    load_slot = st.sidebar.container()
+    health_slot = st.sidebar.container()
+
+    page.run()
+
+    # Loading the models is the demo's one long wait. It happens on the first
+    # click of any page anyway; the button lets a visitor start it deliberately,
+    # with a status that names each component, instead of meeting it as a hang.
+    with load_slot:
+        load_models_button(st.session_state["mode"])
+
+    # The classifier's DemoModelWarning is captured at load time and parked in
+    # session state; showing it here means it is said once, not on every rerun.
+    with health_slot:
+        health_sidebar(R.health(st.session_state["mode"]),
+                       st.session_state.get("model_notes", []),
+                       mode=st.session_state["mode"])
 
 
-navigation = {
-    "See it work": [
-        page("home.py", "Start here", "home", default=True),
-        page("end_to_end.py", "Document → events", "end_to_end"),
-    ],
-    "Look inside": [
-        page("step1_detection.py", "1 · Event detection", "step1"),
-        page("step2_attributes.py", "2 · Attribute extraction", "step2"),
-        page("step3_entities.py", "3 · Entity linking", "step3"),
-        page("step4_categories.py", "4 · Entity categorisation", "step4"),
-        page("step5_dates_places.py", "5 · Dates and places", "step5"),
-    ],
-    "Hard cases": [
-        page("echoes.py", "Temporal echoes", "echoes"),
-        page("coref.py", "Coreference", "coref"),
-        page("nonenglish.py", "Non-English text", "nonenglish"),
-        page("vs_llm.py", "Against a frontier LLM", "vs_llm"),
-    ],
-    "Make it yours": [
-        page("customize_codebook.py", "Your event types", "your_events"),
-        page("customize_actors.py", "Your actor categories", "your_actors"),
-        page("setup_cost.py", "What setup actually costs", "setup"),
-    ],
-}
-
-st.navigation(navigation).run()
+# vllm starts its engine in a *spawned* child process, and spawn re-imports the
+# main script -- which under Streamlit is this file. Without the guard the child
+# would run the app body, hit session state with no runtime, and the engine
+# would die before it started. Spawned children import as "__mp_main__".
+if __name__ == "__main__":
+    main()

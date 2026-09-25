@@ -1,0 +1,206 @@
+[
+{
+"id": "a_major-brands-face-backlash-in-india-over-kashmir-tweets_6435161",
+"label": 1,
+"quote": "social media users began calling for a boycott of Hyundai products",
+"modes": [
+"boycott"
+]
+},
+{
+"id": "archive_iraqi-us-forces-brace-more-violence-elections-approac",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "americas_honduras-officials-hand-count-final-votes",
+"label": 1,
+"quote": "rock-wielding protesters have increasingly taken to the streets against riot police armed with tear gas, batons and water cannons",
+"modes": [
+"riot",
+"obstruct"
+]
+},
+{
+"id": "east-asia-pacific_korean-peninsula-obama-mark-armistice-anniversary",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "world-news_middle-east-dont-use_assassination-roils-tunisia",
+"label": 1,
+"quote": "police clashed with protesters and lobbed tear gas after the ruling Islamist Ennahdha party rejected a plan to form a new government",
+"modes": [
+"demo",
+"riot"
+]
+},
+{
+"id": "a_iran-releases-dissident-soccer-star-on-bail-_6851757",
+"label": 1,
+"quote": "he began a hunger strike that lasted two months",
+"modes": [
+"hunger"
+]
+},
+{
+"id": "africa_chinese-diplomat-hopes-zambian-labor-violence-limited",
+"label": 1,
+"quote": "The protesting workers claimed the Collum Coal Mine management had been delaying implementing the new minimum wage policy",
+"modes": [
+"demo"
+]
+},
+{
+"id": "usa_pandemic-complicates-battle-us-senate-contro",
+"label": 1,
+"quote": "protests by the armed militia group ReopenNC for several weeks running in the state capital of Raleigh",
+"modes": [
+"demo"
+]
+},
+{
+"id": "south-central-asia_india-farm-protests-highlight-countrys-youth-unemployment-crisis",
+"label": 1,
+"quote": "hundreds of farmers stormed into New Delhi and breached the historic Red Fort and more clashes Friday at one of the main protest sites",
+"modes": [
+"demo",
+"riot"
+]
+},
+{
+"id": "europe_large-protests-against-belarus-lukashenko-persis",
+"label": 1,
+"quote": "Tens of thousands of protesters marched through Minsk on Sunday calling for President Alexander Lukashenko to resign",
+"modes": [
+"demo",
+"riot"
+]
+},
+{
+"id": "south-central-asia_worlds-largest-election-gets-underway-india",
+"label": 1,
+"quote": "despite a call to boycott the polls",
+"modes": [
+"boycott"
+]
+},
+{
+"id": "east-asia_displaced-cambodians-march-world-habitat-day",
+"label": 1,
+"quote": "More than 1,000 people marched on the Cambodian National Assembly, many displaced from land disputes, to mark World Habitat Day",
+"modes": [
+"demo"
+]
+},
+{
+"id": "europe_new-channel-tunnel-chaos-attracts-would-be-stowaways",
+"label": 1,
+"quote": "labor protests by ferry workers brought traffic to a halt",
+"modes": [
+"strike",
+"obstruct"
+]
+},
+{
+"id": "a_taliban-disrupt-women-s-protest-of-education-ban-_7022631",
+"label": 1,
+"quote": "A small group of female activists staged a protest rally in the Afghan capital, Kabul, Sunday, demanding that Taliban authorities reopen schools and universities for",
+"modes": [
+"demo"
+]
+},
+{
+"id": "archive_israel-charges-palestinian-parliament-speaker-membership-outlawed-organization",
+"label": 1,
+"quote": "Palestinian civil servants, including teachers, said Tuesday they will begin an open-ended strike on September 2, the first day of the school year",
+"modes": [
+"strike"
+]
+},
+{
+"id": "europe_french-government-open-labor-reform-tweaks-after-street-protests",
+"label": 1,
+"quote": "Students and unions staged rallies across the country on Wednesday against the far-reaching labor reform plans, with the official Interior Ministry figure of 224,000 protesters",
+"modes": [
+"demo"
+]
+},
+{
+"id": "americas_us-navy-veteran-killed-nicaraguan-prison",
+"label": 1,
+"quote": "He had been jailed after protesting against Nicaraguan President Daniel Ortega in October last year, during protests that have killed at least 300 people",
+"modes": [
+"demo"
+]
+},
+{
+"id": "europe_moldova-holds-first-direct-presidential-poll-1990s",
+"label": 1,
+"quote": "Street protests erupted and the International Monetary Fund and the European Union froze aid to Moldova",
+"modes": [
+"demo"
+]
+},
+{
+"id": "europe_opposition-candidate-says-ready-lead-belarus",
+"label": 1,
+"quote": "as many as 200,000 protesters marched in the Belarusian capital, Minsk, far outnumbering the crowd of Lukashenko supporters who also marched",
+"modes": [
+"demo",
+"strike"
+]
+},
+{
+"id": "usa_governments-send-planes-evacuate-citizens-egyp",
+"label": 1,
+"quote": "anti-government protests raged in that nation for a sixth day",
+"modes": [
+"demo",
+"riot"
+]
+},
+{
+"id": "africa_congo-opposition-meet-western-envoys",
+"label": 1,
+"quote": "violent clashes between police and opposition supporters left at least four people dead and many injured",
+"modes": [
+"demo",
+"riot"
+]
+},
+{
+"id": "europe_uk-parliament-overwhelmingly-rejects-mays-brexit-dea",
+"label": 1,
+"quote": "rival bands of pro-EU and pro-Brexit protesters kept up a steady cacophony of chants, drums and music",
+"modes": [
+"demo"
+]
+},
+{
+"id": "world-news_middle-east-dont-use_syria-criticizes-arab-league-committee-chiefs-comments",
+"label": 1,
+"quote": "More than 50 opponents of President Assad rallied outside the Cairo hotel where the Arab ministers met, chanting anti-Assad slogans",
+"modes": [
+"demo"
+]
+},
+{
+"id": "east-asia_taiwan-jumps-support-hong-kong-protesters",
+"label": 1,
+"quote": "Street demonstrations began Sunday with hundreds of thousands protesting a proposed law that would let Hong Kong extradite criminal suspects to mainland China",
+"modes": [
+"demo"
+]
+},
+{
+"id": "covid-19-pandemic_spain-orders-new-lockdown-measures-madrid-after-covid-19-cases-spike",
+"label": 1,
+"quote": "the mass weekly protests that have been staged near Netanyahu’s official residence in Jerusalem for the past several months",
+"modes": [
+"demo"
+]
+}
+]
