@@ -32,8 +32,9 @@ own types given a definition (`ngec guide customize`).
 ```python
 from ngec import AttributeModel
 
-# backend="vllm", gpu=True on Linux with an NVIDIA GPU; "mlx" on a Mac.
-attribute_model = AttributeModel(backend="transformers")
+# The default backend ("auto") picks vLLM, MLX or llama.cpp for this machine;
+# see `ngec guide setup`.
+attribute_model = AttributeModel()
 records = [{"id": "doc1",
             "event_text": "Police fired tear gas at protesters in Harare on Monday.",
             "event_type": "PROTEST",

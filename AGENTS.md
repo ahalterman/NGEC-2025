@@ -46,7 +46,7 @@ The maintained end-to-end path is `PloverCoder.process()` in
    records needs to carry it.
 4. **Attribute extraction** — `ngec/attribute_model.py` `AttributeModel` (an LLM,
    `ahalt/qwen3.5-event-extraction-0.8b` by default, via
-   vllm/transformers/mlx/llamacpp). The model is selectable with `model_name=`
+   vllm/llamacpp/mlx; transformers is deprecated). The model is selectable with `model_name=`
    or `NGEC_ATTRIBUTE_MODEL`. The default is the Qwen3.5-0.8B student trained in
    `~/projects/train_NGEC_2026` (model card and definitions in
    `setup/hf_release/`). `ahalt/qwen3-event-extraction-exp5.1` (the submitted
@@ -140,8 +140,15 @@ contract; reconcile or delete them.
   (`ngec/models.py`) installs them and also pre-fetches the Hugging Face models
   (the three sentence encoders and the attribute LLM), resolving each name the
   same way the pipeline does, env-var overrides included.
-- Backends for the attribute LLM: `vllm` (default, Linux/CUDA), `transformers`
-  (slow, portable, used in tests), `mlx` (macOS).
+- Backends for the attribute LLM: `auto` is the default for `PloverCoder` and
+  `AttributeModel` (`ngec.llm.choose_backend`: vllm if installed with CUDA,
+  mlx on Apple Silicon if installed, else llamacpp). `vllm` (Linux/CUDA);
+  `llamacpp` (CPU: in-process through llama-cpp-python and the published Q8_0
+  GGUF, `KNOWN_GGUF_FILES` in `ngec/llm/llamacpp.py`; or a `llama-server` when
+  `NGEC_LLAMACPP_URL` / `llamacpp_url=` is set, which is what the demo
+  deployment uses); `mlx` (macOS); `transformers` (deprecated and logs a
+  warning, but the tests and substantive tests still use it because it needs
+  no extra and no server).
 - Steps 5 (actor resolution) and the end-to-end test require a running
   **Elasticsearch** with wiki + geonames indices. Put ES credentials in a `.env`
   file. `ngec/es_client.py` / `setup_es_client` handle the connection.

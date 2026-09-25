@@ -59,7 +59,8 @@ In outline, in a uv project:
 ```shell
 uv add torch --index pytorch=https://download.pytorch.org/whl/cu129   # match the machine
 uv add "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-uv add "ngec @ git+https://github.com/ahalterman/ngec-2025"         # ngec[vllm] for vLLM
+uv add "ngec[llamacpp] @ git+https://github.com/ahalterman/ngec-2025" \
+    --index https://abetlen.github.io/llama-cpp-python/whl/cpu      # on a CPU; ngec[vllm] with an NVIDIA GPU
 uv run ngec download-models                                          # ~3 GB
 ```
 
@@ -89,17 +90,43 @@ descriptions.
 index has. Trust its verdict: an older index has somewhat fewer documents
 and works, while one far short of that is a load that stopped partway.
 
+## Keeping it up to date
+
+`ngec update` says whether newer models or a newer Elasticsearch index have
+been published, and changes nothing. `ngec update --apply` installs them: it
+replaces the running index, which stops Elasticsearch for about a minute.
+**Ask the user before running `--apply`.** Newer models and a newer index
+change the coded output, so a user in the middle of a project may want to
+keep what they have, and should record the change if they update.
+
 ## Choosing a backend for the attribute model
 
-| Backend | Where | Speed |
-|---|---|---|
-| `vllm` | Linux + NVIDIA | fastest; for corpora |
-| `transformers` | anywhere | slow on CPU; `gpu=True` uses a GPU |
-| `mlx` | Apple Silicon | install `ngec[mlx]` |
-| `llamacpp` | CPU machines, via a running `llama-server` | reasonable on CPU |
+Attribute extraction is where almost all the running time goes. By default
+(`backend="auto"`) NGEC picks: vLLM if it is installed and there is an NVIDIA
+GPU, MLX on an Apple Silicon Mac if it is installed, and llama.cpp otherwise.
+It logs which one it chose, and if the package is missing it says what to
+install.
 
-`PloverCoder(attribute_backend=...)` picks it. For a few stories,
-`transformers` on the CPU is fine. For thousands, a GPU with `vllm` saves hours.
+| Backend | For | Install | Speed |
+|---|---|---|---|
+| `vllm` | Linux with an NVIDIA GPU | `ngec[vllm]` (with the CUDA 12 PyTorch, see the README) | fastest; for large corpora |
+| `llamacpp` | any CPU: laptops, Windows, servers without a GPU | `ngec[llamacpp]`, with `--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu` | about 4.6 s per story and event type on a desktop CPU |
+| `mlx` | a Mac with Apple Silicon | `ngec[mlx]` | not measured |
+| `transformers` | deprecated | built in | about 3x slower than llamacpp on a CPU, twice the memory |
+
+The time is per story *and event type*: a story with three detected event
+types is three prompts, so about 14 seconds with llamacpp on a desktop CPU,
+and more on a laptop. Time a batch of 20 stories on the user's machine before
+promising anything.
+
+llamacpp runs the model inside Python from a quantized copy (an 834 MB GGUF
+file, fetched the first time, or ahead of time by `ngec download-models`).
+Quantizing costs nothing measurable in accuracy. It uses one thread per
+performance core, up to 8; `NGEC_LLAMACPP_THREADS` changes that, but more
+threads are usually slower on CPUs that also have efficiency cores. Without
+the extra index, pip compiles llama.cpp from source, which needs a C++
+compiler and CMake. To use a separately running `llama-server` instead, set
+`NGEC_LLAMACPP_URL`.
 
 ## pip or git clone?
 

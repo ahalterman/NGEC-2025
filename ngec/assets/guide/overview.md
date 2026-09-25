@@ -121,7 +121,11 @@ Event data built with NGEC ends up in papers. Help the user record:
   `NGEC_ATTRIBUTE_MODEL` setting),
 - any custom files (definitions, agents file) alongside the output,
 - the date of the Wikipedia and GeoNames indices, since actor linking depends
-  on them.
+  on them (`ngec update` reports the installed versions; don't update in the
+  middle of a project without telling the user),
+- the attribute model's backend: llama.cpp runs a quantized copy of the model,
+  and its output differs slightly from vLLM's or transformers' on a few
+  documents.
 
 The default attribute model, `ahalt/qwen3.5-event-extraction-0.8b`, decodes
 greedily, so reruns on one machine give the same spans. The paper's model is

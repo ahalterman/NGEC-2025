@@ -83,27 +83,31 @@ pip keeps an installed PyTorch when you install NGEC afterwards, as long as it i
 
 ### Step 3. Install NGEC
 
-In the same project folder, install NGEC and [mordecai3](https://github.com/ahalterman/mordecai3), which geocoding depends on. Both are in active development, so install both from GitHub:
+In the same project folder, install NGEC and [mordecai3](https://github.com/ahalterman/mordecai3), which geocoding depends on. Both are in active development, so install both from GitHub. NGEC also needs a backend to run its attribute-extraction model. On a computer without an NVIDIA GPU, which is most laptops, that is llama.cpp, which runs the model on the CPU:
 
 ```shell
 uv add "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-uv add "ngec @ git+https://github.com/ahalterman/ngec-2025"
+uv add "ngec[llamacpp] @ git+https://github.com/ahalterman/ngec-2025" \
+    --index https://abetlen.github.io/llama-cpp-python/whl/cpu
 ```
+
+The extra index has ready-built llama.cpp wheels. Without it, llama.cpp is compiled on your machine, which needs a C++ compiler and CMake. On Linux with an NVIDIA GPU, install `ngec[vllm]` instead (see below), and on a Mac with Apple Silicon, `ngec[mlx]`. NGEC picks whichever backend is installed.
 
 <details>
 <summary>With pip instead of uv</summary>
 
 ```shell
 pip install "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-pip install "ngec @ git+https://github.com/ahalterman/ngec-2025"
+pip install "ngec[llamacpp] @ git+https://github.com/ahalterman/ngec-2025" \
+    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 ```
 
 </details>
 
 <details>
-<summary>A faster inference backend (optional, Linux + NVIDIA)</summary>
+<summary>The vLLM backend (Linux + NVIDIA)</summary>
 
-The default backend is `transformers`: portable and slow. On CUDA, vLLM is much faster. Instead of the `ngec` line above:
+On a machine with an NVIDIA GPU, vLLM is much faster than llama.cpp. Instead of the `ngec` line above:
 
 ```shell
 uv add "ngec[vllm] @ git+https://github.com/ahalterman/ngec-2025"
@@ -113,7 +117,7 @@ With pip, the same with `pip install`.
 
 The pinned vLLM (`>=0.19,<0.20`) is the last CUDA 12 build, which runs on both CUDA 12 and CUDA 13 drivers. It requires exactly `torch==2.10.0`, and vLLM's compiled code needs the CUDA 12 runtime that a CUDA 12 PyTorch build brings along. That is why step 2 has a separate command for vLLM: a CUDA 13 build of torch 2.10.0 satisfies the version pin, so it is kept, and vLLM then fails when it loads.
 
-vLLM publishes Linux wheels only. On Windows it runs under WSL. Wherever vLLM won't install, the `transformers` backend with `gpu=True` still uses the GPU. macOS users can try `ngec[mlx]` instead.
+vLLM publishes Linux wheels only. On Windows it runs under WSL, or use llama.cpp on the CPU.
 
 </details>
 
@@ -267,13 +271,12 @@ setup_logging(
 # Connect to ES
 es_client = setup_es_client(hosts=["localhost"], port=9200)
 
-# `gpu=True` and/or attribute_backend="vllm" are much faster on a corpus.
+# The attribute model's backend is picked for this machine (vLLM with an
+# NVIDIA GPU, MLX on Apple Silicon, llama.cpp otherwise); it logs which.
 # `event_threshold` is left unset on purpose: that uses the per-type thresholds
 # recorded with the classifier. Setting it applies one threshold to every
 # event type instead.
-pc = PloverCoder(es_client=es_client,
-                 attribute_backend="transformers",
-                 gpu=False)
+pc = PloverCoder(es_client=es_client)
 
 story_list = [
         {"id": "story1", "event_text": "Protesters were in the streets in Paris again today to protest against the government's austerity measures.", "pub_date": "2016-05-01"}
