@@ -1,5 +1,6 @@
 from collections import Counter
 from copy import deepcopy
+from datetime import date, datetime
 from importlib import resources
 import logging
 import os
@@ -12,12 +13,33 @@ from rich.progress import track
 
 from .common import ModelManager, clean_query, CountryDetector
 from .agent_matcher import AgentMatcher
+from ..formatter import _is_missing, country_name_dict
 from ..utilities import write_intermediate
 from .wiki_matcher import WikiMatcher
 
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+# ISO-3 code -> country name, for converting a `known_country` code. "IGO" is
+# in countries.csv's lookup as a pseudo-country; it is not one here.
+COUNTRY_NAMES = {code: name for code, name in country_name_dict().items()
+                 if code and code != "IGO"}
+
+# For recognizing US House seats in Wikipedia infoboxes (see _parse_congress_seats).
+US_STATES = {
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine",
+    "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+    "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+    "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+    "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
+    "Washington", "West Virginia", "Wisconsin", "Wyoming",
+    "District of Columbia", "Puerto Rico", "Guam", "American Samoa",
+    "U.S. Virgin Islands", "Northern Mariana Islands",
+}
 
 
 
@@ -775,8 +797,50 @@ class WikiParser:
                 offices.append(office)
             except KeyError:
                 continue
-                
+
+        offices.extend(self._parse_congress_seats(infobox, offices))
         return offices
+
+    def _parse_congress_seats(self, infobox, offices):
+        """
+        Seats in the US Congress, which the officeholder infobox records
+        without an `office` field.
+
+        A senator's seat is `jr/sr{n}` ("United States Senator") next to
+        `state{n}`; a representative's is `state{n}` next to `district{n}`
+        (or `constituency{n}`).
+        Without this, a sitting member of Congress got no office at all, and
+        their code fell back to the article's short description ("American
+        politician and activist" -> civilian opposition).
+
+        A House seat is only recognized when the state is a US state or
+        territory, since infoboxes for other countries also use `state` and
+        `district`.
+        """
+        already_numbered = {office["office_num"] for office in offices}
+        seats = []
+        for key in infobox:
+            match = re.fullmatch(r"state(\d*)", key)
+            if not match or match.group(1) in already_numbered:
+                continue
+            num = match.group(1)
+            state = str(infobox[key]).strip()
+            senate = str(infobox.get(f"jr/sr{num}", "")).strip()
+            if senate:
+                seat = f"{senate} from {state}" if state else senate
+            elif state in US_STATES and (f"district{num}" in infobox
+                                         or f"constituency{num}" in infobox):
+                district = str(infobox.get(f"district{num}")
+                               or infobox.get(f"constituency{num}") or "").strip()
+                seat = "Member of the U.S. House of Representatives from " + state
+                if district:
+                    seat += f"'s {district} district"
+            else:
+                continue
+            term_start, term_end = self._parse_office_term_dates(infobox, key, num)
+            seats.append({"office": seat, "office_num": num,
+                          "term_start": term_start, "term_end": term_end})
+        return seats
 
     def get_current_office(self, offices, query_date):
         """
@@ -789,9 +853,13 @@ class WikiParser:
         Returns:
             tuple: (active_offices, detected_countries)
         """
-        # Parse query date if it's a string
+        # Parse query date if it's a string. A plain date (no time) has to
+        # become a datetime: comparing the two raises a TypeError, which the
+        # loop below catches, so no office would ever count as current.
         if isinstance(query_date, str):
             query_date = dateparser.parse(query_date)
+        elif isinstance(query_date, date) and not isinstance(query_date, datetime):
+            query_date = datetime(query_date.year, query_date.month, query_date.day)
             
         active_offices = []
         detected_countries = []
@@ -1575,12 +1643,22 @@ class ActorResolver:
                 this function needs.
             context: Additional context to help with disambiguation
             query_date: Date to use when determining current offices
-            known_country: Country code if already known
+            known_country: The actor's country, if the caller already knows it,
+                used to narrow the Wikipedia search. A country name ("Germany")
+                or an ISO-3 code ("DEU"); a code is converted to the name the
+                search expects.
             search_limit_term: Term to limit Wikipedia search results
             
         Returns:
             dict or None: Actor code information or None if resolution fails
         """
+        # The splitters and the Wikipedia search expect a country name. Accept
+        # an ISO-3 code too, since that is what most datasets carry; before
+        # this, a code was passed through as a "name" and silently narrowed
+        # the search to nothing useful.
+        if known_country and known_country.upper() in COUNTRY_NAMES:
+            known_country = COUNTRY_NAMES[known_country.upper()]
+
         # Check cache first. The key includes the context and country because
         # the same mention ("the Liberal Party") resolves differently in
         # different documents; keying on the mention alone would return the
@@ -1819,8 +1897,14 @@ class ActorResolver:
 
         for event in track(event_list, description="Resolving actors..."):
 
-            # Get the date from the event
-            query_date = event.get('pub_date', "today")
+            # Get the date from the event. A missing publication date (None,
+            # NaN, or a string such as "nan" from a blank spreadsheet cell) is
+            # treated like an absent one, instead of being handed to
+            # dateparser, which reads "nan" as a date about a month before
+            # the day of the run.
+            query_date = event.get('pub_date')
+            if _is_missing(query_date):
+                query_date = "today"
 
             # 'attributes' is a single dict (one event per record). .get() guards
             # against a record with no attributes.
