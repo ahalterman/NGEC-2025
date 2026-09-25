@@ -625,6 +625,16 @@ def load_es(file, es_batch, threads, drop=False):
 
     # Create the index with our mapping if it doesn't already exist.
     # Pass --drop to delete the old index first (records before stats before deleting).
+    # Relax disk watermarks before creating the index: on a disk more than 95%
+    # full, ES's default flood stage makes the new index read-only at once and
+    # every bulk request fails with a 429 cluster_block_exception. Same values
+    # as the geonames loader; transient, so an ES restart restores the defaults.
+    es.cluster.put_settings(body={"transient": {
+        "cluster.routing.allocation.disk.watermark.low": "10gb",
+        "cluster.routing.allocation.disk.watermark.high": "5gb",
+        "cluster.routing.allocation.disk.watermark.flood_stage": "4gb",
+    }})
+
     if not es.indices.exists(index="wiki"):
         logger.info("Creating 'wiki' index in Elasticsearch")
         with open(MAPPING_PATH, "r") as f:

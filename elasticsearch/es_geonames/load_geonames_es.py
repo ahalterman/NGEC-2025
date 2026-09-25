@@ -299,6 +299,21 @@ def recreate_index():
 
     The co-resident "wiki" index is not touched.
     """
+    # Relax disk watermarks BEFORE creating the index. On a disk more than 95%
+    # full, ES's default flood stage marks a new index read-only the moment it
+    # exists, and the put_settings below (and every bulk request) fails with a
+    # 429 cluster_block_exception.
+    es.cluster.put_settings(
+        body={
+            "transient": {
+                "cluster.routing.allocation.disk.watermark.low": "10gb",
+                "cluster.routing.allocation.disk.watermark.high": "5gb",
+                "cluster.routing.allocation.disk.watermark.flood_stage": "4gb",
+                "cluster.info.update.interval": "1m",
+            }
+        }
+    )
+
     if es.indices.exists(index="geonames"):
         print("Deleting existing 'geonames' index ...")
         es.indices.delete(index="geonames")
@@ -312,17 +327,6 @@ def recreate_index():
     # Set it again here so a hand-edited mapping can't reintroduce that.
     es.indices.put_settings(index="geonames", body={"index": {"number_of_replicas": 0}})
 
-    # Relax disk watermarks so a large bulk load isn't blocked on a full-ish disk.
-    es.cluster.put_settings(
-        body={
-            "transient": {
-                "cluster.routing.allocation.disk.watermark.low": "10gb",
-                "cluster.routing.allocation.disk.watermark.high": "5gb",
-                "cluster.routing.allocation.disk.watermark.flood_stage": "4gb",
-                "cluster.info.update.interval": "1m",
-            }
-        }
-    )
 
 
 def load(data_dir):
