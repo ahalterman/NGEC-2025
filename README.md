@@ -240,6 +240,7 @@ This adds a short section to `AGENTS.md` in your project folder (creating the fi
 | Command | What it does |
 |---|---|
 | `ngec download-models` | downloads the spaCy, sentence-transformer and attribute models ([step 4](#step-4-download-the-models)) |
+| `ngec download-index` | downloads and unpacks the pre-built Elasticsearch index; `--start` also starts Elasticsearch on it |
 | `ngec doctor` | checks the installation and prints the fix for anything wrong; `--smoke` also runs the pipeline on three stories |
 | `ngec guide` | prints the guide for coding agents; `--init` points your project's `AGENTS.md` at it |
 | `python3 setup/doctor/ngec_doctor.py` | in a clone only: checks a machine before anything is installed |

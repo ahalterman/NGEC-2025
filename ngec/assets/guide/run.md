@@ -86,6 +86,11 @@ keeps the columns most analyses need:
 | `location_name`, `location_country`, `lat`, `lon`, `geonameid`, `location_text` | geocoded location and its span |
 | `killed_text`, `injured_text` | ASSAULT, PROTEST and COERCE only |
 
+`date` is always a full date, even when the text only gave a month or a
+year: "in March" becomes a day in March with `date_granularity` = `month`.
+Aggregate by `date_granularity`-aware periods, or drop events less precise than
+the analysis needs.
+
 An empty code means the actor was found in the text but could not be
 categorized; an empty `date` means the date span could not be resolved (or
 there was none). The full records in `events.jsonl` say why (`reason` fields).

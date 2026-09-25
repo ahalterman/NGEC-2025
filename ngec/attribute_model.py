@@ -884,18 +884,16 @@ class AttributeModel:
 
         Parameters
         --------
-        event_list: list of event dicts. 
-          At a minimum, it should entries the following keys:
-            - event_text
-            - id (id for the event)
-            - _doc_position (needed to link back to the nlped list)
-            - event_type
-            - mode
-        doc_list: list of spaCy NLP docs
-        expand: bool
-          Expand the QA-returned answer to include appositives or compound words?
-        show_progress: bool
-            If True, show a tqdm progress bar.
+        event_list: list of event dicts, each with at least:
+            - event_text: the document
+            - event_type: the event type to extract, e.g. "PROTEST"
+          and optionally:
+            - event_mode: a mode of that type, or "" (the default) for the
+              type as a whole
+            - id: kept, with a "_<n>" suffix per extracted event
+            - event_def (and mode_def, extraction_notes): a definition to
+              prompt with instead of the one for event_type
+          Other keys are passed through unchanged.
 
         Returns
         -----

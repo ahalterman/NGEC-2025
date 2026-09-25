@@ -63,14 +63,23 @@ uv add "ngec @ git+https://github.com/ahalterman/ngec-2025"         # ngec[vllm]
 uv run ngec download-models                                          # ~3 GB
 ```
 
-Then, if the goal needs it, Elasticsearch 7.10.1 in Docker over the pre-built
-index (see the README, and `elasticsearch/SETUP.md` in the repository). NGEC
-looks for it on `localhost:9200`. A `.env` file in the working directory
+Then, if the goal needs it, the pre-built Elasticsearch index (about 11.6 GB)
+served by Elasticsearch 7.10.1 in Docker:
+
+```shell
+uv run ngec download-index --start
+```
+
+This downloads the archive (resuming a partial download), checks its checksum,
+unpacks it to `~/ngec-es-data/wikigeo_index` and starts the container on port
+9200. Without `--start` it prints the `docker run` command instead. It needs
+Docker installed and running; give the user the Docker install to do
+themselves. NGEC looks for Elasticsearch on `localhost:9200`. A `.env` file in the working directory
 (template: `.env.example` in the repository) changes the host, port and
 credentials; the doctor, tests and demo read it, but the user's own scripts must
 pass the values to `ngec.es_client.setup_es_client`.
 
-An index present but far short of about 7.6 million (`wiki`) or 13 million
+An index present but far short of about 7.9 million (`wiki`) or 13.5 million
 (`geonames`) documents is a load that stopped partway, not a working install.
 
 ## Choosing a backend for the attribute model

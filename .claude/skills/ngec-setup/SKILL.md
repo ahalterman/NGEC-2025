@@ -61,15 +61,15 @@ you cannot do.
 `wiki` and `geonames` live in one data directory served by one Elasticsearch
 7.10.1 node. Two routes, both in `elasticsearch/SETUP.md`:
 
-- **Download the pre-built data directory** and `docker run` over it. Minutes.
-  Prefer this. The download URL is not yet recorded anywhere
-  (`PREBUILT_INDEX_URL` in the doctor is `"TODO"`), so this fix is not runnable
-  until someone fills it in — say so plainly rather than inventing a URL.
+- **Download the pre-built data directory** (about 11.6 GB) and `docker run`
+  over it. Prefer this. The doctor's fix gives the commands; with the package
+  installed, `ngec download-index` downloads, checks and unpacks it, and
+  `--start` also starts the container.
 - **Build both indices** from a Wikipedia dump and the GeoNames gazetteer. Over
   30 minutes for geonames, about a day for wiki.
 
-An index that is present but far short of 7,601,204 (wiki) or 13,250,817
-(geonames) documents is a load that died part-way, not a working install.
+An index that is present but far short of the document counts the doctor
+expects is a load that died part-way, not a working install.
 
 ## Afterwards
 
