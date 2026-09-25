@@ -68,14 +68,16 @@ class PloverCoder:
             otherwise ngec.attribute_model.DEFAULT_MODEL. The model's prompt
             format is looked up from its name (see KNOWN_PROMPT_FORMATS in
             ngec/attribute_model.py).
-        event_definitions_file: (customization) path to an event definitions CSV
-            in the format of ngec/assets/PLOVER_structured_codebook_updated.csv,
+        event_definitions_file: (customization) your own event definitions,
             which the attribute LLM reads to know what each event type means.
-            Only used by models in the "legacy" and "v5" prompt formats. The
-            default model uses the "v6" format, which reads the exact
-            definitions it was trained on (ngec/assets/event_definitions_v6.json)
-            and ignores this file; AttributeModel logs a warning if you pass it
-            anyway.
+            For the default model, a JSON file in the format of
+            ngec/assets/event_definitions_v6.json: its entries are added to the
+            definitions the model was trained on, replacing any for the same
+            event type and mode, so it only needs the types you add or reword.
+            Needed for any event type your `event_classifier` emits that PLOVER
+            does not have. Older models (the "legacy" and "v5" prompt formats)
+            read a CSV in the format of
+            ngec/assets/PLOVER_structured_codebook_updated.csv instead.
         agents_file: (customization) path to your own actor dictionary, in the
             format of ngec/assets/PLOVER_agents.txt. The default None uses the
             PLOVER agents. The same file codes both the mention text and the

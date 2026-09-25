@@ -16,10 +16,12 @@ pass straight through to them, so the data contracts below are unchanged by
 using them: `event_classifier` (any object whose `process()` adds
 `event_type`/`event_type_confidence`/`event_mode`, replacing step 1),
 `attribute_model_name` and `event_definitions_file` (step 4), and
-`agents_file` + `priorities_file` (step 5). `event_definitions_file` is only
-read by the legacy and v5 prompt formats; the default v6 model reads the
-definitions it was trained on (`ngec/assets/event_definitions_v6.json`) and
-`AttributeModel` logs a warning that the file is unused.
+`agents_file` + `priorities_file` (step 5). For the default v6 model,
+`event_definitions_file` is a JSON file in the format of
+`ngec/assets/event_definitions_v6.json`, whose entries are added to (or
+replace, for the same type and mode) the definitions the model was trained on;
+a CSV is ignored under v6, with a warning. The legacy and v5 formats read a
+codebook CSV instead.
 
 ## The six steps
 

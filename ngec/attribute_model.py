@@ -357,18 +357,26 @@ def _make_system_content_v6(event_type: str) -> str:
                             extra_block=extra_block)
 
 
-def _load_v6_definitions(def_file="event_definitions_v6.json") -> dict[tuple[str, str], str]:
-    """The exact event definitions the v6 model was trained on.
+def _load_v6_definitions(def_file=None) -> dict[tuple[str, str], str]:
+    """Event definitions in the v6 format, keyed by (event type, mode).
 
-    Keyed by (event type, mode), where a mode of "" is the definition of the
-    whole event type. These are not rendered from the codebook CSV at run time,
-    because the codebook has been edited since the model was trained; a
-    definition that differs from the training one is a prompt the model never
-    saw.
+    A mode of "" is the definition of the whole event type. With no `def_file`,
+    these are the exact definitions the v6 model was trained on, from
+    assets/event_definitions_v6.json. They are not rendered from the codebook
+    CSV at run time, because the codebook has been edited since the model was
+    trained; a definition that differs from the training one is a prompt the
+    model never saw.
+
+    `def_file` is the path to a user's own file in the same format: a JSON list
+    of {"event_type": ..., "mode": ..., "definition": ...} entries.
     """
-    with resources.files("ngec").joinpath("assets", def_file).open() as f:
-        entries = json.load(f)
-    return {(e["event_type"], e["mode"]): e["definition"] for e in entries}
+    if def_file is None:
+        with resources.files("ngec").joinpath("assets", "event_definitions_v6.json").open() as f:
+            entries = json.load(f)
+    else:
+        with open(def_file, encoding="utf-8") as f:
+            entries = json.load(f)
+    return {(e["event_type"], e.get("mode") or ""): e["definition"] for e in entries}
 
 
 def _load_vllm_sampling_params(max_tokens=1024, greedy=False):
@@ -423,13 +431,21 @@ class AttributeModel:
         Parameters
         ----------
         event_definitions_file : str, optional
-            Path to an event definitions CSV, in the format of
-            assets/PLOVER_structured_codebook_updated.csv (the default). Only the
-            "legacy" and "v5" prompt formats read it. The "v6" format reads the
-            exact definitions its model was trained on, from
-            assets/event_definitions_v6.json, and ignores this file (a warning
-            is logged if you pass one). Under any format, a record that carries
-            its own 'event_def' key is prompted with that instead.
+            Your own event definitions. Which file format is expected depends on
+            the model's prompt format:
+
+            - "v6" (the default model): a JSON file in the format of
+              assets/event_definitions_v6.json, a list of {"event_type",
+              "mode", "definition"} entries. Its entries are added to the
+              definitions the model was trained on, replacing any with the
+              same event type and mode, so the file only needs the event types
+              you are adding or rewording. A CSV is ignored under v6, with a
+              warning.
+            - "legacy" and "v5": a CSV in the format of
+              assets/PLOVER_structured_codebook_updated.csv (the default).
+
+            Under any format, a record that carries its own 'event_def' key is
+            prompted with that instead.
         silent : bool, default=False
             Whether to silence progress bars and logs
         batch_size : int, default=8
@@ -599,21 +615,28 @@ class AttributeModel:
         self.system_prompt = (_make_system_content_v5()
                               if self.prompt_format == "v5"
                               else _make_system_content_short())
-        custom_definitions_file = event_definitions_file
-        if event_definitions_file is None:
-            event_definitions_file = "PLOVER_structured_codebook_updated.csv"
-        self.event_definitions = _load_event_definitions(event_definitions_file, base_path)
-        # The v6 model reads the exact definitions it was trained on, which are
-        # not the codebook CSV above (see _load_v6_definitions).
-        if self.prompt_format == "v6" and custom_definitions_file:
-            logger.warning(
-                f"event_definitions_file={custom_definitions_file!r} is not used by "
-                f"{self.model_name}: its prompt format (v6) reads the definitions "
-                f"the model was trained on, from assets/event_definitions_v6.json. "
-                f"To prompt with your own definition, give the record an "
-                f"'event_def' key (with optional 'mode_def' and 'extraction_notes').")
-        self.v6_definitions = (_load_v6_definitions()
-                               if self.prompt_format == "v6" else {})
+        # A v6 model reads its definitions from JSON (see _load_v6_definitions);
+        # the older formats read the codebook CSV.
+        v6_json = (self.prompt_format == "v6" and event_definitions_file is not None
+                   and str(event_definitions_file).lower().endswith(".json"))
+        csv_file = event_definitions_file
+        if csv_file is None or v6_json:
+            csv_file = "PLOVER_structured_codebook_updated.csv"
+        self.event_definitions = _load_event_definitions(csv_file, base_path)
+
+        self.v6_definitions = {}
+        if self.prompt_format == "v6":
+            self.v6_definitions = _load_v6_definitions()
+            if v6_json:
+                custom = _load_v6_definitions(event_definitions_file)
+                self.v6_definitions.update(custom)
+                logger.info(f"Read {len(custom)} event definitions from {event_definitions_file}")
+            elif event_definitions_file is not None:
+                logger.warning(
+                    f"event_definitions_file={event_definitions_file!r} is not used by "
+                    f"{self.model_name}: its prompt format (v6) reads definitions from "
+                    f"a JSON file in the format of assets/event_definitions_v6.json, "
+                    f"not a CSV.")
 
     def _generation_config(self, seed=None):
         """Decoding settings for the engine backends, matched to the prompt format."""

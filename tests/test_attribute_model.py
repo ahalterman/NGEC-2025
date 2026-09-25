@@ -151,3 +151,32 @@ def test_v6_warns_that_definitions_file_is_unused(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING, logger="ngec.attribute_model"):
         AttributeModel(backend="transformers", silent=True)
     assert "is not used" not in caplog.text
+
+
+def test_v6_reads_a_json_definitions_file(monkeypatch, tmp_path):
+    # A user's JSON file adds event types and rewords existing ones; every
+    # type it does not mention keeps the definition the model was trained on.
+    import json
+    import ngec.llm.transformers
+
+    class StandInEngine:
+        def __init__(self, **kwargs):
+            self.tokenizer = None
+    monkeypatch.setattr(ngec.llm.transformers, "TransformersEngine", StandInEngine)
+    monkeypatch.delenv("NGEC_ATTRIBUTE_MODEL", raising=False)
+
+    definitions = tmp_path / "my_definitions.json"
+    definitions.write_text(json.dumps([
+        {"event_type": "ELECTORAL_VIOLENCE", "mode": "",
+         "definition": "## Event: **ELECTORAL_VIOLENCE**: Violence tied to an election."},
+        {"event_type": "PROTEST", "mode": "",
+         "definition": "## Event: **PROTEST**: A reworded protest definition."},
+    ]))
+    am = AttributeModel(backend="transformers", silent=True,
+                        event_definitions_file=str(definitions))
+    trained = AttributeModel(backend="transformers", silent=True)
+
+    assert "Violence tied to an election" in am._v6_definition({"event_type": "ELECTORAL_VIOLENCE"})
+    assert "reworded" in am._v6_definition({"event_type": "PROTEST"})
+    assert (am._v6_definition({"event_type": "AID"})
+            == trained._v6_definition({"event_type": "AID"}))
