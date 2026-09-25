@@ -126,7 +126,8 @@ probably worth doing properly at some point.
 - `ngec/plover_coder.py` — `event_threshold` now defaults to `None`, meaning "use
   the per-class thresholds the models were fit with". Passing a number still
   overrides every class at once, which is almost never what you want: the
-  F1-maximizing thresholds range from about 0.15 to 0.8 across types.
+  F1-maximizing thresholds range from 0.35 to 0.75 across types, and 0.1 to
+  0.8 across modes (`metadata.json`).
 - `tests/classifiers/test_plover_sklearn.py` — rewritten. The old tests passed
   `threshold=0.9` and only passed *because* of the encoder mismatch. Added guards
   that the encoder matches metadata and that modes are never reported without

@@ -5,7 +5,7 @@ pipeline loads by name, 3 to 4 GB together, so that the first pipeline run is
 not also a download:
 
 - the two spaCy models (about 900 MB), which need special handling -- see below;
-- the attribute-extraction LLM (about 1.2 GB for the default), plus its GGUF
+- the attribute-extraction LLM (about 1.8 GB for the default), plus its GGUF
   file (834 MB) when llama-cpp-python is installed, for the llamacpp backend;
 - three sentence encoders (about 700 MB together): the one the event
   classifiers were trained with, and the two the actor matcher uses.

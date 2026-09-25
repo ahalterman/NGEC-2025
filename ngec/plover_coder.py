@@ -45,7 +45,8 @@ class PloverCoder:
             Higher means fewer, more certain events. Leave unset (the default) to
             use the per-type thresholds recorded with the models, which is
             usually what you want: the types are not calibrated alike, and their
-            F1-maximizing thresholds range from roughly 0.15 to 0.8. The old
+            F1-maximizing thresholds range from 0.35 to 0.75 (0.1 to 0.8 for
+            modes; see metadata.json). The old
             default of 0.9 applied one number to all sixteen and, with the
             encoder mismatch fixed, would admit almost nothing. Only used by the
             default classifier; set the threshold on your own classifier

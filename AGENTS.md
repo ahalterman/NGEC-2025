@@ -126,7 +126,7 @@ contract; reconcile or delete them.
   to the matching [PyTorch index](https://download.pytorch.org/whl) via
   `[tool.uv.sources]`; without one, uv installs the default PyPI (CUDA 13) build
   and an older driver falls back to the CPU silently.
-  `uv sync --extra models --extra cu12 --extra vllm --group dev` is the
+  `uv sync --extra cu12 --extra vllm --group dev` is the
   reference GPU install; **`python3 setup/doctor/ngec_doctor.py`** detects the
   driver and prints the right command. `[tool.uv] conflicts` makes the three mutually
   exclusive and forbids `cu13 + vllm`, because the vllm extra is pinned `<0.20`
