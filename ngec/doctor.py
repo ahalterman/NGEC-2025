@@ -481,7 +481,7 @@ def elasticsearch() -> list[Check]:
     short timeout so that an unreachable host costs seconds, not minutes.
     """
     try:
-        from .smoke_test import es_client_from_env
+        from .es_client import es_client_from_env
 
         client = es_client_from_env(timeout=5, max_retries=0)
     except Exception as exc:  # noqa: BLE001 - any failure to connect is the finding
@@ -523,12 +523,20 @@ def _attribute_model_is_local(name: str) -> bool:
     """Whether the attribute model can be loaded without downloading anything."""
     if Path(name).expanduser().is_dir():
         return True
+    # Ask for the files loading needs, not the whole repository:
+    # snapshot_download(local_files_only=True) raises when any file of the repo
+    # is missing from the cache, and a model the pipeline fetched itself on
+    # first use only has the files it loaded, so that check failed for a model
+    # that loads fine.
     try:
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import try_to_load_from_cache
 
-        snapshot_download(name, local_files_only=True)
-        return True
-    except Exception:  # noqa: BLE001 - not cached, or huggingface_hub is broken
+        def cached(filename):
+            return isinstance(try_to_load_from_cache(name, filename), str)
+
+        return cached("config.json") and (cached("model.safetensors")
+                                           or cached("model.safetensors.index.json"))
+    except Exception:  # noqa: BLE001 - huggingface_hub is broken
         return False
 
 

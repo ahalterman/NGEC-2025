@@ -20,8 +20,7 @@ Before running it:
   - install NGEC (see README.md at the top of the repo)
   - have Elasticsearch running with the `wiki` index loaded
   - if Elasticsearch is not on localhost:9200, or needs a password, put
-    ES_HOST / ES_PORT / ES_USER / ES_PASSWORD in a .env file (read if
-    python-dotenv is installed) or set them as environment variables
+    ES_HOST / ES_PORT / ES_USER / ES_PASSWORD in a .env file
 
 Run it from the top of the repo:
 
@@ -35,7 +34,7 @@ import pandas as pd
 
 from ngec import ActorResolver
 from ngec.actors.agent_matcher import AgentMatcher
-from ngec.es_client import setup_es_client
+from ngec.es_client import es_client_from_env
 
 # Elasticsearch and the model loaders log a lot at INFO level. Only show
 # warnings.
@@ -46,28 +45,9 @@ logging.basicConfig(level=logging.WARNING)
 # 1. Connect to Elasticsearch
 #######################################################
 
-# Read the connection settings from a .env file, if there is one and
-# python-dotenv is installed. Otherwise use the environment variables, or the
-# defaults below (localhost:9200, no password).
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
-es_host = os.getenv("ES_HOST", "localhost")
-es_port = int(os.getenv("ES_PORT", "9200"))
-es_user = os.getenv("ES_USER")
-es_password = os.getenv("ES_PASSWORD")
-
-if es_user and es_password:
-    es_client = setup_es_client(hosts=[es_host], port=es_port,
-                                http_auth=(es_user, es_password))
-else:
-    es_client = setup_es_client(hosts=[es_host], port=es_port)
-
-# The client only connects when it is first used, so ask for the cluster info
-# now: if Elasticsearch is not running, this is where you find out.
+# es_client_from_env reads ES_HOST, ES_PORT, ES_USER and ES_PASSWORD from a
+# .env file if there is one, and otherwise connects to localhost:9200.
+es_client = es_client_from_env()
 print("Connected to Elasticsearch", es_client.info()["version"]["number"])
 
 # Load the actor resolver. This loads a spaCy model and several small

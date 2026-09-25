@@ -29,6 +29,8 @@ dependencies = [
     'pandas>=2.2.0,<3.0',
     'platformdirs>=4.0.0,<5.0',
     'pylcs>=0.1.1,<1.0',
+    # Reads ES_HOST etc. from a .env file (ngec.es_client.es_client_from_env).
+    'python-dotenv>=1.0,<2.0',
     'rich>=14.0.0,<15.0',
     "scikit-learn<=1.7.2",  # see #24
     'sentence_transformers>=5.0.0,<6.0',
