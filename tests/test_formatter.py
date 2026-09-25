@@ -94,3 +94,25 @@ def test_geo_confidence_cutoff_is_0_7():
     # A no-match result from mordecai3 has no score and is never picked.
     no_match = {"search_name": "Paris", "no_match": True, "p_no_match": 0.9}
     assert pick_event_loc("Paris", [no_match])["event_loc"] is None
+
+
+def test_place_likely_missing_from_gazetteer_is_rejected():
+    # A confident score, but mordecai3 thinks the right place is not a candidate.
+    wrong = {"search_name": "Paris", "score": 0.95, "p_no_match": 0.8}
+    loc = pick_event_loc("Paris", [wrong])
+    assert loc["event_loc"] is None
+    assert "gazetteer" in loc["reason"]
+    assert pick_event_loc("Paris", [wrong], geo_max_p_no_match=1)["event_loc"] is wrong
+    # Places from before mordecai3 3.5 have no p_no_match and pass on their score.
+    assert pick_event_loc("Paris", [{"search_name": "Paris", "score": 0.95}])["reason"] == "success"
+
+
+def test_formatter_passes_its_geolocation_settings_on():
+    from ngec.formatter import Formatter
+    place = {"search_name": "Paris", "score": 0.75, "p_no_match": 0.1}
+    event = {"attributes": {"location": ["Paris"]}, "geolocated_ents": [place],
+             "pub_date": "2016-05-01"}
+    strict = Formatter(geolocation_threshold=0.8).process([dict(event)], return_raw=True)
+    assert strict[0]["event_location"]["event_loc"] is None
+    default = Formatter().process([dict(event)], return_raw=True)
+    assert default[0]["event_location"]["event_loc"] is place

@@ -154,6 +154,8 @@ PloverCoder(es_client=es_client,
             attribute_backend="auto",     # or "vllm" / "llamacpp" / "mlx"; see §5
             gpu=False,                    # only used by the deprecated "transformers" backend
             max_gpu_memory=0.8,           # vllm only: share of GPU memory to reserve
+            geolocation_threshold=0.7,    # geoparser score a place needs to be the event location
+            geolocation_max_p_no_match=0.5,  # reject places likely missing from the gazetteer; 1 = off
             save_intermediate=False,      # dump per-step JSONL for debugging
             intermediate_dir=None)        # where those files go (default: working directory)
 ```

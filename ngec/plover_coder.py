@@ -3,7 +3,7 @@ import logging
 from .attribute_model import AttributeModel
 from .actors.actor_resolution import ActorResolver
 from .geolocation import GeolocationModel
-from .formatter import Formatter
+from .formatter import GEO_CONFIDENCE_THRESHOLD, GEO_MAX_P_NO_MATCH, Formatter
 from .utilities import load_nlp, stories_to_events
 from .classifiers.plover_sklearn import PloverSklearnClassifier
 
@@ -25,6 +25,8 @@ class PloverCoder:
                  event_definitions_file: str | None = None,
                  agents_file: str | None = None,
                  priorities_file: str | None = None,
+                 geolocation_threshold: float = GEO_CONFIDENCE_THRESHOLD,
+                 geolocation_max_p_no_match: float = GEO_MAX_P_NO_MATCH,
                  gpu: bool = False,
                  max_gpu_memory: float = 0.8,
                  save_intermediate: bool = False,
@@ -96,6 +98,15 @@ class PloverCoder:
             PLOVER priorities. Codes missing from this table all tie at 0, so
             with a custom `agents_file` and the default priorities the choice
             between your codes falls back to the order the evidence came in.
+        geolocation_threshold: the geoparser score (mordecai3's calibrated
+            probability that it picked the right place) a place needs to become
+            the event's location. Default 0.7. Higher means fewer event
+            locations, more of them correct; ngec/formatter.py has the
+            trade-off measured on mordecai3's evaluation.
+        geolocation_max_p_no_match: a place is also rejected when the
+            geoparser's probability that the correct place is not in the
+            gazetteer at all is above this. Default 0.5; 1 turns the check off.
+            This catches confident answers that a score threshold misses.
         gpu: run the "transformers" backend on the GPU. The other backends
             ignore it: vllm always runs on the GPU, llamacpp on the CPU, and
             mlx on the Mac's own GPU.
@@ -147,7 +158,8 @@ class PloverCoder:
                                                     priorities_file=priorities_file,
                                                     save_intermediate=save_intermediate,
                                                     intermediate_dir=intermediate_dir)
-        self.formatter = Formatter()
+        self.formatter = Formatter(geolocation_threshold=geolocation_threshold,
+                                   geolocation_max_p_no_match=geolocation_max_p_no_match)
 
 
     def process(self, story_list: list[dict]) -> list[dict]:

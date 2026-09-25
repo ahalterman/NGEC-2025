@@ -108,7 +108,10 @@ names of three letters or fewer must match case exactly, so "us" is not "US".
 Only if none occurs does it fall back to the older character-alignment score
 (`word_overlap_fraction`, threshold 0.5) over the whole span. Either way the
 chosen place needs a geoparser score of at least 0.7 (0.85 before mordecai3
-3.5, whose calibrated scores made 0.85 reject many correct places). Before the
+3.5, whose calibrated scores made 0.85 reject many correct places), and a
+`p_no_match` (mordecai3's probability that the correct place is not in the
+gazetteer at all) of at most 0.5. Both are `PloverCoder` arguments
+(`geolocation_threshold`, `geolocation_max_p_no_match`). Before the
 whole-word step, a span with more than a bare leading preposition ("through
 central Nairobi", "in the Mexican state of Guerrero", "outside the parliament
 in Tbilisi", "near the border with Chad") matched nothing, because the

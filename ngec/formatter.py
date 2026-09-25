@@ -937,11 +937,30 @@ def _resolve_date(date_string: str | None=None,
 # ones. A no-match result from mordecai3 has no score and is never picked.
 GEO_CONFIDENCE_THRESHOLD = 0.7
 
+# A score threshold cannot catch the worst geocoding errors: a mention whose
+# correct place is not among the gazetteer candidates at all, where mordecai3
+# still scores about 30% of its answers above 0.9. mordecai3 3.5 also reports
+# `p_no_match`, its probability that the correct place is missing. On its
+# evaluation, answers with p_no_match above 0.5 were wrong 85% of the time, so
+# those are rejected too. Set it to 1 to turn the check off.
+GEO_MAX_P_NO_MATCH = 0.5
+
+
+def _geo_rejection(geo_entity: dict, geo_confidence_threshold: float,
+                   geo_max_p_no_match: float) -> str | None:
+    """Why a geoparsed place is not good enough to be the event location, or None if it is."""
+    if geo_entity.get("score", 0.0) < geo_confidence_threshold:
+        return "no sufficient confidence in geo entity"
+    if geo_entity.get("p_no_match", 0.0) > geo_max_p_no_match:
+        return "geoparser thinks the correct place may not be in the gazetteer"
+    return None
+
 
 def pick_event_loc(search_term: str | None, 
                    geolocated_ents: list[dict | None],
                    geo_overlap_threshold = 0.5,
-                   geo_confidence_threshold = GEO_CONFIDENCE_THRESHOLD) -> dict:
+                   geo_confidence_threshold = GEO_CONFIDENCE_THRESHOLD,
+                   geo_max_p_no_match = GEO_MAX_P_NO_MATCH) -> dict:
     na_equiv = [None, "", "N/A", "NA", "n/a", "na"]
 
     # Handle all 4 combinations of missing search term or empty geo_entities
@@ -966,8 +985,9 @@ def pick_event_loc(search_term: str | None,
                  if _name_in_span(geo_entity.get("search_name"), search_term)]
     if contained:
         best_match = max(contained, key=lambda geo_entity: len(geo_entity["search_name"]))
-        if best_match.get("score", 0.0) < geo_confidence_threshold:
-            return {"event_loc": None, "reason": "no sufficient confidence in geo entity"}
+        rejection = _geo_rejection(best_match, geo_confidence_threshold, geo_max_p_no_match)
+        if rejection:
+            return {"event_loc": None, "reason": rejection}
         return {"event_loc": best_match, "reason": "success"}
 
     # Otherwise compare the whole span with each place name, character by
@@ -977,8 +997,9 @@ def pick_event_loc(search_term: str | None,
     if max(overlaps) < geo_overlap_threshold:
         return {"event_loc": None, "reason": "no sufficient overlap in search terms"}
     best_match = geolocated_ents[overlaps.index(max(overlaps))]
-    if best_match.get("score", 0.0) < geo_confidence_threshold:
-        return {"event_loc": None, "reason": "no sufficient confidence in geo entity"}
+    rejection = _geo_rejection(best_match, geo_confidence_threshold, geo_max_p_no_match)
+    if rejection:
+        return {"event_loc": None, "reason": rejection}
     return {"event_loc": best_match, "reason": "success"}
 
 
@@ -1055,8 +1076,13 @@ def _dumps_jsonl(record) -> str:
 
 class Formatter:
     def __init__(self, quiet=False, country_csv_path: str | None=None, geolocation_threshold=GEO_CONFIDENCE_THRESHOLD,
-                 output_dir: str | None=None):
+                 output_dir: str | None=None, geolocation_max_p_no_match=GEO_MAX_P_NO_MATCH):
         """
+        geolocation_threshold: the geoparser score a place needs to become
+          the event location (see GEO_CONFIDENCE_THRESHOLD).
+        geolocation_max_p_no_match: a place is also rejected when the
+          geoparser's probability that the correct place is missing from the
+          gazetteer is above this (see GEO_MAX_P_NO_MATCH). 1 turns it off.
         output_dir: where process() writes events_processed.jsonl when it is not
           asked to return the events raw. The default None uses the current
           working directory.
@@ -1064,6 +1090,7 @@ class Formatter:
         self.quiet = quiet
         self.iso_to_name = country_name_dict(country_csv_path)
         self.geo_threshold = geolocation_threshold
+        self.geo_max_p_no_match = geolocation_max_p_no_match
         self.output_dir = output_dir
 
     """
@@ -1349,7 +1376,8 @@ class Formatter:
             event["event_location"] = pick_event_loc(
                 _location_search_term(attributes.get('location')),
                 event.get('geolocated_ents', []),
-                geo_confidence_threshold=self.geo_threshold
+                geo_confidence_threshold=self.geo_threshold,
+                geo_max_p_no_match=self.geo_max_p_no_match
             )
             try:
                 resolve_date(event)
