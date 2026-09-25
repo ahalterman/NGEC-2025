@@ -19,6 +19,9 @@
 #   wikigeo_index_YYYY-MM.tar.gz.sha256 checksum, for users to verify
 #   manifest.json               doc counts, dump dates and build dates for both
 #                               indices, read from each index's mapping _meta
+#   wikigeo_index_latest.json   the same manifest under a fixed name: what
+#                               `ngec download-index` and `ngec update` read to
+#                               find the current release
 #
 # The manifest is the point of the `_meta` stamping: it lets a client answer
 # "is my index stale?" by fetching a few hundred bytes instead of 13 GB.
@@ -281,6 +284,8 @@ with open(manifest_path, "w") as f:
     f.write("\n")
 print(json.dumps(manifest, indent=2, sort_keys=True))
 PYEOF
+LATEST="$DIST_DIR/wikigeo_index_latest.json"
+cp "$MANIFEST" "$LATEST"
 
 # ---------------------------------------------------------------------------
 # Restore whatever ES was running before
@@ -327,6 +332,9 @@ log "Uploading archive (resumable; rerun this script to continue if interrupted)
 rsync -avh --progress --partial --append-verify "$TARBALL" "$DEST"
 log "Uploading checksum and manifest"
 rsync -avh "$TARBALL.sha256" "$MANIFEST" "$DEST"
+# The fixed-name pointer goes very last: once it lands, every `ngec update`
+# sees the new release, so the archive it names must already be complete.
+rsync -avh "$LATEST" "$DEST"
 
 rule
 printf '%sPublished.%s\n' "$G" "$N"

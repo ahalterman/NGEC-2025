@@ -14,6 +14,7 @@ Building the indices from the source dumps instead takes most of a day; see
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import shutil
@@ -31,6 +32,14 @@ logger = logging.getLogger(__name__)
 # setup/doctor/ngec_doctor.py and elasticsearch/SETUP.md in agreement.
 # The checksum is published next to it as <url>.sha256.
 INDEX_URL = "https://andrewhalterman.com/files/wikigeo_index_2026-09.tar.gz"
+# Names the current release, so a new index can be published without a new
+# version of this package: the archive's file name, checksum and size, and
+# each index's document count and `_meta` (build and dump dates). Written by
+# tools/publish_index.sh. When it cannot be read, INDEX_URL is the release.
+# NGEC_INDEX_LATEST_URL points it at a mirror (the archive is then fetched
+# from the same directory as the file).
+LATEST_URL = os.environ.get("NGEC_INDEX_LATEST_URL",
+                            "https://andrewhalterman.com/files/wikigeo_index_latest.json")
 INDEX_BYTES = 11_604_992_023       # the archive
 UNPACKED_BYTES = 15_000_000_000    # the data directory it unpacks to
 UNPACKS_TO = "wikigeo_index"       # the directory at the top of the archive
@@ -69,6 +78,26 @@ def download(url: str, path: Path) -> None:
                 bar.update(len(chunk))
 
 
+def latest_release() -> dict:
+    """The current published release: {"url", "sha256", "size_bytes", "indices"}.
+
+    Read from LATEST_URL; if that cannot be fetched, the release INDEX_URL
+    names, with `indices` None (its dates are then unknown here).
+    """
+    try:
+        with urllib.request.urlopen(LATEST_URL, timeout=30) as response:
+            manifest = json.load(response)
+        archive = manifest["archive"]
+        return {"url": LATEST_URL.rsplit("/", 1)[0] + "/" + archive["filename"],
+                "sha256": archive["sha256"],
+                "size_bytes": int(archive["size_bytes"]),
+                "indices": manifest.get("indices")}
+    except Exception as e:
+        logger.debug(f"Could not read {LATEST_URL} ({e}); using {INDEX_URL}")
+        return {"url": INDEX_URL, "sha256": None, "size_bytes": INDEX_BYTES,
+                "indices": None}
+
+
 def published_sha256(url: str) -> str:
     """The checksum published next to the archive, as <url>.sha256."""
     with urllib.request.urlopen(url + ".sha256") as response:
@@ -95,18 +124,19 @@ def unpack(archive: Path, dest: Path) -> None:
             tar.extractall(dest)
 
 
-def docker_command(data_dir: Path) -> list[str]:
-    """The `docker run` that serves the unpacked data directory on port 9200.
+def docker_command(data_dir: Path, name: str = CONTAINER_NAME,
+                   port: int = 9200) -> list[str]:
+    """The `docker run` that serves the unpacked data directory on `port`.
 
     `--user <your uid>:0`: the archive's files belong to whoever unpacked it,
     and the Elasticsearch image otherwise runs as uid 1000 and cannot write to
     them. The image accepts any uid as long as the group is 0. On macOS and
     Windows, Docker Desktop maps file ownership itself and the flag is harmless.
     """
-    command = ["docker", "run", "-d", "--name", CONTAINER_NAME]
+    command = ["docker", "run", "-d", "--name", name]
     if hasattr(os, "getuid"):
         command += ["--user", f"{os.getuid()}:0"]
-    return command + ["-p", "9200:9200",
+    return command + ["-p", f"{port}:9200",
                       "-e", "discovery.type=single-node",
                       "--restart", "unless-stopped",
                       "-v", f"{data_dir.resolve()}:/usr/share/elasticsearch/data",
@@ -124,17 +154,50 @@ def start_elasticsearch(data_dir: Path) -> None:
                 "a minute to open the indices; then `ngec doctor` should find both.")
 
 
-def download_index(dest: Path = DEFAULT_DEST, url: str = INDEX_URL,
-                   keep_archive: bool = False, start: bool = False) -> Path:
-    """Download, verify and unpack the index; return the data directory.
-
-    Raises RuntimeError with a message meant for the user when something is
-    in the way (not enough disk, a bad checksum, an existing directory).
-    """
+def refuse_root() -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         raise RuntimeError(
             "Run this as your ordinary user, not as root: Elasticsearch refuses "
             "to run as root, and files unpacked by root would need chown to fix.")
+
+
+def fetch_and_unpack(release: dict, dest: Path, keep_archive: bool = False) -> Path:
+    """Download `release` into `dest`, check it, unpack it there; return
+    dest / UNPACKS_TO. A partial archive already in `dest` is resumed."""
+    url = release["url"]
+    archive = dest / os.path.basename(url)
+    need = UNPACKED_BYTES + (0 if archive.exists() else release["size_bytes"])
+    free = shutil.disk_usage(dest).free
+    if free < need:
+        raise RuntimeError(
+            f"{dest} has {free / 1e9:.0f} GB free; the archive and the unpacked "
+            f"index need about {need / 1e9:.0f} GB.")
+
+    logger.info(f"Downloading {url}\n  to {archive} (about {release['size_bytes'] / 1e9:.1f} GB)")
+    download(url, archive)
+
+    expected = release["sha256"] or published_sha256(url)
+    if sha256_of(archive) != expected:
+        raise RuntimeError(
+            f"{archive} does not match its published checksum. Delete it and run "
+            "this again; if it happens twice, the download is being corrupted "
+            "on the way (a proxy, a full disk).")
+    logger.info("Checksum OK. Unpacking (a few minutes) ...")
+    unpack(archive, dest)
+    if not keep_archive:
+        archive.unlink()
+    return dest / UNPACKS_TO
+
+
+def download_index(dest: Path = DEFAULT_DEST, url: str | None = None,
+                   keep_archive: bool = False, start: bool = False) -> Path:
+    """Download, verify and unpack the index; return the data directory.
+
+    `url` None means the current release (see `latest_release`).
+    Raises RuntimeError with a message meant for the user when something is
+    in the way (not enough disk, a bad checksum, an existing directory).
+    """
+    refuse_root()
     dest.mkdir(parents=True, exist_ok=True)
     data_dir = dest / UNPACKS_TO
     if data_dir.exists():
@@ -145,29 +208,14 @@ def download_index(dest: Path = DEFAULT_DEST, url: str = INDEX_URL,
         raise RuntimeError(
             f"{data_dir} already exists. To serve it, run `ngec download-index "
             f"--start` (or `ngec doctor` to check one that is running). To replace "
-            "it, stop the container serving it and delete the directory first.")
+            "it, `ngec update --apply`, or stop the container serving it and "
+            "delete the directory first.")
 
-    archive = dest / os.path.basename(url)
-    need = UNPACKED_BYTES + (0 if archive.exists() else INDEX_BYTES)
-    free = shutil.disk_usage(dest).free
-    if free < need:
-        raise RuntimeError(
-            f"{dest} has {free / 1e9:.0f} GB free; the archive and the unpacked "
-            f"index need about {need / 1e9:.0f} GB. Pass --dest to put it elsewhere.")
-
-    logger.info(f"Downloading {url}\n  to {archive} (about {INDEX_BYTES / 1e9:.1f} GB)")
-    download(url, archive)
-
-    expected = published_sha256(url)
-    if sha256_of(archive) != expected:
-        raise RuntimeError(
-            f"{archive} does not match its published checksum. Delete it and run "
-            "this again; if it happens twice, the download is being corrupted "
-            "on the way (a proxy, a full disk).")
-    logger.info("Checksum OK. Unpacking (a few minutes) ...")
-    unpack(archive, dest)
-    if not keep_archive:
-        archive.unlink()
+    if url is None:
+        release = latest_release()
+    else:
+        release = {"url": url, "sha256": None, "size_bytes": INDEX_BYTES, "indices": None}
+    fetch_and_unpack(release, dest, keep_archive=keep_archive)
 
     logger.info(f"Unpacked to {data_dir}.")
     if start:

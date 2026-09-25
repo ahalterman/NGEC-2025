@@ -251,10 +251,28 @@ The published index is the data directory, archived. The steps, which
 4. **Test the archive as a recipient would** — unpack it somewhere new as an
    ordinary user, `docker run --user "$(id -u):0"` over it on a spare port, and
    check both counts and a clean log — before uploading it.
-5. **Upload** the archive and its `.sha256` next to each other, and point
-   `INDEX_URL` in `ngec/index_download.py` and `PREBUILT_INDEX_URL` in
-   `setup/doctor/ngec_doctor.py` at it (a test keeps the two equal). Archive
-   names are dated, so an old URL keeps working.
+5. **Upload** the archive and its `.sha256` next to each other, then, **last**,
+   `wikigeo_index_latest.json` (the manifest: archive name, checksum, size, and
+   each index's document count and `_meta`). That file is how `ngec
+   download-index` and `ngec update` find the current release, so once it
+   lands every server sees the new index; the archive it names must already
+   be complete. Pointing `INDEX_URL` in `ngec/index_download.py` and
+   `PREBUILT_INDEX_URL` in `setup/doctor/ngec_doctor.py` at the new archive
+   (a test keeps the two equal) is only the fallback for when that file cannot
+   be read. Archive names are dated, so an old URL keeps working.
+
+### Keeping a server's index current
+
+`ngec update` compares the `_meta` build dates of the index Elasticsearch is
+serving with those in `wikigeo_index_latest.json`, and says whether a newer
+one is published (and whether newer models are on Hugging Face). It changes
+nothing. `ngec update --apply` downloads the new release next to the old one,
+stops the `ngec-es` container, starts it again on the new index (Elasticsearch
+is down for about a minute), waits for both indices to come up green with the
+published document counts, and only then deletes the old container and index
+directory (`--keep-old` keeps the directory). If the new index does not come
+up, the old container is put back. It replaces only the container `ngec
+download-index --start` creates; for any other it prints what to do.
 
 The 2026-09 release was made this way from the build node (port 9201):
 11,604,992,023 bytes, SHA-256

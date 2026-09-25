@@ -19,7 +19,7 @@ from pathlib import Path
 
 from . import doctor
 from .guide import TOPICS, read_guide, write_agents_file
-from .index_download import DEFAULT_DEST, INDEX_URL, download_index
+from .index_download import CONTAINER_NAME, DEFAULT_DEST, download_index
 from .models import download_models
 
 
@@ -68,12 +68,36 @@ def main(argv: list[str] | None = None) -> int:
             "indices yourself instead is described in elasticsearch/SETUP.md."))
     index.add_argument("--dest", type=Path, default=DEFAULT_DEST,
                        help=f"where to unpack it (default: {DEFAULT_DEST})")
-    index.add_argument("--url", default=INDEX_URL,
-                       help="where to download it from (default: the published archive)")
+    index.add_argument("--url", default=None,
+                       help="where to download it from (default: the current published release)")
     index.add_argument("--start", action="store_true",
                        help="also start Elasticsearch over it with docker")
     index.add_argument("--keep-archive", action="store_true",
                        help="keep the downloaded .tar.gz after unpacking it")
+
+    upd = subparsers.add_parser(
+        "update",
+        help="check whether the models and the index are current; --apply updates them",
+        description=(
+            "Report which Hugging Face models (the attribute LLM, the sentence "
+            "encoders) have newer versions on the hub, and whether a newer "
+            "pre-built Elasticsearch index has been published. Changes nothing "
+            "without --apply. With --apply, updates the models and replaces the "
+            "index: the new release is downloaded next to the old one, the "
+            "Elasticsearch container is stopped and started again on it (a minute "
+            "or so without Elasticsearch), and the old container and index are "
+            "deleted once both new indices are green with the published counts. "
+            "If they are not, the old container is put back. Only the container "
+            "`ngec download-index --start` creates is replaced automatically."))
+    upd.add_argument("--apply", action="store_true", help="update what is out of date")
+    upd.add_argument("--no-models", action="store_true", help="leave the models alone")
+    upd.add_argument("--no-index", action="store_true", help="leave the index alone")
+    upd.add_argument("--keep-old", action="store_true",
+                     help="keep the old index directory after replacing it")
+    upd.add_argument("--port", type=int, default=9200,
+                     help="the port Elasticsearch is published on (default: 9200)")
+    upd.add_argument("--container", default=CONTAINER_NAME,
+                     help=f"the container --apply may replace (default: {CONTAINER_NAME})")
 
     subparsers.add_parser(
         "doctor",
@@ -113,6 +137,15 @@ def main(argv: list[str] | None = None) -> int:
             download_models(force=args.force,
                             attribute_model=args.attribute_model,
                             include_attribute_model=not args.no_attribute_model)
+        except RuntimeError as exc:
+            print(exc, file=sys.stderr)
+            return 1
+    if args.command == "update":
+        from .update import update
+        try:
+            return update(apply=args.apply, models=not args.no_models,
+                          index=not args.no_index, port=args.port,
+                          container=args.container, keep_old=args.keep_old)
         except RuntimeError as exc:
             print(exc, file=sys.stderr)
             return 1

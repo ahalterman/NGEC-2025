@@ -226,9 +226,19 @@ This adds a short section to `AGENTS.md` in your project folder (creating the fi
 |---|---|
 | `ngec download-models` | downloads the spaCy, sentence-transformer and attribute models ([step 4](#step-4-download-the-models)) |
 | `ngec download-index` | downloads and unpacks the pre-built Elasticsearch index; `--start` also starts Elasticsearch on it |
+| `ngec update` | says whether newer models or a newer index have been published; `--apply` updates them (see [Keeping a server up to date](#keeping-a-server-up-to-date)) |
 | `ngec doctor` | checks the installation and prints the fix for anything wrong; `--smoke` also runs the pipeline on three stories |
 | `ngec guide` | prints the guide for coding agents; `--init` points your project's `AGENTS.md` at it |
 | `python3 setup/doctor/ngec_doctor.py` | in a clone only: checks a machine before anything is installed |
+
+### Keeping a server up to date
+
+```shell
+uv run ngec update            # what is out of date; changes nothing
+uv run ngec update --apply    # update it
+```
+
+`ngec update` checks the Hugging Face models (the attribute model and the sentence encoders) against the hub, and the Elasticsearch index against the current published release. **`--apply` replaces the running index**: it downloads the new release (about 12 GB) next to the old one, stops the `ngec-es` container that `ngec download-index --start` created, starts it again on the new index, and deletes the old index once both new indices come up with the published document counts. Elasticsearch is down for about a minute, and if the new index does not come up the old container is put back. Anything that has a model loaded, such as a running demo, needs a restart to use an updated model. It can run unattended, e.g. from cron.
 
 ### Cached embeddings
 
