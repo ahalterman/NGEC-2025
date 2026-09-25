@@ -7,6 +7,7 @@ downloads themselves.
 """
 
 import importlib.util
+import sys
 
 import huggingface_hub
 import pytest
@@ -101,12 +102,32 @@ def test_spacy_models_present_need_no_pip(monkeypatch):
     download_spacy_models()
 
 
-def test_spacy_models_missing_without_pip_raises(monkeypatch):
-    monkeypatch.setattr(ngec.models, "installed_spacy_models", lambda: set())
+def _without_pip(monkeypatch):
     real_find_spec = importlib.util.find_spec
     monkeypatch.setattr(importlib.util, "find_spec",
                         lambda name, *a: None if name == "pip" else real_find_spec(name, *a))
-    with pytest.raises(RuntimeError, match="needs pip"):
+
+
+def test_spacy_models_missing_without_pip_use_uv(monkeypatch):
+    # A uv venv has no pip, so the model wheel is installed with uv instead.
+    monkeypatch.setattr(ngec.models, "installed_spacy_models", lambda: set())
+    _without_pip(monkeypatch)
+    monkeypatch.setenv("UV", "/path/to/uv")
+    commands = []
+    monkeypatch.setattr(ngec.models, "spacy_model_url", lambda model: f"{model}.whl")
+    monkeypatch.setattr(ngec.models.subprocess, "run",
+                        lambda command, check: commands.append(command))
+    download_spacy_models()
+    assert commands == [["/path/to/uv", "pip", "install", "--python", sys.executable,
+                         f"{model}.whl"] for model in REQUIRED_SPACY_MODELS]
+
+
+def test_spacy_models_missing_without_pip_or_uv_raises(monkeypatch):
+    monkeypatch.setattr(ngec.models, "installed_spacy_models", lambda: set())
+    _without_pip(monkeypatch)
+    monkeypatch.delenv("UV", raising=False)
+    monkeypatch.setattr(ngec.models.shutil, "which", lambda name: None)
+    with pytest.raises(RuntimeError, match="needs pip or uv"):
         download_spacy_models()
 
 

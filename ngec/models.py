@@ -47,6 +47,10 @@ import importlib
 import importlib.util
 import json
 import logging
+import os
+import shutil
+import subprocess
+import sys
 from importlib import resources
 from pathlib import Path
 
@@ -124,13 +128,31 @@ def load_spacy(name: str):
         raise ModelNotInstalledError(_install_hint([name])) from exc
 
 
+def spacy_model_url(model: str) -> str:
+    """The wheel URL `python -m spacy download <model>` would install.
+
+    Worked out the way spaCy's downloader does it: the newest release of the
+    model that is compatible with the installed spaCy.
+    """
+    from urllib.parse import urljoin
+
+    from spacy import about
+    from spacy.cli.download import (get_compatibility, get_model_filename,
+                                    get_version)
+
+    version = get_version(model, get_compatibility())
+    return urljoin(about.__download_url__.rstrip("/") + "/",
+                   get_model_filename(model, version))
+
+
 def download_spacy_models(models=REQUIRED_SPACY_MODELS, force: bool = False) -> None:
     """Download and install the spaCy models NGEC needs.
 
     Skips models that are already installed unless `force` is set. This is
     spaCy's own downloader, which pip-installs the model wheel from GitHub --
     exactly what `python -m spacy download` does, so a model installed either
-    way is the same package.
+    way is the same package. In an environment without pip (the default for
+    uv), the same wheel is installed with `uv pip install`.
     """
     already = installed_spacy_models()
     to_install = []
@@ -143,22 +165,29 @@ def download_spacy_models(models=REQUIRED_SPACY_MODELS, force: bool = False) -> 
         return
 
     # spaCy's downloader shells out to `sys.executable -m pip`, and a uv-created
-    # venv has no pip in it. Saying so here beats the "No module named pip"
-    # traceback that comes back from three frames down otherwise. Checked only
-    # once there is something to install, so that a venv without pip whose
-    # models are all present is not told to go and fix anything.
+    # venv has no pip in it. There, the same wheel is installed with uv instead
+    # (`uv run` puts the path to uv in $UV). Checked only once there is
+    # something to install, so that a venv without pip whose models are all
+    # present is not told to go and fix anything.
     if importlib.util.find_spec("pip") is None:
-        raise RuntimeError(
-            "Downloading spaCy models needs pip, which is not installed in this "
-            "environment (uv does not install one by default). Either add it "
-            "(`uv pip install pip`) and re-run, or install the models with "
-            "`uv run --with pip python -m spacy download <model>`.")
+        uv = os.environ.get("UV") or shutil.which("uv")
+        if uv is None:
+            raise RuntimeError(
+                "Downloading spaCy models needs pip or uv, and neither is "
+                "available. Install pip (`python -m ensurepip`) and re-run.")
+        for model in to_install:
+            logger.info("Downloading %s with uv...", model)
+            command = [uv, "pip", "install", "--python", sys.executable,
+                       spacy_model_url(model)]
+            if force:
+                command.append("--reinstall")
+            subprocess.run(command, check=True)
+    else:
+        from spacy.cli.download import download
 
-    from spacy.cli.download import download
-
-    for model in to_install:
-        logger.info("Downloading %s...", model)
-        download(model)
+        for model in to_install:
+            logger.info("Downloading %s...", model)
+            download(model)
 
     # The models were installed into an interpreter that has already scanned
     # sys.path, so anything asking about them next (including `load_spacy`)

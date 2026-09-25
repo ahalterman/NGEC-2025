@@ -27,6 +27,11 @@ dependencies = [
     'mordecai3>=3.5.0',
     'numpy>=2.0.0,<3.0',
     'pandas>=2.2.0,<3.0',
+    # Not imported by NGEC itself. transformers 5.17 fails on import when Pillow
+    # is missing (NameError: PILImageResampling), and loading the event
+    # classifiers with skops imports it. Development installs get Pillow through
+    # torchvision, so only a fresh install shows the error.
+    'pillow>=10.0',
     'platformdirs>=4.0.0,<5.0',
     'pylcs>=0.1.1,<1.0',
     # Reads ES_HOST etc. from a .env file (ngec.es_client.es_client_from_env).
