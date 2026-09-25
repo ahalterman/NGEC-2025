@@ -1,0 +1,234 @@
+[
+  {
+    "id": "africa_egyptian-rights-groups-ask-referendum-restage",
+    "candidates": [
+      "ACCUSE",
+      "PROTEST",
+      "ASSAULT",
+      "REQUEST",
+      "REJECT"
+    ],
+    "quotes": {
+      "ACCUSE": "Opposition and civil society groups allege vote fraud",
+      "PROTEST": "secular Egyptians would continue their peaceful protests against the document",
+      "ASSAULT": "Wafd Party offices in Giza were attacked and set on fire Saturday",
+      "REQUEST": "Civil society groups are urging the government to repeat the first round",
+      "REJECT": "He says, however, that the charges are not true."
+    }
+  },
+  {
+    "id": "africa_teachers-baffled-over-nigeria-school-closures",
+    "candidates": [
+      "ACCUSE",
+      "ASSAULT"
+    ],
+    "quotes": {
+      "ACCUSE": "the government seems to be contradicting itself by assuring Nigerians the Ebola threat",
+      "ASSAULT": "Boko Haram insurgents, who have killed hundreds of schoolchildren in their schoolhouses"
+    }
+  },
+  {
+    "id": "world-news_middle-east-dont-use_concern-grows-over-succession-omans-sultan",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "a_israeli-security-kills-shooter-in-old-jerusalem_6321765",
+    "candidates": [
+      "ASSAULT"
+    ],
+    "quotes": {
+      "ASSAULT": "a Palestinian man was shot dead by Israeli forces after he opened fire Sunday"
+    }
+  },
+  {
+    "id": "americas_dissident-former-general-vivas-among-freed-venezuelan-prisoners",
+    "candidates": [
+      "RETREAT",
+      "ACCUSE",
+      "COERCE",
+      "REJECT"
+    ],
+    "quotes": {
+      "RETREAT": "He left jail late on Friday",
+      "ACCUSE": "vote widely condemned as a farce by the West and major Latin American nations",
+      "COERCE": "Two of his most popular rivals, including Lopez, were banned from standing",
+      "REJECT": "Maduro bristles at the term political prisoners, saying all detainees are there on legitimate charges"
+    }
+  },
+  {
+    "id": "east-asia-pacific_will-australia-feel-economic-chill-chinas-slowdown",
+    "candidates": [
+      "SUPPORT"
+    ],
+    "quotes": {
+      "SUPPORT": "a historic free trade agreement was signed"
+    }
+  },
+  {
+    "id": "covid-19-pandemic_europe-emerging-dark-coronavirus-months",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "east-asia_protesters-call-china-stop-forced-repatriation",
+    "candidates": [
+      "PROTEST",
+      "REQUEST",
+      "ACCUSE",
+      "COERCE"
+    ],
+    "quotes": {
+      "PROTEST": "Activists concerned about the plight of North Koreans are holding demonstrations",
+      "REQUEST": "They want Beijing to end what they term is a brutal policy",
+      "ACCUSE": "Some activists waved banners accusing China of ?aiding murder?",
+      "COERCE": "police informed the participants their event was illegal"
+    }
+  },
+  {
+    "id": "europe_asylum-seekers-stranded-greek-islands-face-winter-death-threa",
+    "candidates": [
+      "REQUEST",
+      "PROTEST",
+      "COERCE",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "REQUEST": "aid groups said on Wednesday, urging a mass relocation to the mainland",
+      "PROTEST": "residents on Lesbos went on strike, shutting businesses, shops, municipal offices and nurseries",
+      "COERCE": "the terms of the agreement prevent them from traveling to the Greek mainland",
+      "ACCUSE": "Nothing can justify trapping people in these terrible conditions on the islands for another winter"
+    }
+  },
+  {
+    "id": "a_iran-s-hardline-parliament-approves-all-of-president-s-cabinet-choices_7751153",
+    "candidates": [
+      "SUPPORT",
+      "AGREE"
+    ],
+    "quotes": {
+      "SUPPORT": "Iran’s parliament gave a \"vote of confidence” to President Masoud Pezeshkian's proposed ministers",
+      "AGREE": "he had reached agreements with the Ministry of Intelligence, the Islamic Revolutionary Guard Corps"
+    }
+  },
+  {
+    "id": "usa_court-strikes-limits-voter-apparel-slogans",
+    "candidates": [
+      "REJECT"
+    ],
+    "quotes": {
+      "REJECT": "the high court in a 7-2 ruling overturned a law in the Midwestern state"
+    }
+  },
+  {
+    "id": "south-central-asia_afghan-peace-process-inches-forward-amid-fresh-violence",
+    "candidates": [
+      "RETREAT",
+      "ASSAULT",
+      "REJECT",
+      "SANCTION",
+      "REQUEST"
+    ],
+    "quotes": {
+      "RETREAT": "The Taliban freed a second batch of Afghan forces Thursday",
+      "ASSAULT": "an overnight Taliban assault on an Afghan National Army (ANA) post",
+      "REJECT": "runner-up Abdullah Abdullah rejected the outcome as fraudulent",
+      "SANCTION": "The Trump administration last month cut $1 billion in assistance for Afghanistan",
+      "REQUEST": "U.S. officials have been calling on both Afghan rivals to end the crisis"
+    }
+  },
+  {
+    "id": "africa_angolas-economic-woes-top-citizens-new-presidents-priority-lis",
+    "candidates": [
+      "ACCUSE"
+    ],
+    "quotes": {
+      "ACCUSE": "he has been consistently accused of spending the government’s oil income on himself"
+    }
+  },
+  {
+    "id": "world-news_middle-east-dont-use_report-obama-khamenei-exchange-letters",
+    "candidates": [
+      "CONSULT",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "CONSULT": "Iran's supreme leader and the U.S. president have exchanged correspondence",
+      "ACCUSE": "that the supreme leader felt had been committed against Iran"
+    }
+  },
+  {
+    "id": "a_kenyan-president-says-he-won-t-sign-tax-hike-bill-that-sparked-deadly-protests_7669176",
+    "candidates": [
+      "CONCEDE",
+      "RETREAT",
+      "PROTEST",
+      "ASSAULT",
+      "ACCUSE",
+      "REQUEST"
+    ],
+    "quotes": {
+      "CONCEDE": "I concede and therefore I will not sign the 2024 finance bill.",
+      "RETREAT": "It shall subsequently be withdrawn and that shall be our collective position",
+      "PROTEST": "hundreds of demonstrators stormed the complex",
+      "ASSAULT": "more than 20 people were killed during protests against the bill",
+      "ACCUSE": "accused the president of being accountable for what had happened on Tuesday",
+      "REQUEST": "The deputy president asked the protesters to call off other planned protests tomorrow"
+    }
+  },
+  {
+    "id": "east-asia-pacific_pakistan-pm-economy-tops-foreign-policy-agenda",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "usa_us-disaster-preparedness-questioned",
+    "candidates": [
+      "ACCUSE"
+    ],
+    "quotes": {
+      "ACCUSE": "deficiencies remain, according to a report Skinner wrote last year before retiring"
+    }
+  },
+  {
+    "id": "a_us-migrant-deaths-daca-hearing-asylum-top-week-s-immigration-news-_7121820",
+    "candidates": [
+      "ASSAULT",
+      "COERCE",
+      "RETREAT",
+      "ACCUSE",
+      "PROTEST"
+    ],
+    "quotes": {
+      "ASSAULT": "Intercommunal violence and fighting between Sudanese armed forces and the paramilitary Rapid Support Forces",
+      "COERCE": "hundreds of people who were forcibly relocated to the country's only refugee camp",
+      "RETREAT": "Chief Raul L. Ortiz announced his retirement",
+      "ACCUSE": "a case brought by nine Republican-led states aimed at halting",
+      "PROTEST": "regularly attends protests in Istanbul in front of the Iranian Consulate"
+    }
+  },
+  {
+    "id": "africa_egypt-moves-end-decades-old-emergency-law",
+    "candidates": [
+      "RETREAT",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "RETREAT": "the Cabinet has started \"formulating laws and mechanisms\" that would replace the emergency decree",
+      "ACCUSE": "Amnesty International called the state of emergency a \"corrosive system of administrative detentions.\""
+    }
+  },
+  {
+    "id": "archive_former-s-korean-pm-indicted-receiving-illegal-funds-2004-05-31",
+    "candidates": [
+      "ACCUSE",
+      "REJECT",
+      "SUPPORT"
+    ],
+    "quotes": {
+      "ACCUSE": "State prosecutors in South Korea have indicted a former Prime Minister on charges",
+      "REJECT": "The high court threw out a civic group's lawsuit to nullify the election results",
+      "SUPPORT": "South Korea's Supreme Court upheld the results of the 2002 election"
+    }
+  }
+]

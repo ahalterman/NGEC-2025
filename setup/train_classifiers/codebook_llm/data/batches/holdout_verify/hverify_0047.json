@@ -1,0 +1,175 @@
+[
+{
+"id": "americas_mexico-city-mayor-vows-full-probe-journalist-slaying",
+"label": 1,
+"quote": "The comment led to shouts and protests from reporters.",
+"modes": [
+"demo"
+]
+},
+{
+"id": "archive_pakistans-pm-criticizes-us-bounty-militan",
+"label": 1,
+"quote": "Saeed has used his high-profile status among right-wing groups in Pakistan to help lead a protest movement against Pakistan reopening its ground route",
+"modes": [
+"demo"
+]
+},
+{
+"id": "east-asia-pacific_nepal-political-talks-fail-end-crisis-again",
+"label": 1,
+"quote": "during the fourth day of an indefinite nationwide strike that has paralyzed commerce",
+"modes": [
+"strike",
+"demo"
+]
+},
+{
+"id": "africa_ethiopian-athlete-who-made-anti-government-gesture-rio-reunites-family",
+"label": 1,
+"quote": "a wave of protests persisted in the Oromia region starting in November 2015 and continued throughout 2016 spreading in the Amhara region",
+"modes": [
+"demo",
+"riot"
+]
+},
+{
+"id": "africa_tunisians-take-streets-mourn-slain-protesters",
+"label": 1,
+"quote": "Tunisians again took to the streets Friday as the country mourned the victims of weeks of unrest",
+"modes": [
+"demo"
+]
+},
+{
+"id": "americas_brazils-rousseff-denounces-critics-calling-her-impeachmen",
+"label": 1,
+"quote": "Rousseff's critics have taken to the streets to protest the country's worst recession in decades and a corruption scandal",
+"modes": [
+"demo"
+]
+},
+{
+"id": "europe_oil-giants-eye-arctic-reserves",
+"label": 1,
+"quote": "activists from the environmental group \"Greenpeace\" chained themselves to a Russian ship working from Gazprom’s Prirazlomnaya rig in the Barents Sea",
+"modes": [
+"obstruct"
+]
+},
+{
+"id": "archive_zimbabwes-opposition-leadership-marches-parliamen",
+"label": 1,
+"quote": "The march by some 250 placard-waving and singing members of the opposition Movement for Democratic Change (MDC) was led by party president Morgan Tsvangirai",
+"modes": [
+"demo"
+]
+},
+{
+"id": "africa_ugandans-celebrate-gay-pride-after-anti-homosexual-law-overturned",
+"label": 1,
+"quote": "Activists in the crowd of several hundred people at the Botanical Garden said they were demonstrating for their common good",
+"modes": [
+"demo"
+]
+},
+{
+"id": "africa_sierra-leone-ebola-burial-workers-dump-bodies-pay-protes",
+"label": 1,
+"quote": "Burial workers in Sierra Leone have dumped dead bodies in the street outside a hospital in protest at authorities' failure to pay bonuses",
+"modes": [
+"strike",
+"obstruct"
+]
+},
+{
+"id": "science-health_coronavirus-outbreak_infodemic-chloroquine-coronavirus-gamechanger",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "africa_media-freedom-holds-its-ground-africa",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "usa_mueller-seeks-may-trial-manafort-gates",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "science-health_vaccinations-needed-stop-yellow-fever-outbreak-angola",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "a_british-businesses-wait-on-sidelines-as-china-s-economy-struggles_7407477",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "usa_obama-calls-trump-stand-russia",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "arts-culture_nba-invest-millions-dollars-new-african-league",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "silicon-valley-technology_us-bid-compel-apple-iphone-hack-returns-cour",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "europe_imfs-lagarde-global-economy-facing-new-mediocre-risk",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "usa_all-about-america_impeachment-novelty-items-pop-online",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "archive_former-khmer-rouge-foreign-minister-wife-arrested",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "a_suicide-bombing-of-shiite-muslim-mosque-pakistan-_6469984",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "science-health_coronavirus-outbreak_who-north-korea-able-test-coronavirus-no-cases-reported",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "europe_france-britain-increase-cooperation-migrant-crisis",
+"label": 0,
+"quote": "",
+"modes": []
+},
+{
+"id": "silicon-valley-technology_report-action-climate-change-boosts-economic-grow",
+"label": 0,
+"quote": "",
+"modes": []
+}
+]
