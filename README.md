@@ -1,11 +1,11 @@
 # NGEC
 
-![The NGEC logo, a stack of newspapers being fed into a lego machine with small boxes coming out on the other side, in a Modernist style](docs/ngec_logo.jpg)
+<table border="0">
+<tr>
+<td width="300"><img src="docs/ngec_logo.jpg" alt="The NGEC logo, a stack of newspapers being fed into a lego machine with small boxes coming out on the other side, in a Modernist style" width="300"></td>
+<td>
 
-NGEC (Next Generation Event Coder) turns news stories into political event
-data. For each story, it finds the events it describes, either using the
-[PLOVER](https://github.com/openeventdata/PLOVER) event ontology, or a custom
-ontology you've developed.
+NGEC (Next Generation Event Coder) turns news stories into political event data. For each story, it finds the events it describes, either using the [PLOVER](link) event ontology, or a custom ontology you've developed.
 
 It identifies instances of events reported in text (protests,
 assaults, requests, etc.). Then, for each event, it extracts the actor and
@@ -15,6 +15,16 @@ injured in the event. It then classifies these entities PLOVER categories (gover
 civilians, ...) and links them to Wikipedia. It resolves the date to a calendar
 date and the location to a place in GeoNames. A much earlier version of this
 pipeline produced the [POLECAT](https://dataverse.harvard.edu/dataverse/POLECAT) dataset.
+</td>
+</tr>
+</table>
+
+
+
+
+<br clear="left">
+
+**Table of Contents** 
 
 - [Quickstart](#quickstart)
 - [Letting a coding agent set it up](#letting-a-coding-agent-set-it-up)
