@@ -574,10 +574,15 @@ def docker_run_command(data_dir):
     `--user "$(id -u):0"`: the unpacked files belong to whoever unpacked them,
     and the image otherwise runs as uid 1000 and cannot write to them. It
     accepts any uid as long as the group is 0.
+
+    `-p 127.0.0.1:9200:9200`, not `-p 9200:9200`: publish the port on this
+    machine only. The node has no password, and on Linux Docker's port rules
+    bypass ufw, so a bare `-p 9200:9200` opens the index to the internet.
+    Keep in step with `docker_command` in ngec/index_download.py.
     """
     return ("docker run -d --name ngec-es \\\n"
             "  --user \"$(id -u):0\" \\\n"
-            "  -p 9200:9200 \\\n"
+            "  -p 127.0.0.1:9200:9200 \\\n"
             "  -e discovery.type=single-node \\\n"
             "  --restart unless-stopped \\\n"
             "  -v " + shell_quote(data_dir) + ":/usr/share/elasticsearch/data \\\n"

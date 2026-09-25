@@ -57,10 +57,13 @@ services:
       # into a scratch index on a side port without stopping a live node --
       # useful for testing a change to a loader. tools/rebuild_index.sh still
       # assumes 9200 and is not port-aware.
-      - "${NGEC_ES_PORT:-9200}:9200"
+      # 127.0.0.1: this machine only. Neither service has a password, and on
+      # Linux Docker's port rules bypass ufw, so a bare "9200:9200" (or
+      # "6379:6379") would be reachable from the internet.
+      - "127.0.0.1:${NGEC_ES_PORT:-9200}:9200"
 
   redis:
     image: redis
     container_name: ngec-build-redis
     ports:
-      - "${NGEC_REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${NGEC_REDIS_PORT:-6379}:6379"

@@ -51,7 +51,7 @@ tar -xzf wikigeo_index_2026-09.tar.gz && rm wikigeo_index_2026-09.tar.gz
 
 docker run -d --name ngec-es \
   --user "$(id -u):0" \
-  -p 9200:9200 \
+  -p 127.0.0.1:9200:9200 \
   -e discovery.type=single-node \
   --restart unless-stopped \
   -v "$HOME/ngec-es-data/wikigeo_index":/usr/share/elasticsearch/data \
@@ -65,7 +65,7 @@ Why these flags and no others:
 | `elasticsearch:7.10.1` | The version the index was built with. A 7.10 data directory opens only on 7.10.x. |
 | `--user "$(id -u):0"` | The unpacked files belong to you; the image otherwise runs as uid 1000 and cannot write to them. It accepts any uid whose group is 0. Unpack as your ordinary user, not with `sudo`: Elasticsearch refuses to run as root. |
 | `-e discovery.type=single-node` | Otherwise the node waits to form a cluster and never becomes available. |
-| `-p 9200:9200` | NGEC connects to `localhost:9200` by default. |
+| `-p 127.0.0.1:9200:9200` | NGEC connects to `localhost:9200` by default. The `127.0.0.1` publishes the port on this machine only. This Elasticsearch has no password, and on Linux Docker's port rules bypass firewalls such as ufw, so a bare `-p 9200:9200` would open the index to anyone who can reach the machine. If NGEC runs on another machine, reach it through an SSH tunnel (`ssh -L 9200:localhost:9200 host`) rather than opening the port. |
 | `--restart unless-stopped` | So a reboot does not leave Elasticsearch, and so the pipeline, down. |
 | `-v …:/usr/share/elasticsearch/data` | The indices live in this directory, not in the image. Use an absolute path: Docker does not expand `~`. |
 

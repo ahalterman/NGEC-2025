@@ -18,6 +18,18 @@ def test_docker_command_runs_as_the_caller_with_group_0(tmp_path):
     assert command[-1] == "elasticsearch:7.10.1"
 
 
+def test_docker_command_publishes_the_port_on_localhost_only(tmp_path):
+    """The node has no password, and Docker's port rules bypass ufw, so a bare
+    `-p 9200:9200` would open the index to the internet. The setup doctor
+    prints the same command and must bind the same way."""
+    from pathlib import Path
+
+    command = index_download.docker_command(tmp_path, port=9201)
+    assert command[command.index("-p") + 1] == "127.0.0.1:9201:9200"
+    doctor = Path(__file__).parent.parent / "setup" / "doctor" / "ngec_doctor.py"
+    assert "-p 127.0.0.1:9200:9200" in doctor.read_text()
+
+
 def test_existing_directory_is_not_overwritten(tmp_path):
     (tmp_path / index_download.UNPACKS_TO).mkdir()
     with pytest.raises(RuntimeError, match="already exists"):

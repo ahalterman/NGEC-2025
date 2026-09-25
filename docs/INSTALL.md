@@ -185,6 +185,9 @@ This downloads the index archive (Wikipedia dump of 2026-09-01, GeoNames of
 download was interrupted. It then checks the archive against its published
 checksum, unpacks it to `~/ngec-es-data/wikigeo_index`, deletes the archive, and
 starts Elasticsearch on it in a Docker container called `ngec-es` on port 9200.
+The port is reachable from this machine only: Elasticsearch here has no
+password, so it is not exposed to the network (to use it from another machine,
+open an SSH tunnel: `ssh -L 9200:localhost:9200 <host>`).
 Options: `--dest` puts it somewhere other than `~/ngec-es-data`,
 `--keep-archive` keeps the `.tar.gz`, and without `--start` it prints the
 `docker run` command instead of running it.

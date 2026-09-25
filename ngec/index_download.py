@@ -132,11 +132,17 @@ def docker_command(data_dir: Path, name: str = CONTAINER_NAME,
     and the Elasticsearch image otherwise runs as uid 1000 and cannot write to
     them. The image accepts any uid as long as the group is 0. On macOS and
     Windows, Docker Desktop maps file ownership itself and the flag is harmless.
+
+    `-p 127.0.0.1:...`: the port is published on this machine only. A bare
+    `-p 9200:9200` listens on every interface, and on Linux Docker's port rules
+    bypass host firewalls such as ufw, so the index would be open to anyone
+    who can reach the machine: this Elasticsearch has no password. NGEC
+    connects from the same machine, so nothing needs more.
     """
     command = ["docker", "run", "-d", "--name", name]
     if hasattr(os, "getuid"):
         command += ["--user", f"{os.getuid()}:0"]
-    return command + ["-p", f"{port}:9200",
+    return command + ["-p", f"127.0.0.1:{port}:9200",
                       "-e", "discovery.type=single-node",
                       "--restart", "unless-stopped",
                       "-v", f"{data_dir.resolve()}:/usr/share/elasticsearch/data",

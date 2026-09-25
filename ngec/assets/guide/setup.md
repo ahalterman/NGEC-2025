@@ -89,7 +89,9 @@ uv run ngec download-index --start
 
 This downloads the archive (resuming a partial download), checks its checksum,
 unpacks it to `~/ngec-es-data/wikigeo_index` and starts the container on port
-9200. Without `--start` it prints the `docker run` command instead. It needs
+9200, published on this machine only (`127.0.0.1`: the node has no password).
+If NGEC runs on another machine, use an SSH tunnel rather than opening the port.
+Without `--start` it prints the `docker run` command instead. It needs
 Docker installed and running; give the user the Docker install to do
 themselves. NGEC looks for Elasticsearch on `localhost:9200`. A `.env` file in the working directory
 (template: `.env.example` in the repository) changes the host, port and
