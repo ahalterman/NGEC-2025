@@ -100,6 +100,19 @@ The active `process()` sets `event_location` (via `pick_event_loc`) and
 (an earlier version crashed on them with `TypeError: Object of type datetime is
 not JSON serializable`), while the returned events keep their `datetime`s.
 
+`pick_event_loc` matches the extracted location span ("through central
+Nairobi") to one of the places the geoparser found (`geolocated_ents`, by
+`search_name`). It first looks for places whose name occurs in the span as a
+whole word or phrase and takes the longest ("West Darfur" over "Darfur");
+names of three letters or fewer must match case exactly, so "us" is not "US".
+Only if none occurs does it fall back to the older character-alignment score
+(`word_overlap_fraction`, threshold 0.5) over the whole span. Either way the
+chosen place needs a geoparser score of at least 0.85. Before the
+whole-word step, a span with more than a bare leading preposition ("through
+central Nairobi", "in the Mexican state of Guerrero", "outside the parliament
+in Tbilisi", "near the border with Chad") matched nothing, because the
+alignment score divides by the length of the whole span.
+
 ---
 
 ## The core issue: `attributes` — list vs. dict, and the crash
@@ -335,11 +348,20 @@ on the string `"uncertain"` must switch to `date_type == "unresolved"`.
   span — even an absolute one like "March 3, 2021" — comes back
   `resolved_date=None`, `date_type="unresolved"`, reason `<No publication
   date>`, and nothing is logged, so a corpus loaded without its dates loses
-  them silently. A pandas NaN/NaT counts as missing: before this was checked,
-  `dateparser` read the string `"nan"` as a real date about a month before the
-  day of the run, and misdated every event. An unreadable `pub_date` string
+  them silently. A pandas NaN/NaT counts as missing, and so does a
+  `pub_date` string that stands for one ("nan", "NaT", "None", "null", "NA",
+  "N/A", in any case), which is what `str(row.date)` gives for a blank cell:
+  before this was checked, `dateparser` read the string `"nan"` as a real date
+  about a month before the day of the run (and "NA" as today), and misdated
+  every event. An unreadable `pub_date` string
   ("20240612", "garbage") is also treated as missing, with a warning. Note
   that an all-numeric `pub_date` like "05/06/2024" is read month first.
+- **"late last year" is late in the previous year.** A within-period
+  modifier on "last/previous year" or "last/previous month" ("early last
+  month", "the end of last year") is anchored to the period before the pub
+  date's. Before this had its own step, "last" was stripped as a past-tense
+  modifier and "late year" anchored to the pub-date year, so "late last year"
+  in a March 2024 story resolved to 2024-12-31, after the story.
 - **Standalone use.** `ngec.resolve_date_text(text, pub_date)` resolves one
   phrase and returns the same dict the pipeline stores in `date_resolved`.
 - **A bare `-` is not a range separator** (it would wreck "mid-March", "Covid-19",

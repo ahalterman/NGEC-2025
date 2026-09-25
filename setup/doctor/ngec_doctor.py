@@ -403,14 +403,24 @@ def check_venv(recommended_extra):
         detail = ("torch " + version + ", built for CUDA " + cuda + ", sees a GPU: "
                   + available + ld_note(stripped))
         blind = bool(nvidia_smi_query()) and available != "True"
-        rows.append(check("torch build", not blind, detail, "Python",
-                          level="ok" if not blind else "warn",
-                          fix=None if not blind else fix(
-                              "torch-rebuild", sync + " --reinstall-package torch",
-                              "There is an NVIDIA GPU here but this torch cannot see it, so "
-                              "the whole pipeline is running on the CPU. uv compares version "
-                              "numbers only, so without --reinstall-package torch it does "
-                              "nothing at all and reports success.", "3-10 min")))
+        hidden_by = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if blind and hidden_by is not None:
+            # CUDA_VISIBLE_DEVICES set to "", "-1" or indices that do not exist
+            # hides every GPU, which is the usual way to force a CPU run. torch
+            # then looks exactly like a build that cannot see the GPU, so name
+            # the variable rather than prescribe a reinstall.
+            detail += ("; the GPU is hidden by CUDA_VISIBLE_DEVICES=" + repr(hidden_by)
+                       + " (unset it, or set it to the GPU's index, to use the GPU)")
+            rows.append(check("torch build", False, detail, "Python", level="warn"))
+        else:
+            rows.append(check("torch build", not blind, detail, "Python",
+                              level="ok" if not blind else "warn",
+                              fix=None if not blind else fix(
+                                  "torch-rebuild", sync + " --reinstall-package torch",
+                                  "There is an NVIDIA GPU here but this torch cannot see it, so "
+                                  "the whole pipeline is running on the CPU. uv compares version "
+                                  "numbers only, so without --reinstall-package torch it does "
+                                  "nothing at all and reports success.", "3-10 min")))
 
     rc, out, _ = venv_run("import en_core_web_lg, en_core_web_trf; print('both')")
     rows.append(check("spaCy models", rc == 0,
@@ -815,7 +825,14 @@ def check_elasticsearch():
                 count = 0
             detail = ("{:,}".format(count) + " docs, health " + row.get("health", "?")
                       + " (expected about " + "{:,}".format(expected) + ")")
+            # An older complete build has somewhat fewer documents than the
+            # published one (geonames built in 2024-01 has 12,571,784, 93% of
+            # today's), so it clears this bound; a load that died part-way is
+            # usually much further short. The age row below says which it is.
             if count >= expected * 0.9:
+                if count < expected:
+                    detail += (" -- a little short of the current published index, as an "
+                               "older build is; see the age row")
                 rows.append(check(index + " index", True, detail, "Elasticsearch"))
             else:
                 rows.append(check(

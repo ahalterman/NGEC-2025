@@ -429,6 +429,21 @@ def compute() -> list[Check]:
                 f"GPU {i}", OK,
                 f"{properties.name}, {properties.total_memory / 1e9:.0f} GB",
                 note=f"driver {smi['driver']}" if smi else ""))
+    elif smi and os.environ.get("CUDA_VISIBLE_DEVICES") is not None:
+        # CUDA_VISIBLE_DEVICES decides which GPUs CUDA programs may use. Set to
+        # "" or "-1", or to indices that do not exist, it hides every GPU, which
+        # is the usual way to force a CPU run. torch then reports no GPU exactly
+        # as it would with a mismatched build, so name the variable instead of
+        # prescribing a reinstall.
+        hidden_by = os.environ["CUDA_VISIBLE_DEVICES"]
+        checks.append(Check(
+            "GPU", WARN,
+            f"{smi['name']} is present (driver {smi['driver']}), but hidden "
+            f"from torch by CUDA_VISIBLE_DEVICES={hidden_by!r}",
+            "gpu=True and the vllm backend; the pipeline runs on the CPU. "
+            "If that is what you meant, there is nothing to fix",
+            "unset CUDA_VISIBLE_DEVICES (or set it to the GPU's index, e.g. 0) "
+            "to use the GPU"))
     elif smi:
         checks.append(Check(
             "GPU", WARN,

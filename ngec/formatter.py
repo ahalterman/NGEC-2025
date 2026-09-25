@@ -100,8 +100,9 @@ def resolve_date_text(text: str | None, pub_date) -> dict:
 
     Missing inputs do not raise. Check 'date_type' == "unresolved":
 
-    - no `pub_date` (None, "", a pandas NaN/NaT, or a string that cannot be
-      read, which also logs a warning): 'resolved_date' is None, whatever the
+    - no `pub_date` (None, "", a pandas NaN/NaT, a string that stands for a
+      missing value such as "nan", "NaT", "None" or "null", or a string that
+      cannot be read, which also logs a warning): 'resolved_date' is None, whatever the
       phrase says, because a relative phrase has nothing to count from. The
       reason is "<No publication date>". An absolute date such as "March 3,
       2021" is not resolved either.
@@ -298,7 +299,8 @@ def _same_day_weekday(raw: str, base_date: datetime) -> ResolvedDate | None:
                         reason="<Weekday naming the publication day, resolved to the pub date>")
 
 
-def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> ResolvedDate | None:
+def _anchor_bare_period(modifier: str, period: str, base_date: datetime,
+                        previous: bool = False) -> ResolvedDate | None:
     """
     Resolve a within-period modifier applied to a *bare* period word
     ("beginning of the year", "end of the year", "mid-year", "beginning of the
@@ -306,8 +308,22 @@ def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> Reso
     "the year" to *today*, so we anchor to the current period derived from
     ``base_date`` instead. Returns ``None`` for periods we don't anchor (safe:
     the caller falls through rather than emitting today).
+
+    With ``previous=True`` the period is the one before the pub date's: "late
+    last year" is the end of the year before the pub-date year, and "early last
+    month" the start of the month before the pub-date month.
     """
     modifier = modifier.lower()
+    label = "pub-date"
+    if previous:
+        label = "previous"
+        if period == "year":
+            base_date = datetime(base_date.year - 1, base_date.month, 1)
+        elif period == "month":
+            # The first of the pub-date month, minus one day, is in the month before.
+            base_date = datetime(base_date.year, base_date.month, 1) - timedelta(days=1)
+        else:
+            return None
     if "early" in modifier or "begin" in modifier:
         pos = "start"
     elif "mid" in modifier:
@@ -320,7 +336,7 @@ def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> Reso
         day = 31 if pos == "end" else 1
         return ResolvedDate(resolved_date=datetime(base_date.year, month, day),
                             granularity="year", date_type="approximate",
-                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the pub-date year>")
+                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the {label} year>")
     if period == "month":
         if pos == "end":
             nxt = datetime(base_date.year + 1, 1, 1) if base_date.month == 12 \
@@ -330,7 +346,7 @@ def _anchor_bare_period(modifier: str, period: str, base_date: datetime) -> Reso
             anchored = datetime(base_date.year, base_date.month, 15 if pos == "mid" else 1)
         return ResolvedDate(resolved_date=anchored,
                             granularity="month", date_type="approximate",
-                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the pub-date month>")
+                            reason=f"<Anchored '{modifier} {period}' to the {pos} of the {label} month>")
     return None
 
 
@@ -697,6 +713,18 @@ def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
                                 date_type="approximate" if vague else "exact",
                                 reason="<Resolved relative date with future reference>")
 
+    # 10b. A within-period modifier on the *previous* year or month ("late last
+    #     year", "early last month", "the end of the previous year"). This has to
+    #     come before step 11, which would strip "last" and leave "late year",
+    #     and step 13 would then anchor that to the pub-date year: "late last
+    #     year" in a March 2024 story came out as December 2024, after the story.
+    #     "late last week" is not caught here; step 13 already resolves it.
+    prev = re.fullmatch(r"(?:the\s+)?(early|mid|late|beginning of|end of)[\s-]+(?:the\s+)?"
+                        r"(?:last|previous|prior|past)\s+(year|month)",
+                        raw.strip(" -,."), re.IGNORECASE)
+    if prev:
+        return _anchor_bare_period(prev.group(1), prev.group(2).lower(), base_date, previous=True)
+
     # 11. Past-tense modifiers. dateparser handles "last year/month/week/decade"
     #     natively but not the synonyms ("previous year") nor "last <weekday>".
     #     First normalize the synonyms to "last" and retry the raw parse; if that
@@ -764,10 +792,21 @@ def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
     return None
 
 
+# Strings that stand for a missing value. They turn up when a table column with
+# blanks is turned into text, e.g. str(row.date)[:10] on a pandas NaN gives
+# "nan". dateparser reads some of them as real dates ("nan" as about a month
+# before today, "NA" and "n/a" as today), so they must not reach it.
+_MISSING_STRINGS = {"", "nan", "nat", "none", "null", "na", "n/a", "<na>", "#n/a"}
+
+
 def _is_missing(value) -> bool:
-    """True for None, "", and pandas' missing values (NaN, NaT)."""
-    if value is None or isinstance(value, str):
-        return value in (None, "")
+    """True for None, pandas' missing values (NaN, NaT), and strings that
+    stand for a missing value ("", "nan", "NaT", "None", "null", "N/A", ...,
+    in any case and with surrounding spaces)."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in _MISSING_STRINGS
     try:
         return bool(pd.isna(value))
     except (TypeError, ValueError):
@@ -810,10 +849,14 @@ def _resolve_date(date_string: str | None=None,
     """
     na = set([None, ""])
 
-    # A missing value read from a pandas column arrives as NaN or NaT, not None.
-    # Treat those as missing: dateparser reads the string "nan" as a real date
+    # A missing value read from a pandas column arrives as NaN or NaT, not None,
+    # or, once turned into text, as the string "nan", "NaT" or "None". Treat all
+    # of those as missing: dateparser reads the string "nan" as a real date
     # (about a month before today), which would silently misdate every event.
-    if _is_missing(date_string):
+    # For the phrase, only a non-string NaN/NaT is treated as missing here: a
+    # phrase such as "N/A" or "nan" already comes back as the pub date flagged
+    # unresolved (see _NOISE_PHRASES), with a reason that quotes it.
+    if not isinstance(date_string, str) and _is_missing(date_string):
         date_string = None
     if _is_missing(ref_date):
         ref_date = None
@@ -904,8 +947,22 @@ def pick_event_loc(search_term: str | None,
         case (True, True):
             return {"event_loc": None, "reason": "no search term and no geo entities"}
 
-    # Calculate word overlap fraction between search term and each geo entity 
-    # search name
+    # First look for geoparsed places whose name appears as a whole word or
+    # phrase inside the location span: "Nairobi" in "through central Nairobi",
+    # "Guerrero" in "the Mexican state of Guerrero". If several do, take the
+    # longest name, the most specific place the span mentions ("West Darfur"
+    # over "Darfur").
+    contained = [geo_entity for geo_entity in geolocated_ents
+                 if _name_in_span(geo_entity.get("search_name"), search_term)]
+    if contained:
+        best_match = max(contained, key=lambda geo_entity: len(geo_entity["search_name"]))
+        if best_match.get("score", 0.0) < geo_confidence_threshold:
+            return {"event_loc": None, "reason": "no sufficient confidence in geo entity"}
+        return {"event_loc": best_match, "reason": "success"}
+
+    # Otherwise compare the whole span with each place name, character by
+    # character, as before. This still matches a span that differs from the
+    # place name only slightly, e.g. in spelling or punctuation.
     overlaps = [word_overlap_fraction(search_term, geo_entity.get("search_name", "")) for geo_entity in geolocated_ents]
     if max(overlaps) < geo_overlap_threshold:
         return {"event_loc": None, "reason": "no sufficient overlap in search terms"}
@@ -913,6 +970,21 @@ def pick_event_loc(search_term: str | None,
     if best_match.get("score", 0.0) < geo_confidence_threshold:
         return {"event_loc": None, "reason": "no sufficient confidence in geo entity"}
     return {"event_loc": best_match, "reason": "success"}
+
+
+def _name_in_span(name: str | None, span: str) -> bool:
+    """
+    True if a place name occurs in the span as a whole word or phrase: "Chad"
+    is in "near the border with Chad", but not in "Chadian border", and "Niger"
+    is not in "northern Nigeria". Case is ignored, except for names of three
+    letters or fewer ("US", "UAE"), which must match exactly so that the
+    pronoun "us" does not count as the United States.
+    """
+    if not name or not name.strip():
+        return False
+    name = name.strip()
+    flags = 0 if len(name) <= 3 else re.IGNORECASE
+    return re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", span, flags) is not None
 
 
 def word_overlap_fraction(word1: str, word2: str) -> float:

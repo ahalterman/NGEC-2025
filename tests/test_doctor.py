@@ -104,3 +104,65 @@ def test_encoder_defaults_match_the_code():
     defaults = {s.name: s.default for s in doctor.SETTINGS}
     assert f'DEFAULT_ENCODER = "{defaults["NGEC_WIKI_ENCODER"]}"' in source
     assert f'AGENT_ENCODER = "{defaults["NGEC_AGENT_ENCODER"]}"' in source
+
+
+# ---------------------------------------------- a GPU hidden on purpose
+
+
+def _gpu_row(monkeypatch, visible_devices):
+    """The GPU row doctor.compute() writes on a machine with an NVIDIA GPU
+    that torch does not see, with CUDA_VISIBLE_DEVICES set as given (None:
+    unset)."""
+    import torch
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(doctor, "_nvidia_smi",
+                        lambda: {"name": "NVIDIA GeForce RTX 4090", "driver": "580.1", "count": "1"})
+    if visible_devices is None:
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", visible_devices)
+    return next(check for check in doctor.compute() if check.name == "GPU")
+
+
+def test_gpu_hidden_by_cuda_visible_devices_is_not_a_broken_torch(monkeypatch):
+    for value in ["", "-1"]:
+        row = _gpu_row(monkeypatch, value)
+        assert row.status == doctor.WARN
+        assert "CUDA_VISIBLE_DEVICES" in row.detail
+        assert "reinstall" not in row.fix
+
+
+def test_gpu_torch_cannot_see_still_prescribes_a_reinstall(monkeypatch):
+    row = _gpu_row(monkeypatch, None)
+    assert row.status == doctor.WARN
+    assert "--reinstall-package torch" in row.fix
+
+
+def _setup_doctor():
+    """setup/doctor/ngec_doctor.py, the stdlib-only doctor, imported as a module."""
+    import importlib.util
+    path = REPO_ROOT / "setup" / "doctor" / "ngec_doctor.py"
+    spec = importlib.util.spec_from_file_location("ngec_setup_doctor", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_setup_doctor_names_cuda_visible_devices(monkeypatch):
+    setup_doctor = _setup_doctor()
+    monkeypatch.setattr(setup_doctor.os.path, "exists", lambda path: True)
+    monkeypatch.setattr(setup_doctor, "nvidia_smi_query", lambda: ("580.1", "RTX 4090"))
+    monkeypatch.setattr(setup_doctor, "venv_run",
+                        lambda code, timeout=120: (0, "2.10.0+cu129 12.9 False", False))
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "")
+    rows, _ = setup_doctor.check_venv("cu12")
+    torch_rows = [row for row in rows if row["name"] == "torch build"]
+    assert len(torch_rows) == 1
+    assert torch_rows[0]["level"] == "warn"
+    assert "CUDA_VISIBLE_DEVICES" in torch_rows[0]["detail"]
+    assert torch_rows[0]["fix"] is None
+
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES")
+    rows, _ = setup_doctor.check_venv("cu12")
+    torch_row = next(row for row in rows if row["name"] == "torch build")
+    assert "--reinstall-package torch" in torch_row["fix"]["command"]

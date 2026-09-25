@@ -521,3 +521,44 @@ def test_resolve_date_text_missing_inputs():
 
     # NaN as the phrase (a missing cell) is treated like no phrase.
     assert resolve_date_text(float("nan"), REF)["date_type"] == "unresolved"
+
+
+def test_pub_date_missing_value_strings():
+    # A pub_date built with str(row.date)[:10] from a pandas column with blanks
+    # arrives as the string "nan" (or "NaT", "None"). dateparser read "nan" as
+    # a date about a month before the day of the run, so "yesterday" came back
+    # as a date in the year the code was run, marked exact.
+    for pub in ["nan", "NaN", "NaT", "None", "null", " NULL ", "N/A", "NA"]:
+        res = resolve_date_text("yesterday", pub)
+        assert res["resolved_date"] is None, pub
+        assert res["date_type"] == "unresolved"
+        assert res["reason"] == "<No publication date>"
+
+
+def test_modifier_on_previous_year_or_month():
+    # "late last year" is late in the year before the pub-date year. Stripping
+    # "last" and anchoring "late year" to the pub-date year put it in December
+    # of the pub year, after the story was published.
+    pub = "2024-03-15"
+    for expr, expected, gran in [
+            ("late last year", "2023-12-31", "year"),
+            ("early last year", "2023-01-01", "year"),
+            ("mid-last year", "2023-07-01", "year"),
+            ("the end of last year", "2023-12-31", "year"),
+            ("beginning of the previous year", "2023-01-01", "year"),
+            ("late last month", "2024-02-29", "month"),
+            ("early last month", "2024-02-01", "month"),
+            ("end of last month", "2024-02-29", "month")]:
+        res = _resolve_date(expr, pub)
+        assert res.resolved_date.strftime("%Y-%m-%d") == expected, expr
+        assert res.granularity == gran, expr
+        assert res.date_type == "approximate", expr
+    # The month before January is December of the year before.
+    assert _resolve_date("late last month", "2024-01-10").resolved_date.strftime("%Y-%m-%d") == "2023-12-31"
+    # Neighbours keep their old resolutions.
+    assert _resolve_date("late this year", pub).resolved_date.strftime("%Y-%m-%d") == "2024-12-31"
+    assert _resolve_date("early this year", pub).resolved_date.strftime("%Y-%m-%d") == "2024-01-01"
+    assert _resolve_date("last year", pub).resolved_date.strftime("%Y-%m-%d") == "2023-03-15"
+    assert _resolve_date("last month", pub).resolved_date.strftime("%Y-%m-%d") == "2024-02-15"
+    assert _resolve_date("late last week", pub).resolved_date.strftime("%Y-%m-%d") == "2024-03-08"
+    assert _resolve_date("earlier this month", pub).resolved_date.strftime("%Y-%m-%d") == "2024-03-15"
