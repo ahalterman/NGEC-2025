@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -126,3 +127,27 @@ def test_attribute_model_minimal_input(attribute_model):
     assert "Hindu nationalists" in attributes["actor"][0]
     assert "last week" in attributes["date"][0]
     assert "Dehli" in attributes["location"][0]
+
+
+def test_v6_warns_that_definitions_file_is_unused(monkeypatch, caplog):
+    # The v6 format reads the trained definitions, not a codebook CSV, so a
+    # definitions file passed to it would otherwise be silently ignored. The
+    # model itself is not loaded: the engine is replaced by a stand-in.
+    import ngec.llm.transformers
+
+    class StandInEngine:
+        def __init__(self, **kwargs):
+            self.tokenizer = None
+    monkeypatch.setattr(ngec.llm.transformers, "TransformersEngine", StandInEngine)
+    monkeypatch.delenv("NGEC_ATTRIBUTE_MODEL", raising=False)
+
+    with caplog.at_level(logging.WARNING, logger="ngec.attribute_model"):
+        am = AttributeModel(backend="transformers", silent=True,
+                            event_definitions_file="PLOVER_structured_codebook_updated.csv")
+    assert am.prompt_format == "v6"
+    assert "is not used" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="ngec.attribute_model"):
+        AttributeModel(backend="transformers", silent=True)
+    assert "is not used" not in caplog.text

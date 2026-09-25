@@ -11,6 +11,16 @@ which is also what the README and `tests/test_end_to_end.py` exercise. (An
 older top-level `ngec_process.py` CLI that predated `PloverCoder` has been
 removed.)
 
+`PloverCoder` builds the six components itself. Its customization arguments
+pass straight through to them, so the data contracts below are unchanged by
+using them: `event_classifier` (any object whose `process()` adds
+`event_type`/`event_type_confidence`/`event_mode`, replacing step 1),
+`attribute_model_name` and `event_definitions_file` (step 4), and
+`agents_file` + `priorities_file` (step 5). `event_definitions_file` is only
+read by the legacy and v5 prompt formats; the default v6 model reads the
+definitions it was trained on (`ngec/assets/event_definitions_v6.json`) and
+`AttributeModel` logs a warning that the file is unused.
+
 ## The six steps
 
 ```
@@ -80,9 +90,13 @@ through to the raw output. Clean.
 
 ### Step 6: formatter (terminal) ⚠️ partial
 The active `process()` sets `event_location` (via `pick_event_loc`) and
-`date_resolved` (via `resolve_date`). Two other methods — `find_event_loc` and
+`date_resolved` (via `resolve_date`, which calls the public
+`resolve_date_text(text, pub_date)`). Two other methods — `find_event_loc` and
 `add_meta` — are **commented out** and expect an older attribute format (see
-"Format drift" below).
+"Format drift" below). With `return_raw=False` it writes
+`events_processed.jsonl`; the resolved dates are written as ISO strings there
+(an earlier version crashed on them with `TypeError: Object of type datetime is
+not JSON serializable`), while the returned events keep their `datetime`s.
 
 ---
 
@@ -315,6 +329,17 @@ on the string `"uncertain"` must switch to `date_type == "unresolved"`.
   with times and timezones, and without normalizing, branches that do arithmetic
   off the reference return tz-aware datetimes while branches that construct a
   date return naive ones — a column holding both is unusable in pandas.
+- **A missing publication date resolves nothing.** With no `pub_date`, every
+  span — even an absolute one like "March 3, 2021" — comes back
+  `resolved_date=None`, `date_type="unresolved"`, reason `<No publication
+  date>`, and nothing is logged, so a corpus loaded without its dates loses
+  them silently. A pandas NaN/NaT counts as missing: before this was checked,
+  `dateparser` read the string `"nan"` as a real date about a month before the
+  day of the run, and misdated every event. An unreadable `pub_date` string
+  ("20240612", "garbage") is also treated as missing, with a warning. Note
+  that an all-numeric `pub_date` like "05/06/2024" is read month first.
+- **Standalone use.** `ngec.resolve_date_text(text, pub_date)` resolves one
+  phrase and returns the same dict the pipeline stores in `date_resolved`.
 - **A bare `-` is not a range separator** (it would wreck "mid-March", "Covid-19",
   and ISO dates). A hyphen with whitespace on both sides is, and day-of-month
   hyphen ranges ("March 15-20") get their own step that requires a flanking month

@@ -1,7 +1,7 @@
 from .actors.actor_resolution import ActorResolver
 from .geolocation import GeolocationModel
 from .attribute_model import AttributeModel
-from .formatter import Formatter
+from .formatter import Formatter, resolve_date_text
 from .models import ModelNotInstalledError, download_models
 from .utilities import load_nlp, events_to_table
 from .logging import setup_logging

@@ -423,7 +423,13 @@ class AttributeModel:
         Parameters
         ----------
         event_definitions_file : str, optional
-            Path to event definitions CSV file
+            Path to an event definitions CSV, in the format of
+            assets/PLOVER_structured_codebook_updated.csv (the default). Only the
+            "legacy" and "v5" prompt formats read it. The "v6" format reads the
+            exact definitions its model was trained on, from
+            assets/event_definitions_v6.json, and ignores this file (a warning
+            is logged if you pass one). Under any format, a record that carries
+            its own 'event_def' key is prompted with that instead.
         silent : bool, default=False
             Whether to silence progress bars and logs
         batch_size : int, default=8
@@ -593,11 +599,19 @@ class AttributeModel:
         self.system_prompt = (_make_system_content_v5()
                               if self.prompt_format == "v5"
                               else _make_system_content_short())
+        custom_definitions_file = event_definitions_file
         if event_definitions_file is None:
             event_definitions_file = "PLOVER_structured_codebook_updated.csv"
         self.event_definitions = _load_event_definitions(event_definitions_file, base_path)
         # The v6 model reads the exact definitions it was trained on, which are
         # not the codebook CSV above (see _load_v6_definitions).
+        if self.prompt_format == "v6" and custom_definitions_file:
+            logger.warning(
+                f"event_definitions_file={custom_definitions_file!r} is not used by "
+                f"{self.model_name}: its prompt format (v6) reads the definitions "
+                f"the model was trained on, from assets/event_definitions_v6.json. "
+                f"To prompt with your own definition, give the record an "
+                f"'event_def' key (with optional 'mode_def' and 'extraction_notes').")
         self.v6_definitions = (_load_v6_definitions()
                                if self.prompt_format == "v6" else {})
 

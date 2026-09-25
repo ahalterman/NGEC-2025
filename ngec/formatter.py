@@ -2,6 +2,7 @@
 from dataclasses import asdict, dataclass, replace
 from datetime import date, datetime, timedelta
 from importlib import resources
+import json
 import logging
 import os
 import re
@@ -65,22 +66,69 @@ def _location_search_term(value) -> str | None:
     return _LEADING_PREPOSITION.sub("", term.strip()) or term
 
 
+def resolve_date_text(text: str | None, pub_date) -> dict:
+    """
+    Resolve a date phrase ("last Wednesday", "March 15-20", "over the weekend")
+    to a calendar date, relative to the publication date of the story it came
+    from.
+
+    This is the date resolution the pipeline runs in step 6, for use on its
+    own: the result is exactly what the pipeline stores in an event's
+    'date_resolved'.
+
+    Parameters
+    ----------
+    text : str | None
+        The date phrase, e.g. the 'date' the attribute model extracted.
+    pub_date : str | datetime.date | datetime.datetime | pandas.Timestamp | None
+        The publication date, which relative phrases are counted back from.
+        A date or datetime object is safest. A string is read by `dateparser`:
+        ISO "2024-06-12" (preferred), "June 12, 2024" and "12 June 2024" all
+        work, and any time or timezone is dropped. Beware two string forms:
+        an all-numeric date like "05/06/2024" is read month first (May 6),
+        and a relative one like "yesterday" is counted from the day you run
+        the code, not the day the story appeared. "20240612" (no separators)
+        cannot be read.
+
+    Returns
+    -------
+    dict
+        The fields of :class:`ResolvedDate`: 'resolved_date' (a datetime, or
+        the start of a range), 'date_end', 'granularity' (day, week, month,
+        quarter, year), 'date_type' (exact, approximate, range, unresolved),
+        and 'reason', a trail of how the date was reached.
+
+    Missing inputs do not raise. Check 'date_type' == "unresolved":
+
+    - no `pub_date` (None, "", a pandas NaN/NaT, or a string that cannot be
+      read, which also logs a warning): 'resolved_date' is None, whatever the
+      phrase says, because a relative phrase has nothing to count from. The
+      reason is "<No publication date>". An absolute date such as "March 3,
+      2021" is not resolved either.
+    - no `text` (None or ""), or a phrase that cannot be resolved ("last
+      Ramadan"): 'resolved_date' is the publication date.
+
+    Examples
+    --------
+    >>> resolve_date_text("last Wednesday", "2025-05-16")["resolved_date"]
+    datetime.datetime(2025, 5, 14, 0, 0)
+    """
+    return asdict(_resolve_date(date_string=text, ref_date=pub_date))
+
+
 def resolve_date(event: dict) -> dict:
     """
     Add a top-level 'date_resolved' key to an event, resolved from its
-    attributes' 'date' value and the event's publication date.
+    attributes' 'date' value and the event's publication date ('pub_date').
 
     One record is one event, so 'attributes' is a single dict and there is a
-    single date to resolve. The value stored is ``asdict()`` of a
-    :class:`ResolvedDate`.
-
-    >>> DateDataParser().get_date_data('March 2015')
-    DateData(date_obj=datetime.datetime(2015, 3, 16, 0, 0), period='month', locale='en')
+    single date to resolve. The value stored is the dict that
+    :func:`resolve_date_text` returns; see there for what it holds and for the
+    'pub_date' formats that work.
     """
     attributes = event.get('attributes') or {}
     date_string = _first_attribute_value(attributes.get('date'))
-    res = _resolve_date(date_string=date_string, ref_date=event.get('pub_date'))
-    event['date_resolved'] = asdict(res)
+    event['date_resolved'] = resolve_date_text(date_string, event.get('pub_date'))
     return event
 
 
@@ -716,6 +764,16 @@ def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
     return None
 
 
+def _is_missing(value) -> bool:
+    """True for None, "", and pandas' missing values (NaN, NaT)."""
+    if value is None or isinstance(value, str):
+        return value in (None, "")
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
+
+
 def _resolve_date(date_string: str | None=None,
                   ref_date: str | datetime | date | None=None
                   ) -> ResolvedDate:
@@ -751,6 +809,14 @@ def _resolve_date(date_string: str | None=None,
     ResolvedDate(resolved_date=datetime(2021, 1, 1), date_end=None, granularity="day", date_type="exact", reason="...")
     """
     na = set([None, ""])
+
+    # A missing value read from a pandas column arrives as NaN or NaT, not None.
+    # Treat those as missing: dateparser reads the string "nan" as a real date
+    # (about a month before today), which would silently misdate every event.
+    if _is_missing(date_string):
+        date_string = None
+    if _is_missing(ref_date):
+        ref_date = None
 
     # Either or both of the inputs might be missing, however, before we handle
     # those possibilities, we need make sure we don't end up with a missing
@@ -887,6 +953,22 @@ def word_overlap_fraction(word1: str, word2: str) -> float:
     return max_overlap / max(len1, len2)
 
 
+
+
+def _json_default(value):
+    """How to write the values the json module can't: dates (the resolved
+    dates are datetimes) become ISO strings, and numpy numbers plain ones."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _dumps_jsonl(record) -> str:
+    """One line of events_processed.jsonl. The events in memory keep their
+    datetimes; only the file holds strings."""
+    return json.dumps(record, default=_json_default)
 
 
 class Formatter:
@@ -1196,7 +1278,7 @@ class Formatter:
             output_dir = self.output_dir if self.output_dir is not None else os.getcwd()
             os.makedirs(output_dir, exist_ok=True)
             path = os.path.abspath(os.path.join(output_dir, "events_processed.jsonl"))
-            with jsonlines.open(path, "w") as f:
+            with jsonlines.open(path, "w", dumps=_dumps_jsonl) as f:
                 f.write_all(event_list)
             logger.info(f"Wrote {len(event_list)} event(s) to {path}")
         return event_list

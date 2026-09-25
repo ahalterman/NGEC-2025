@@ -12,7 +12,7 @@
 #     One record is one event (see explode_events), so 'attributes' is a single
 #     dict and the resolved value is top-level.
 
-from ngec.formatter import resolve_date, _resolve_date
+from ngec.formatter import resolve_date, resolve_date_text, _resolve_date
 
 REF = "2025-05-16"  # a Friday
 
@@ -475,3 +475,49 @@ def test_resolve_date_reads_attributes_defensively():
     no_pub = resolve_date({"attributes": {"date": ["yesterday"]}})["date_resolved"]
     assert no_pub["resolved_date"] is None
     assert no_pub["date_type"] == "unresolved"
+
+
+def test_resolve_date_text():
+    # The standalone entry point returns the same dict the pipeline stores in
+    # event['date_resolved'].
+    res = resolve_date_text("last Wednesday", REF)
+    assert res["resolved_date"].strftime("%Y-%m-%d") == "2025-05-14"
+    assert res["date_type"] == "exact"
+    assert res["granularity"] == "day"
+    assert set(res) == {"resolved_date", "date_end", "granularity", "date_type", "reason"}
+
+    event = resolve_date({"pub_date": REF, "attributes": {"date": ["last Wednesday"]}})
+    assert event["date_resolved"] == res
+
+
+def test_resolve_date_text_pub_date_forms():
+    # Date objects and the common string forms all give the same answer.
+    import datetime as dt
+    import pandas as pd
+    for pub in ["2025-05-16", "May 16, 2025", "16 May 2025", "2025-05-16T23:30:00+05:00",
+                dt.date(2025, 5, 16), dt.datetime(2025, 5, 16, 10), pd.Timestamp("2025-05-16")]:
+        res = resolve_date_text("last Wednesday", pub)
+        assert res["resolved_date"] == dt.datetime(2025, 5, 14), pub
+
+
+def test_resolve_date_text_missing_inputs():
+    import pandas as pd
+
+    # No phrase: the publication date, flagged unresolved.
+    for text in [None, ""]:
+        res = resolve_date_text(text, REF)
+        assert res["resolved_date"].strftime("%Y-%m-%d") == REF
+        assert res["date_type"] == "unresolved"
+
+    # No publication date: nothing to resolve against, even for an absolute
+    # date. A pandas NaN or NaT counts as missing; dateparser would otherwise
+    # read the string "nan" as a date about a month before today.
+    for pub in [None, "", float("nan"), pd.NaT, "not a date"]:
+        for text in ["last Wednesday", "March 3, 2021"]:
+            res = resolve_date_text(text, pub)
+            assert res["resolved_date"] is None, pub
+            assert res["date_type"] == "unresolved"
+            assert res["reason"] == "<No publication date>"
+
+    # NaN as the phrase (a missing cell) is treated like no phrase.
+    assert resolve_date_text(float("nan"), REF)["date_type"] == "unresolved"
