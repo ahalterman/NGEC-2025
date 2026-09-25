@@ -112,7 +112,7 @@ if result:
     st.subheader("Codes")
     _codes(result)
 
-    st.subheader("How it was decided")
+    st.markdown("**How it assigned codes**")
     if result["used_wikipedia"]:
         st.markdown(f"Resolved through Wikipedia: [{result['wiki']}]({result['url']})")
     elif result["source"] == "country only":
@@ -137,17 +137,16 @@ if result:
         timing_table(result["timing"])
 
 st.subheader("4.1 Custom agents file")
-lede("""
-This is one of the richest (and easiest) places for customization. A project on subnational politics
+st.markdown("""This is one of the richest (and easiest) places for customization. A project on subnational politics
 probably needs to make finer distinctions between groups than an international relations project.
 
-     To customize the codes, write a small set of patterns with the role code they should be assigned.
+To customize the codes, write a small set of patterns with the role code they should be assigned.
 
 In this example, "Extinction Rebellion" gets assigned a "rebel" role using the generic agents file that
-     NGEC ships with. Creating a small number of `ENV` patterns changes this, *even though "Extinction Rebellion" is not one of the patterns.*
+NGEC ships with. Creating a small number of `ENV` patterns changes this, *even though "Extinction Rebellion" is not one of the patterns.*
 
-     (Try coding "soldiers": you should see that it has no match in the custom agents list).
-     """)
+(Try coding "soldiers": you should see that it has no match in the custom agents list).
+""")
 
 if "s4_agents" not in st.session_state:
     st.session_state.s4_agents = CUSTOM_AGENTS
@@ -176,7 +175,7 @@ if custom:
     for label, key in (("Bundled dictionary", "default"), ("Custom dictionary", "custom")):
         st.markdown(f"**{label}**")
         _codes(custom[key])
-        st.caption(f"matched: {custom[key]['description'] or '—'} · "
+        st.markdown(f"matched: {custom[key]['description'] or '—'} · "
                    f"source: {custom[key]['source'] or '—'} · "
                    f"{custom[key]['seconds']:.1f} s · "
                    f"{mode_badge(custom[key]['mode'])}")

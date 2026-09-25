@@ -12,7 +12,7 @@ from ngec_demo.style import (code_glossary, demo_model_note, event_heading,
 
 st.title("NGEC Demo")
 st.markdown("A demo of the Next Generation Event Coder, a pipeline to turn a news story into structured "
-     "event records. Accompanies the Halterman, paper currently under review.")
+     "event records. Accompanies the Halterman, Schrodt, Beger, Bagozzi, and Scarborough paper currently under review.")
 
 st.markdown("The purpose of NGEC and this research is to make it easier for social scientists to create custom event data. This demo uses the PLOVER ontology throughout, but each step also discusses how it can be customized.")
 

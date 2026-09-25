@@ -32,7 +32,8 @@ HAIR = "#E6E6E4"      # soft hairline
 INK = "#111111"       # headings, hard rules, "this is fine" status
 BODY = "#2A2A28"      # body copy
 MUTED = "#6C6C68"     # captions, secondary copy, bars that did not fire
-LABEL = "#8E8E8A"     # mono uppercase labels
+LABEL = "#45453F"     # mono uppercase labels: darker than captions, so a
+                      # label is read rather than skimmed past
 ACCENT = "#F0521E"    # the one accent
 ACCENT_HOVER = "#D9451A"
 OK = "#2E7D53"        # the status green: only ever a dot, never text
@@ -114,8 +115,8 @@ p, li {{ color: var(--po-body); }}
 }}
 .stTextInput label p, .stTextArea label p, .stDateInput label p,
 .stRadio label p, .stSelectbox label p {{
-  font-family: var(--po-mono) !important; font-size: 0.65rem !important;
-  letter-spacing: 0.2em; text-transform: uppercase;
+  font-family: var(--po-mono) !important; font-size: 0.74rem !important;
+  font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--po-label) !important;
 }}
 
@@ -124,8 +125,8 @@ p, li {{ color: var(--po-body); }}
   border: 1px solid var(--po-hair); border-radius: 0; background: var(--po-paper);
 }}
 [data-testid="stExpander"] summary p {{
-  font-family: var(--po-mono) !important; font-size: 0.65rem !important;
-  letter-spacing: 0.2em; text-transform: uppercase; color: var(--po-label) !important;
+  font-family: var(--po-mono) !important; font-size: 0.74rem !important;
+  font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--po-label) !important;
 }}
 
 /* Tables and code: mono, hairline, unrounded. */
@@ -150,16 +151,16 @@ hr, [data-testid="stDivider"] {{
   font-family: var(--po-mono); font-size: 0.68rem; color: var(--po-mute);
 }}
 [data-testid="stSidebar"] strong {{
-  font-family: var(--po-mono); font-size: 0.65rem;
-  letter-spacing: 0.2em; text-transform: uppercase; color: var(--po-label);
+  font-family: var(--po-mono); font-size: 0.74rem;
+  font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--po-label);
 }}
 
 [data-testid="stMetricValue"] {{
   font-size: 1.3rem; font-weight: 700; letter-spacing: -0.03em; color: var(--po-ink);
 }}
 [data-testid="stMetricLabel"] p {{
-  font-family: var(--po-mono); font-size: 0.65rem;
-  letter-spacing: 0.2em; text-transform: uppercase; color: var(--po-label);
+  font-family: var(--po-mono); font-size: 0.74rem;
+  font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: var(--po-label);
 }}
 
 /* Status dot: a filled square, green when the dependency is up and orange when
@@ -180,7 +181,7 @@ hr, [data-testid="stDivider"] {{
   vertical-align: top; font-size: 0.86rem; color: var(--po-body);
 }}
 .fields td.name {{
-  font-family: var(--po-mono); font-size: 0.62rem; letter-spacing: 0.16em;
+  font-family: var(--po-mono); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--po-label);
   /* Wide enough for the longest name the table has ("Recipient span") at this
      size and letter-spacing, and told not to wrap in any case: a field name
@@ -188,7 +189,7 @@ hr, [data-testid="stDivider"] {{
   width: 10.5rem; padding-top: 0.5rem; white-space: nowrap;
 }}
 .event-head {{
-  font-family: var(--po-mono); font-size: 0.68rem; letter-spacing: 0.18em;
+  font-family: var(--po-mono); font-size: 0.76rem; font-weight: 600; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--po-ink);
   border-bottom: 1px solid var(--po-ink); padding-bottom: 0.3rem;
   margin: 1.2rem 0 0 0;
@@ -206,7 +207,7 @@ hr, [data-testid="stDivider"] {{
    yours -- line their codes up under each other. */
 .codes > div {{ min-width: 7rem; }}
 .codes .key {{
-  font-family: var(--po-mono); font-size: 0.62rem; letter-spacing: 0.16em;
+  font-family: var(--po-mono); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--po-label);
 }}
 .codes .val {{
