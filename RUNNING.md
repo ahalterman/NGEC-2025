@@ -43,7 +43,7 @@ green  geonames   13472152
 green  wiki        7936742
 ```
 
-`ngec download-index --start` fetches it and starts it (README step 5).
+`ngec download-index --start` fetches it and starts it (README Quickstart).
 `elasticsearch/SETUP.md` has the same steps by hand and describes building the
 indices yourself. Check what you have with:
 
@@ -63,8 +63,8 @@ The client is pinned to `elasticsearch==7.17.9`, which talks to ES 7.x, and a
 
 ## 2. Install
 
-Follow the README's installation steps. In short, for an installed package:
-install the PyTorch build for your machine, then NGEC, then
+Follow the README's Quickstart. In short, for an installed package: install
+NGEC with the extras for your machine (`ngec[cpu,llamacpp]`, `ngec[cu12,vllm]`, ...), then
 
 ```shell
 uv run ngec download-models        # spaCy models, sentence encoders, attribute LLM
@@ -172,9 +172,10 @@ installed package) check it; this section is the why, for when you are
 installing by hand or something went wrong.
 
 There are **two** constraints on which PyTorch build you need, and they pull in
-different directions. In a clone, the `cpu` / `cu12` / `cu13` extras exist so
-that you only have to answer the first one. An installed package gets the same
-effect by installing PyTorch from the right index before NGEC (README step 2).
+different directions. The `cpu` / `cu12` / `cu13` extras exist so that you
+only have to answer the first one, in a clone and when NGEC is installed from
+git with uv. With pip, install PyTorch from the right index before NGEC
+(`docs/INSTALL.md`).
 
 **Constraint 1: the driver.** Without one of those extras, uv installs the
 **default PyPI build** of PyTorch. On Linux that build is compiled against
@@ -215,7 +216,7 @@ extras, so the pairing fails at install time, where the message is about the
 extras rather than about a missing `.so` two model loads later. An installed
 package has no such check: a CUDA 13 build of torch 2.10.0 satisfies vLLM's
 version pin, so it is kept, and vLLM then fails when it loads. That is why the
-README's step 2 has a separate command for vLLM.
+README pairs `vllm` with `cu12` and never with `cu13`.
 
 ### How the extras do it
 
@@ -250,10 +251,14 @@ Two consequences worth knowing:
   build is chosen by the extra, not by a one-off reinstall, so it is not undone
   the way the older `uv pip install --torch-backend=...` recipe was. A bare
   `uv sync` without the extra goes back to the default PyPI build.
-- **It only works for this project.** uv reads `[tool.uv.sources]` for the
-  project it is building, not for dependencies, so `uv add ngec[cu12]` from
-  another project gets NGEC without the CUDA-specific PyTorch. Installing that
-  way, install PyTorch from the right index first, as the README does.
+- **It works for uv and a git install, not for pip or a wheel.** uv reads
+  `[tool.uv.sources]` from a dependency it builds from source, so
+  `uv add "ngec[cu12,vllm] @ git+https://github.com/ahalterman/ngec-2025"` in
+  another project gets the CUDA 12 PyTorch (tested 2026-09-25; `cpu` and
+  `cu13` likewise, and the llama-cpp-python and mordecai3 sources too). The
+  `conflicts` table is not applied there, so `cpu,vllm` installs and then fails.
+  pip ignores `[tool.uv.sources]`, and a wheel's metadata does not carry it;
+  with either, install PyTorch from the right index first.
 
 ### The older recipe, and things that don't work
 
@@ -543,7 +548,7 @@ prints the fix.
 |---|---|
 | `ModuleNotFoundError: No module named 'click'` on `import spacy` | spaCy imports `click` but only declares `typer`, and a typer release dropped click. Fixed by the explicit `click` dependency; re-install or re-run `uv sync`. |
 | `xgrammar ... doesn't have a wheel for the current platform` during `--extra vllm` | xgrammar stopped publishing wheels for newer Pythons. Pinned to `<0.2.4` in `pyproject.toml`. |
-| `torch.cuda.is_available()` is `False` on a working GPU | CUDA-13 torch on a CUDA-12 driver. Install the right build (README step 2, or in a clone the extra the setup doctor recommends); see §4. |
+| `torch.cuda.is_available()` is `False` on a working GPU | CUDA-13 torch on a CUDA-12 driver. Install the right build (the `cu12` extra; in a clone, the extra the setup doctor recommends); see §4. |
 | `ImportError: libcudart.so.13` from `vllm._C` | CUDA-13 vLLM (0.20.0+) against a CUDA-12 torch, or vice versa. The extra is pinned `<0.20`, so pair it with a CUDA 12 `torch==2.10.0`. See §4. |
 | `ImportError: libcudnn.so.9` / `libnvshmem_host.so.3` on `import torch` | A half-swapped venv from changing torch builds in place. Delete `.venv` and reinstall with the extra you want. |
 | `undefined symbol: __nvJitLinkGetErrorLogSize_12_9` | An old system CUDA on `LD_LIBRARY_PATH` shadowing the wheels' libraries. Run with `env -u LD_LIBRARY_PATH`. See §4. |

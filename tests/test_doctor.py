@@ -135,7 +135,7 @@ def test_gpu_hidden_by_cuda_visible_devices_is_not_a_broken_torch(monkeypatch):
 def test_gpu_torch_cannot_see_still_prescribes_a_reinstall(monkeypatch):
     row = _gpu_row(monkeypatch, None)
     assert row.status == doctor.WARN
-    assert "--reinstall-package torch" in row.fix
+    assert "cu12" in row.fix
 
 
 def _setup_doctor():

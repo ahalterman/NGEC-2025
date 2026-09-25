@@ -24,11 +24,13 @@ which install command fits this machine. It is not in the pip package.
 
 - **Never use `sudo`**, and never install system software (Docker, drivers)
   yourself. Give the user the command and wait.
-- **Install PyTorch before NGEC, and pick the build for the machine**: CUDA 12
-  or 13 to match `nvidia-smi`, or CPU. The default build on Linux targets CUDA
-  13 and, on an older driver, runs on the CPU with no error.
-- **vLLM** (the fast backend, Linux + NVIDIA only) needs a CUDA 12 PyTorch,
-  `torch==2.10.0`, even when the driver reports CUDA 13.
+- **Pick the PyTorch build with an extra**: `cpu` without an NVIDIA GPU,
+  `cu12` with one (any driver reporting CUDA 12 or 13), none on macOS. Without
+  one, the default build on Linux targets CUDA 13 and, on an older driver, runs
+  on the CPU with no error.
+- **vLLM** (the fast backend, Linux + NVIDIA only) needs `cu12`, even when the
+  driver reports CUDA 13. Installed as a package, nothing stops `cpu,vllm` or
+  `cu13,vllm`; both fail when vLLM loads.
 - **An `undefined symbol: __nvJitLink...` error** means a system CUDA on
   `LD_LIBRARY_PATH` is shadowing PyTorch's own libraries. Prefix the command
   with `env -u LD_LIBRARY_PATH`.
@@ -53,16 +55,30 @@ Install only what the user's goal requires. Elasticsearch is the slow part.
 
 ## Install, in short
 
-The README's "Installation" section has the full steps and explains each one.
-In outline, in a uv project:
+The README's Quickstart has the steps, and `docs/INSTALL.md` in the
+repository explains each one. In a new uv project:
 
 ```shell
-uv add torch --index pytorch=https://download.pytorch.org/whl/cu129   # match the machine
-uv add "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-uv add "ngec[llamacpp] @ git+https://github.com/ahalterman/ngec-2025" \
-    --index https://abetlen.github.io/llama-cpp-python/whl/cpu      # on a CPU; ngec[vllm] with an NVIDIA GPU
-uv run ngec download-models                                          # ~3 GB
+uv init --python 3.12 my-ngec && cd my-ngec    # skip if the user already has a project
+uv add "ngec[cpu,llamacpp] @ git+https://github.com/ahalterman/ngec-2025"
+uv run ngec download-models                    # ~4 GB
 ```
+
+The extras choose the PyTorch build and the attribute-model backend, and uv
+fetches both from the right index on its own (NGEC's `[tool.uv.sources]`):
+
+| Machine | Extras |
+|---|---|
+| No NVIDIA GPU | `cpu,llamacpp` |
+| Apple Silicon Mac | `mlx` |
+| Linux + NVIDIA GPU | `cu12,vllm` |
+| Windows + NVIDIA GPU | `cu12,llamacpp` |
+
+With pip the extras do not choose the index: install PyTorch first, then
+`mordecai3 @ git+https://github.com/ahalterman/mordecai3@release-3.5`, then
+`ngec[llamacpp]` with
+`--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu`.
+`docs/INSTALL.md` has the commands.
 
 Then, if the goal needs it, the pre-built Elasticsearch index (about 11.6 GB)
 served by Elasticsearch 7.10.1 in Docker:
@@ -109,8 +125,8 @@ install.
 
 | Backend | For | Install | Speed |
 |---|---|---|---|
-| `vllm` | Linux with an NVIDIA GPU | `ngec[vllm]` (with the CUDA 12 PyTorch, see the README) | fastest; for large corpora |
-| `llamacpp` | any CPU: laptops, Windows, servers without a GPU | `ngec[llamacpp]`, with `--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu` | about 4.6 s per story and event type on a desktop CPU |
+| `vllm` | Linux with an NVIDIA GPU | `ngec[cu12,vllm]` | fastest; for large corpora |
+| `llamacpp` | any CPU: laptops, Windows, servers without a GPU | `ngec[cpu,llamacpp]` | about 4.6 s per story and event type on a desktop CPU |
 | `mlx` | a Mac with Apple Silicon | `ngec[mlx]` | not measured |
 | `transformers` | deprecated | built in | about 3x slower than llamacpp on a CPU, twice the memory |
 
@@ -123,9 +139,10 @@ llamacpp runs the model inside Python from a quantized copy (an 834 MB GGUF
 file, fetched the first time, or ahead of time by `ngec download-models`).
 Quantizing costs nothing measurable in accuracy. It uses one thread per
 performance core, up to 8; `NGEC_LLAMACPP_THREADS` changes that, but more
-threads are usually slower on CPUs that also have efficiency cores. Without
-the extra index, pip compiles llama.cpp from source, which needs a C++
-compiler and CMake. To use a separately running `llama-server` instead, set
+threads are usually slower on CPUs that also have efficiency cores. uv
+installs a ready-built llama.cpp; pip does too with the extra index above, and
+without it compiles llama.cpp from source, which needs a C++ compiler and
+CMake. To use a separately running `llama-server` instead, set
 `NGEC_LLAMACPP_URL`.
 
 ## pip or git clone?

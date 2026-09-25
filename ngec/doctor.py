@@ -453,8 +453,9 @@ def compute() -> list[Check]:
             f"{torch.__version__} does not see it",
             "gpu=True and the vllm backend; the pipeline runs on the CPU "
             "instead, at a fraction of the speed and without saying so",
-            "uv pip install torch --torch-backend=auto --reinstall-package torch"
-            " (see the PyTorch section of README.md)"))
+            "reinstall NGEC with the cu12 extra, e.g. uv add \"ngec[cu12,vllm] @ "
+            "git+https://github.com/ahalterman/ngec-2025\" (in a clone: uv sync "
+            "--extra cu12); see 'Choosing the extras' in docs/INSTALL.md"))
     elif platform.system() == "Darwin" and platform.machine() == "arm64":
         mps = getattr(torch.backends, "mps", None)
         if mps is not None and mps.is_available():
@@ -509,7 +510,7 @@ def elasticsearch() -> list[Check]:
             "Elasticsearch", FAIL,
             f"cannot connect to {_es_target()}: {type(exc).__name__}",
             "geolocation and actor resolution, and so the pipeline as a whole",
-            "start Elasticsearch (README, step 5), or point ES_HOST / ES_PORT "
+            "start Elasticsearch (ngec download-index --start), or point ES_HOST / ES_PORT "
             "at the cluster you mean")]
 
     version = client.info().get("version", {}).get("number", "unknown")

@@ -1,421 +1,243 @@
 # NGEC
 
-*This is a pre-release version of the code. Expect instability and errors when running it.*
+NGEC (Next Generation Event Coder) turns news stories into political event
+data. For each story it finds the events it describes, using the
+[PLOVER](https://github.com/openeventdata/PLOVER) event categories (protests,
+assaults, requests, accusations, ...). For each event it extracts the actor and
+recipient, when and where it happened, and how many people were killed or
+injured. It then codes the actors into PLOVER categories (government, military,
+civilians, ...) and links them to Wikipedia. It resolves the date to a calendar
+date and the location to a place in GeoNames. It is the pipeline behind the
+[POLECAT](https://dataverse.harvard.edu/dataverse/POLECAT) dataset.
 
-NGEC depends on Elasticsearch indices built from Wikipedia and GeoNames, for actor resolution and geocoding, so installing it includes downloading those and running Elasticsearch. See the install instructions below.
+*This is a pre-release version. Expect some instability, and record the version
+you used (see [Reproducibility](#reproducibility)).*
 
-## Installation
+- [Quickstart](#quickstart)
+- [Letting a coding agent set it up](#letting-a-coding-agent-set-it-up)
+- [Coding your own stories](#coding-your-own-stories)
+- [Before coding a corpus](#before-coding-a-corpus)
+- [When something goes wrong](#when-something-goes-wrong)
+- [More documentation](#more-documentation)
 
-NGEC has four moving parts: the Python package, a PyTorch build that matches your machine, about 3 GB of models (two spaCy models, three sentence encoders and a small LLM), and an Elasticsearch node holding a Wikipedia + GeoNames index. Most of the elapsed time is downloads.
+## Quickstart
 
-**Before you start:**
+You need:
 
-| | |
+- [uv](https://docs.astral.sh/uv/getting-started/installation/), which installs
+  Python and NGEC. [`docs/INSTALL.md`](docs/INSTALL.md#installing-with-pip) has
+  the pip version.
+- [Docker](https://www.docker.com/get-started/), which runs Elasticsearch, the
+  search engine that holds NGEC's copy of Wikipedia and of the GeoNames
+  gazetteer.
+- About 35 GB of free disk space and an hour, mostly spent downloading.
+
+Then, in a terminal:
+
+```shell
+uv init --python 3.12 my-ngec          # a new project folder
+cd my-ngec
+uv add "ngec[cpu,llamacpp] @ git+https://github.com/ahalterman/ngec-2025"
+uv run ngec download-models            # about 4 GB of models
+uv run ngec download-index --start     # 11.6 GB index; starts Elasticsearch in Docker
+uv run ngec doctor --smoke             # checks everything, then codes three stories
+```
+
+`ngec[cpu,llamacpp]` is for a computer without an NVIDIA graphics card, which
+is most laptops. Otherwise, change the part in brackets:
+
+| Your computer | Install |
 |---|---|
-| **Docker** | <https://www.docker.com/get-started/> — for Elasticsearch |
-| **Python** | 3.10 or newer |
-| **uv** | <https://docs.astral.sh/uv/getting-started/installation/> — or use pip; each step has the pip version |
-| **Disk** | ~33 GB free during install, ~18 GB once the archive is deleted |
-| **Time** | About an hour, most of it downloading |
-| **GPU** | Optional. Everything runs on CPU, just slowly |
-
-If a step fails, see [When something is wrong](#when-something-is-wrong) below.
-
-**Install or clone?** The steps below install NGEC as a package, which is all you need to *use* it: run the pipeline, use a single step such as date resolution or Wikipedia linking, or code events with your own actor categories, event definitions or classifier. Clone this repository only to *change* NGEC itself, retrain its models, rebuild the Elasticsearch indices, or run its tests; see [Working from a clone](#working-from-a-clone).
-
-**Not everything needs Elasticsearch.** Only geocoding and Wikipedia-based actor resolution use it. If you only need event types, attribute extraction, date resolution or actor categories, skip steps 1 and 5.
-
----
-
-### Step 1. Start the index download
-
-This is an 11.6 GB download and the longest single step, so start it in a terminal window of its own and carry on with the other steps in another. The archive is an Elasticsearch data directory holding both indices, Wikipedia (dump of 2026-09-01) and GeoNames (2026-09-23).
-
-```shell
-mkdir -p ~/ngec-es-data
-cd ~/ngec-es-data
-curl -LO -C - https://andrewhalterman.com/files/wikigeo_index_2026-09.tar.gz
-```
-
-If the download is interrupted, run the same `curl` again; `-C -` makes it carry on where it stopped.
-
-### Step 2. Install PyTorch
-
-NGEC is installed into a [uv](https://docs.astral.sh/uv/) project. If you don't have one yet, create it in the folder you want to work in (not in `~/ngec-es-data`):
-
-```shell
-uv init my-ngec-project
-cd my-ngec-project
-```
-
-Then install PyTorch **before** NGEC, choosing the build that matches your machine. Otherwise you get whatever the default is for your platform: on Windows with an NVIDIA GPU that is a CPU-only build, and on Linux a CUDA 13 build that falls back to the CPU on an older driver. Both run many times slower, with no error to tell you so.
-
-| Your machine | Command |
-|---|---|
-| macOS | Nothing to do: the default build is right. Go to step 3 |
-| NVIDIA GPU, `nvidia-smi` reports CUDA 12.x | `uv add torch --index pytorch=https://download.pytorch.org/whl/cu129` |
-| NVIDIA GPU, `nvidia-smi` reports CUDA 13.x | `uv add torch --index pytorch=https://download.pytorch.org/whl/cu130` |
-| NVIDIA GPU on Linux, planning to use the faster vLLM backend | The vLLM command below |
-| Everything else | `uv add torch --index pytorch=https://download.pytorch.org/whl/cpu` |
-
-`nvidia-smi` prints the CUDA version in the top right corner. The `--index` is recorded in your project, so installing NGEC in step 3 keeps this build instead of replacing it with the default one.
-
-**For vLLM**, use a CUDA 12 build pinned to the versions vLLM requires, even if `nvidia-smi` reports CUDA 13 ([why](#step-3-install-ngec)):
-
-```shell
-uv add "torch==2.10.0" "torchvision==0.25.0" "torchaudio==2.10.0" --index pytorch=https://download.pytorch.org/whl/cu129
-```
-
-[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) shows how to check which build you ended up with.
-
-<details>
-<summary>With pip instead of uv</summary>
-
-Install PyTorch first, with the command for your machine from <https://pytorch.org/get-started/locally/>, e.g.:
-
-```shell
-pip install torch --index-url https://download.pytorch.org/whl/cu129
-```
-
-pip keeps an installed PyTorch when you install NGEC afterwards, as long as it is version 2.6 or newer. For vLLM, install `torch==2.10.0 torchvision==0.25.0 torchaudio==2.10.0` from the CUDA 12 index above.
-
-</details>
-
-### Step 3. Install NGEC
-
-In the same project folder, install NGEC and [mordecai3](https://github.com/ahalterman/mordecai3), which geocoding depends on. Both are in active development, so install both from GitHub. NGEC also needs a backend to run its attribute-extraction model. On a computer without an NVIDIA GPU, which is most laptops, that is llama.cpp, which runs the model on the CPU:
-
-```shell
-uv add "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-uv add "ngec[llamacpp] @ git+https://github.com/ahalterman/ngec-2025" \
-    --index https://abetlen.github.io/llama-cpp-python/whl/cpu
-```
-
-The extra index has ready-built llama.cpp wheels. Without it, llama.cpp is compiled on your machine, which needs a C++ compiler and CMake. On Linux with an NVIDIA GPU, install `ngec[vllm]` instead (see below), and on a Mac with Apple Silicon, `ngec[mlx]`. NGEC picks whichever backend is installed.
-
-<details>
-<summary>With pip instead of uv</summary>
-
-```shell
-pip install "mordecai3 @ git+https://github.com/ahalterman/mordecai3"
-pip install "ngec[llamacpp] @ git+https://github.com/ahalterman/ngec-2025" \
-    --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-```
-
-</details>
-
-<details>
-<summary>The vLLM backend (Linux + NVIDIA)</summary>
-
-On a machine with an NVIDIA GPU, vLLM is much faster than llama.cpp. Instead of the `ngec` line above:
-
-```shell
-uv add "ngec[vllm] @ git+https://github.com/ahalterman/ngec-2025"
-```
-
-With pip, the same with `pip install`.
-
-The pinned vLLM (`>=0.19,<0.20`) is the last CUDA 12 build, which runs on both CUDA 12 and CUDA 13 drivers. It requires exactly `torch==2.10.0`, and vLLM's compiled code needs the CUDA 12 runtime that a CUDA 12 PyTorch build brings along. That is why step 2 has a separate command for vLLM: a CUDA 13 build of torch 2.10.0 satisfies the version pin, so it is kept, and vLLM then fails when it loads.
-
-vLLM publishes Linux wheels only. On Windows it runs under WSL, or use llama.cpp on the CPU.
-
-</details>
-
-### Step 4. Download the models
-
-None of the models NGEC uses come with installing it. One command fetches all of them, about 3 GB together:
-
-```shell
-uv run ngec download-models
-```
-
-| Model | Size | Used for |
-|---|---|---|
-| spaCy `en_core_web_trf`, `en_core_web_lg` | ~900 MB | parsing, and word vectors for actor matching |
-| `sentence-transformers/all-mpnet-base-v2` | ~440 MB | event classification |
-| `sentence-transformers/static-retrieval-mrl-en-v1`, `BAAI/bge-small-en-v1.5` | ~260 MB | actor resolution (Wikipedia and agent matching) |
-| `ahalt/qwen3.5-event-extraction-0.8b` | ~1.8 GB | attribute extraction |
-
-The spaCy models are installed as Python packages. The rest go into the Hugging Face cache (`~/.cache/huggingface`, or `$HF_HOME` if set), which is where the pipeline looks for them. Models that are already there are skipped, so it is safe to run again.
-
-The spaCy models have to be downloaded this way; the pipeline stops with an error without them. The others would otherwise download the first time the pipeline needs them, which works, but makes the first run slow and fails on a machine without internet access.
-
-A few options:
-
-- `--attribute-model NAME` downloads a different attribute model, e.g. `ahalt/qwen3-event-extraction-exp5.1` for the model in the submitted paper. If `NGEC_ATTRIBUTE_MODEL` is set, that model is the default, as it is for the pipeline.
-- `--no-attribute-model` skips the LLM, e.g. if you run it through a llama.cpp server, which uses its own GGUF file.
-- `--force` reinstalls the spaCy models and re-downloads the LLM, if you suspect a broken download.
-
-<details>
-<summary>In a virtual environment without uv</summary>
-
-With the venv active, run `ngec download-models`.
-
-</details>
-
-### Step 5. Start Elasticsearch on the index
-
-```shell
-uv run ngec download-index --start
-```
-
-This finds the archive from step 1 in `~/ngec-es-data` (and finishes the download if it did not complete), checks it against its published checksum, unpacks it to `~/ngec-es-data/wikigeo_index`, deletes the archive, and starts Elasticsearch over it in Docker on port 9200, where NGEC looks by default. If you skipped step 1, it downloads the archive itself. `--dest` puts it somewhere other than `~/ngec-es-data`; without `--start` it prints the `docker run` command instead of running it.
-
-Elasticsearch takes a minute or so to open the indices. It is ready when this prints a short block of JSON instead of an error:
-
-```shell
-curl localhost:9200
-```
-
-NGEC connects to `localhost:9200` by default. To use a different host or port, save [`.env.example`](.env.example) from this repository into your project folder as `.env`, and uncomment the lines you need. It lists every setting NGEC reads, with what each one does. The tests, the demo and `ngec doctor` read `.env` automatically; your own scripts need to pass the host and port to `ngec.es_client.setup_es_client`.
-
-The Elasticsearch version is pinned: a 7.10 data directory will not open on Elasticsearch 8. [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md) has the same steps with plain `curl`, `tar` and `docker run`, explains every flag, and describes how to build the indices yourself from a newer Wikipedia dump.
-
-<details>
-<summary>In a virtual environment without uv</summary>
-
-With the venv active, run `ngec download-index --start`.
-
-</details>
-
-### Step 6. Check that it works
-
-```shell
-uv run ngec doctor --smoke
-```
-
-This checks the installation, then runs three real news articles all the way through the pipeline and prints the coded events. It takes a few minutes on CPU. If it prints events, the install is good. It never downloads anything: if a model is missing, it says so and tells you to run `ngec download-models`.
-
----
-
-### When something is wrong
-
-Without `--smoke`, the doctor checks the pieces in a few seconds, without running the pipeline:
-
-```shell
-uv run ngec doctor
-```
-
-It prints the installed version and commit, every environment variable NGEC reads, what the PyTorch build can see, and whether Elasticsearch is reachable with both indices in it. It also flags any key in your `.env` that NGEC does not read: a misspelled setting is otherwise ignored without error. Anything it flags is repeated at the bottom with the command that fixes it. `--json` gives the same findings machine-readably, which is the more useful thing to paste into a bug report. `--only` takes any subset of `install`, `config`, `compute`, `elasticsearch`, `smoke`.
-
-The most common thing it catches is the PyTorch problem from step 2: on a machine with an NVIDIA GPU it asks the driver directly and compares that against what PyTorch sees, so a build that has quietly fallen back to the CPU is reported rather than left to show up as a pipeline that is many times slower than expected.
-
-It exits non-zero only on a real failure, so it is also safe to run in CI. An unreachable Elasticsearch counts as one, so on a CI runner without it use `--only install,config,compute`. `ngec doctor` is also installed as `ngec-doctor`, and `python -m ngec.doctor` does the same if neither is on your PATH; in a virtual environment without uv, activate it and run `ngec doctor` directly.
-
-### Working from a clone
-
-Contributors install differently — `uv sync` with one of the `cpu` / `cu12` / `cu13` extras, which redirect PyTorch to the right index automatically and bring in the spaCy models. See [`DEVELOPING.md`](DEVELOPING.md).
-
-A clone also has the **setup doctor**, which checks a machine before anything is installed and prints the exact command to fix whatever is missing. It is a single standard-library file, so it runs on any Python 3.8+:
-
-```shell
-python3 setup/doctor/ngec_doctor.py
-```
-
-`--serve` opens a local page that runs each command for you and re-checks afterwards. See [`setup/doctor/README.md`](setup/doctor/README.md). Its fixes assume the clone workflow (`uv sync --extra …`), which is why it is here rather than in the steps above. Working with Claude Code, the `ngec-setup` skill drives the same loop conversationally.
-
-### With a coding agent
-
-If you use Claude Code, Codex or another coding agent, NGEC comes with a guide written for it:
+| No NVIDIA GPU (most laptops, Windows or Linux) | `ngec[cpu,llamacpp]` |
+| Mac with Apple Silicon (M1 or newer) | `ngec[mlx]` |
+| Linux with an NVIDIA GPU | `ngec[cu12,vllm]` |
+| Windows with an NVIDIA GPU | `ngec[cu12,llamacpp]` |
+
+What the commands do:
+
+- **`ngec download-models`** downloads the language models NGEC uses (spaCy,
+  three sentence encoders, and the model that extracts event attributes) into
+  your user cache, so the first run is not also a download.
+- **`ngec download-index --start`** downloads the Wikipedia and GeoNames index to
+  `~/ngec-es-data`, checks it, unpacks it, and starts Elasticsearch on it on
+  port 9200. It is the slowest step, so you can run it in a second terminal
+  while `download-models` runs. If the download is interrupted, run it again and
+  it carries on where it stopped. Elasticsearch keeps running in Docker after
+  you close the terminal, and starts again with Docker after a reboot.
+- **`ngec doctor --smoke`** checks the installation and then codes three news
+  stories. It takes a few minutes on a laptop. If it prints events, NGEC works.
+
+**Not everything needs Elasticsearch.** Only geocoding and Wikipedia-based actor
+resolution use it. If you only need event types, the extracted attribute text,
+date resolution or actor categories, skip `download-index`.
+[`docs/INSTALL.md`](docs/INSTALL.md#do-you-need-all-of-it) lists what each step
+needs.
+
+## Letting a coding agent set it up
+
+If you use Claude Code, Codex or another coding agent, it can do the installation
+for you. Open it in an empty folder and ask it to:
+
+> Install NGEC in this folder, following
+> https://raw.githubusercontent.com/ahalterman/ngec-2025/main/ngec/assets/guide/setup.md
+
+That guide is written for agents. It tells them to use `ngec doctor` to
+find what is missing, to install only what your goal needs, to ask you before
+running each fix, and to leave installing system software such as Docker to
+you.
+
+Once NGEC is installed, run this in your project folder:
 
 ```shell
 uv run ngec guide --init
 ```
 
-This adds a short section to `AGENTS.md` in your project folder (creating the file if there is none) telling the agent to run `ngec guide` before working with NGEC. The guide itself ships with the package, so it always describes the version you have installed; `ngec guide` prints it, and `ngec guide setup`, `run`, `pieces` and `customize` print its other topics. People can read it too.
+This adds a short section to the project's `AGENTS.md` (creating it if needed)
+that tells any agent working there to read NGEC's guide first. The guide comes
+with the package, so it always matches the version you have installed. It covers
+installing, coding a corpus, using single steps, and using your own actor
+categories, event definitions or classifier.
 
-### Commands
+Codex and most other agents read `AGENTS.md` on their own. Claude Code reads it
+when the folder has no `CLAUDE.md`. If yours has one, add a line to it that
+says `@AGENTS.md`.
 
-| Command | What it does |
-|---|---|
-| `ngec download-models` | downloads the spaCy, sentence-transformer and attribute models ([step 4](#step-4-download-the-models)) |
-| `ngec download-index` | downloads and unpacks the pre-built Elasticsearch index; `--start` also starts Elasticsearch on it |
-| `ngec update` | says whether newer models or a newer index have been published; `--apply` updates them (see [Keeping a server up to date](#keeping-a-server-up-to-date)) |
-| `ngec doctor` | checks the installation and prints the fix for anything wrong; `--smoke` also runs the pipeline on three stories |
-| `ngec guide` | prints the guide for coding agents; `--init` points your project's `AGENTS.md` at it |
-| `python3 setup/doctor/ngec_doctor.py` | in a clone only: checks a machine before anything is installed |
+## Coding your own stories
 
-### Keeping a server up to date
-
-```shell
-uv run ngec update            # what is out of date; changes nothing
-uv run ngec update --apply    # update it
-```
-
-`ngec update` checks the Hugging Face models (the attribute model and the sentence encoders) against the hub, and the Elasticsearch index against the current published release. **`--apply` replaces the running index**: it downloads the new release (about 12 GB) next to the old one, stops the `ngec-es` container that `ngec download-index --start` created, starts it again on the new index, and deletes the old index once both new indices come up with the published document counts. Elasticsearch is down for about a minute, and if the new index does not come up the old container is put back. Anything that has a model loaded, such as a running demo, needs a restart to use an updated model. It can run unattended, e.g. from cron.
-
-### Cached embeddings
-
-NGEC caches some embeddings for speed. Uninstalling the package does not delete them; they live in the OS cache directory reported by [`platformdirs`](https://platformdirs.readthedocs.io/en/latest/platforms.html) and can be regenerated at any time.
-
-
-## Usage
-
-NGEC includes a functioning demo PLOVER coder (it does require ES though):
-
-```python
-import logging
-from pprint import pprint
-
-from ngec.plover_coder import PloverCoder
-from ngec.es_client import setup_es_client
-from ngec.logging import setup_logging
-
-# Quiet third-party logging
-setup_logging(
-    level=logging.DEBUG,
-    format_string="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    quiet_third_party=True
-)
-
-# Connect to ES
-es_client = setup_es_client(hosts=["localhost"], port=9200)
-
-# The attribute model's backend is picked for this machine (vLLM with an
-# NVIDIA GPU, MLX on Apple Silicon, llama.cpp otherwise); it logs which.
-# `event_threshold` is left unset on purpose: that uses the per-type thresholds
-# recorded with the classifier. Setting it applies one threshold to every
-# event type instead.
-pc = PloverCoder(es_client=es_client)
-
-story_list = [
-        {"id": "story1", "event_text": "Protesters were in the streets in Paris again today to protest against the government's austerity measures.", "pub_date": "2016-05-01"}
-    ]
-    
-event_list = pc.process(story_list)
-
-pprint(event_list, sort_dicts=False, width=100)
-```
-
-```
-[{'id': 'story1_PROTEST_demo_0',
-  'event_text': 'Protesters were in the streets in Paris again today to protest against the '
-                "government's austerity measures.",
-  'pub_date': '2016-05-01',
-  'event_type': 'PROTEST',
-  'event_type_confidence': {'PROTEST': 0.9999998654438295},
-  'event_mode': 'demo',
-  'geolocated_ents': [{'feature_code': 'PPLC',
-                       'feature_class': 'P',
-                       'country_code3': 'FRA',
-                       'lat': 48.85341,
-                       'lon': 2.3488,
-                       'admin1_code': '11',
-                       'admin1_name': 'Île-de-France',
-                       'admin2_code': '75',
-                       'admin2_name': 'Paris',
-                       'geonameid': '2988507',
-                       'score': 1.0,
-                       'search_name': 'Paris',
-                       'start_char': 34,
-                       'end_char': 39,
-                       'city_id': '2988507',
-                       'city_name': 'Paris',
-                       'country_name': 'France',
-                       'resolved_placename': 'Paris'}],
-  'story_people': [],
-  'story_organizations': [],
-  'story_places': ['Paris'],
-  '_doc_position': 0,
-  'orig_id': 'story1',
-  # Each extracted event is its own record. 'attributes' is a single dict; the
-  # resolved actors/recipients, event_location, and date_resolved are top-level.
-  'attributes': {'event_type': 'PROTEST',
-                 'anchor_quote': 'Protesters were in the streets in Paris again today to protest '
-                                 "against the government's austerity measures",
-                 'actor': ['Protesters'],
-                 'recipient': ['government'],
-                 'date': ['today'],
-                 'location': ['Paris']},
-  'actor': [{'wiki': '',
-             'actor_wiki_job': '',
-             'all_code1s': [],
-             'all_code2s': [],
-             'country': '',
-             'code_1': 'CVL',
-             'code_2': 'OPP',
-             'actor_role_query': 'Protesters',
-             'actor_resolved_pattern': 'protesters',
-             'actor_pattern_conf': 0.9999999999997888,
-             'actor_resolution_reason': '',
-             'description': 'protesters',
-             'source': 'BERT matching full text',
-             'best_reason': ''}],
-  'recipient': [{'wiki': '',
-                 'actor_wiki_job': '',
-                 'all_code1s': [],
-                 'all_code2s': [],
-                 'country': '',
-                 'code_1': 'GOV',
-                 'code_2': '',
-                 'actor_role_query': 'government',
-                 'actor_resolved_pattern': 'government',
-                 'actor_pattern_conf': 0.9999999999996712,
-                 'actor_resolution_reason': '',
-                 'description': 'government',
-                 'source': 'BERT matching full text',
-                 'best_reason': ''}],
-  'event_location': {'event_loc': {'feature_code': 'PPLC',
-                                   'feature_class': 'P',
-                                   'country_code3': 'FRA',
-                                   'lat': 48.85341,
-                                   'lon': 2.3488,
-                                   'admin1_code': '11',
-                                   'admin1_name': 'Île-de-France',
-                                   'admin2_code': '75',
-                                   'admin2_name': 'Paris',
-                                   'geonameid': '2988507',
-                                   'score': 1.0,
-                                   'search_name': 'Paris',
-                                   'start_char': 34,
-                                   'end_char': 39,
-                                   'city_id': '2988507',
-                                   'city_name': 'Paris',
-                                   'country_name': 'France',
-                                   'resolved_placename': 'Paris'},
-                     'reason': 'success'},
-  # 'granularity' is the precision unit (day/week/month/quarter/year);
-  # 'date_type' is exact / approximate / range / unresolved; 'date_end' is set
-  # only for a genuine range ("Tuesday to Thursday").
-  'date_resolved': {'resolved_date': datetime.datetime(2016, 5, 1, 0, 0),
-                    'date_end': None,
-                    'granularity': 'day',
-                    'date_type': 'exact',
-                    'reason': '<Resolved day idiom to the publication day>'}}]
-```
-
-
-### Saving the results
-
-`PloverCoder` returns one record per event, with nested fields. `events_to_table` flattens them into a pandas DataFrame with one row per event, for R, Stata or a spreadsheet:
+Each story needs an `id`, the `event_text`, and a `pub_date`, which is used to
+resolve relative dates like "today" or "last Tuesday":
 
 ```python
 from ngec import events_to_table
-
-events_to_table(event_list).to_csv("events.csv", index=False)
-```
-
-`ngec guide run` has a fuller script for coding a whole corpus in batches, and `ngec guide pieces` shows how to use a single step, such as date resolution or Wikipedia linking, on its own.
-
-### Logging
-
-Some of the third-party dependencies have very verbose loggers by default. To quiet those:
-
-```python
+from ngec.es_client import es_client_from_env
 from ngec.logging import quiet_third_party_loggers
+from ngec.plover_coder import PloverCoder
 
 quiet_third_party_loggers()
+
+coder = PloverCoder(es_client=es_client_from_env())
+
+stories = [
+    {"id": "story1",
+     "event_text": "Protesters were in the streets in Paris again today to protest "
+                   "against the government's austerity measures.",
+     "pub_date": "2016-05-01"},
+]
+events = coder.process(stories)
+
+table = events_to_table(events)
+table.to_csv("events.csv", index=False)
 ```
 
-There is also a more general helper function included that can do this as well:
+Save it as a file in your project folder (e.g. `code_events.py`) and run it with
+`uv run python code_events.py`. `events.csv` has one row per event and opens in
+R, Stata or a spreadsheet:
 
-```python
-import logging
-from ngec.logging import setup_logging
-
-setup_logging(
-    level=logging.DEBUG,
-    format_string="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    quiet_third_party=True
-)
 ```
+id                story1_PROTEST_demo_0
+story_id          story1
+pub_date          2016-05-01
+event_type        PROTEST
+event_mode        demo
+anchor_quote      Protesters were in the streets in Paris again today to protest against the government's austerity measures
+date_text         today
+date              2016-05-01
+date_granularity  day
+date_type         exact
+location_text     Paris
+killed_text
+injured_text
+location_name
+location_country
+location_admin1
+lat
+lon
+geonameid
+actor_text        Protesters
+actor_code        CVL OPP
+actor_wiki
+recipient_text    government
+recipient_code    GOV
+recipient_wiki
+```
+
+- **`event_type` and `event_mode`** are the PLOVER event type and its mode
+  (here, a demonstration). A story can produce several events. It produces one
+  per event type and mode that the classifier detects, and more if the story
+  describes more than one such event.
+- **`anchor_quote`** is the passage the event was extracted from, and the
+  `*_text` columns are the spans the model took from it.
+- **`date`** is the resolved calendar date. `date_granularity` says how precise
+  it is (day, week, month, quarter, year) and `date_type` whether it is exact,
+  approximate or a range.
+- **`location_*`, `lat`, `lon` and `geonameid`** are the GeoNames place, when
+  the geocoder is confident enough about it. In this example it is not, so they
+  are empty.
+- **`actor_code`** gives the PLOVER actor categories (here, civilians who are
+  opposition), and `actor_wiki` gives the Wikipedia page when the actor is a
+  named person or organization.
+
+`events` itself is a list of Python dictionaries with more detail than the
+table: the classifier's confidence, every place mordecai3 found in the story,
+and why each date and location was or wasn't resolved.
+[`PIPELINE.md`](PIPELINE.md) describes every field.
+
+## Before coding a corpus
+
+**The event classifiers are demonstration models.** They are not the models
+that produced POLECAT. They were trained on Voice of America stories labeled by
+an LLM applying the PLOVER codebook. For your own event data, you may want to
+train your own; see [`CLASSIFIERS.md`](CLASSIFIERS.md).
+`ngec guide customize` shows how to use your own classifier, event definitions
+or actor categories.
+
+**Speed.** Most of the time goes to the attribute-extraction model, which runs
+once per story and detected event type. On a desktop CPU that is about 4.6
+seconds each, so a story with three event types takes about 14 seconds. On a
+Linux machine with an NVIDIA GPU (`ngec[cu12,vllm]`), it is many times faster.
+Time a batch of 20 stories before planning a large run.
+`ngec guide run` has a script for coding a whole corpus in batches, and
+[`RUNNING.md`](RUNNING.md) describes what to expect at scale.
+
+**Single steps.** Each part of the pipeline can be used on its own, e.g. to
+resolve date phrases or link names to Wikipedia. See `ngec guide pieces`.
+
+### Reproducibility
+
+The coded output depends on the NGEC version, the attribute model, the event
+classifiers, the Wikipedia/GeoNames index, and the backend that runs the model.
+Keep two files with your data: the `uv.lock` in your project folder, which
+records the exact NGEC commit and every package version, and the output of
+`uv run ngec doctor --json`, which records the attribute model, your settings
+and the size of the index. NGEC logs which backend it chose when it starts. `ngec update` tells you when newer models or a newer index have been
+published and changes nothing unless you pass `--apply`. Updating mid-project
+changes the output, so you may want to keep what you started with.
+
+## When something goes wrong
+
+```shell
+uv run ngec doctor
+```
+
+This checks the installation in a few seconds, without running the pipeline:
+the installed version, the settings NGEC reads, whether PyTorch can use your
+GPU, and whether Elasticsearch is running with both indices. Anything it flags
+is listed at the bottom with the command that fixes it. `--json` gives the same
+report in a form to paste into a
+[GitHub issue](https://github.com/ahalterman/ngec-2025/issues).
+
+The most common problem is a PyTorch build that cannot use the GPU, so the
+pipeline runs on the CPU, many times more slowly, with no error. The doctor
+checks for this.
+
+## More documentation
+
+| File | What it covers |
+|---|---|
+| [`docs/INSTALL.md`](docs/INSTALL.md) | the install in detail: choosing extras, pip, the models, Elasticsearch on another host, updating, working from a clone |
+| [`RUNNING.md`](RUNNING.md) | coding a large corpus: hardware, speed, what can go wrong |
+| [`PIPELINE.md`](PIPELINE.md) | each step of the pipeline and the fields it adds |
+| [`CLASSIFIERS.md`](CLASSIFIERS.md) | where the event classifiers came from and their limits |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | speed measurements, and checking which PyTorch build you have |
+| [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md) | the index by hand, and building it from a newer Wikipedia dump |
+| [`DEVELOPING.md`](DEVELOPING.md) | changing NGEC itself: a clone, tests, retraining |
