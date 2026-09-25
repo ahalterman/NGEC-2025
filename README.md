@@ -28,7 +28,9 @@ pipeline produced the [POLECAT](https://dataverse.harvard.edu/dataverse/POLECAT)
 
 - [Quickstart](#quickstart)
 - [Letting a coding agent set it up](#letting-a-coding-agent-set-it-up)
-- [Coding your own stories](#coding-your-own-stories)
+- [Running NGEC on your own stories](#coding-your-own-stories)
+- [Creating custom event data](#customizing-ngec)
+- [Using single steps](#using-single-steps)
 - [Before coding a corpus](#before-coding-a-corpus)
 - [When something goes wrong](#when-something-goes-wrong)
 - [More documentation](#more-documentation)
@@ -123,7 +125,7 @@ says `@AGENTS.md`.
 ## Coding your own stories
 
 Here's an example of how to code stories using the built-in PLOVER ontology. If you
-want to code different kinds of events, see the Customizing section. [TODO]
+want to code different kinds of events, see [Customizing NGEC](#customizing-ngec).
 
 Each story needs an `id`, the `event_text`, and a `pub_date`, which is used to
 resolve relative dates like "today" or "last Tuesday":
@@ -205,14 +207,65 @@ the story, and why each date and location was or wasn't resolved. We recommend
 working with the JSON in production.  [`PIPELINE.md`](PIPELINE.md) documents
 all of the fields.
 
+## Customizing NGEC
+
+One of the main objectives of NGEC is to make it easier for researchers to create
+custom event data: changing the event types it codes, extracting other attributes
+for events, and categorizing actors in different ways from the pre-built PLOVER ontology
+it uses by default.
+
+For example, say you're interested in coding legislative events, which aren't
+part of the default PLOVER ontology. If you wanted to identify `INTRODUCE_BILL`
+events, you would  write a new definitions for the event type, retrain the
+event classifiers to detect your new event types, and run the attribute model
+using your new event types. The attribute model can extract information for
+event types it didn't see during training, so you can use it as-is with new
+event definitions.  In many cases, the attribute model can also extract new
+*attributes* (e.g., `num_cosponsors`)  without retraining, but this will
+require testing it on your corpus.
+
+You can also change the *entity classification* step. To use the same example,
+PLOVER's default `LEG`islative category isn't useful for researchers studying different
+parties. Instead, you could define  `DEM` and `REP` entity categories by
+writing a new file of example descriptions ("Republican", "GOP", "conservative" $\rightarrow$ REP)
+and NGEC will use these to categorize actors using your new groupings.
+
+[`ngec/assets/guide/customize.md`](ngec/assets/guide/customize.md) (also
+`uv run ngec guide customize`) covers each of these with code, including the definition
+format, a worked example of training a classifier from your own labels, the
+agents and priorities file formats, and how to validate the customized output
+against hand-coded stories. 
+
+## Using single steps
+
+If you don't need a full end-to-end event coding pipeline, you can also
+use components of NGEC on their own.
+
+For example:
+
+- If you have a list of armed group names and want to link them to a canonical
+  identifier, you can use the Wikipedia matcher to resolve different versions
+of each name to their Wikipedia article title.
+- If you have a set of politicians and want to extract information about their
+  political history, you can run the Wikipedia matcher and infobox parser to
+extract their past offices held.
+- If you need to resolve raw dates to calendar dates, you can use just the date
+  resolver.
+- If you have an existing corpus of stories labeled with event types, you can
+  enrich the dataset by extracting the events' attributes without needing to
+  train an event detector. 
+
+[`ngec/assets/guide/pieces.md`](ngec/assets/guide/pieces.md) (also
+`uv run ngec guide pieces`) has a short example of each, and explains how to
+chain a few steps without running the whole pipeline.
+
 ## Before coding a corpus
 
 **The event classifiers are demonstration models.** These are not the models
 that produced POLECAT. They were trained on Voice of America stories labeled by
 an LLM applying the PLOVER codebook. For your own event data, you may want to
 train your own; see [`CLASSIFIERS.md`](CLASSIFIERS.md).
-`ngec guide customize` shows how to use your own classifier, event definitions
-or actor categories.
+[Customizing NGEC](#customizing-ngec) covers using your own classifier.
 
 **Speed.** Most of time it takes to run NGEC comes from the attribute extraction model, which runs
 once for each (story, event type) pair. On a desktop CPU, this that is about 4.6
@@ -221,9 +274,6 @@ Linux machine with an NVIDIA GPU (`ngec[cu12,vllm]`), it is many times faster (a
 You should time a batch of 20 stories before planning a large run.
 `ngec guide run` has a script for coding a whole corpus in batches, and
 [`RUNNING.md`](RUNNING.md) describes what to expect at scale.
-
-**Single steps.** Each part of the pipeline can be used on its own, e.g. to
-resolve date phrases or link names to Wikipedia. See `ngec guide pieces`.
 
 ### Reproducibility
 
@@ -262,6 +312,8 @@ checks for this.
 |---|---|
 | [`docs/INSTALL.md`](docs/INSTALL.md) | the install in detail: choosing extras, pip, the models, Elasticsearch on another host, updating, working from a clone |
 | [`RUNNING.md`](RUNNING.md) | coding a large corpus: hardware, speed, what can go wrong |
+| [`ngec/assets/guide/customize.md`](ngec/assets/guide/customize.md) | your own event definitions, classifier or actor categories, and validating the result |
+| [`ngec/assets/guide/pieces.md`](ngec/assets/guide/pieces.md) | using one step of the pipeline on its own |
 | [`PIPELINE.md`](PIPELINE.md) | each step of the pipeline and the fields it adds |
 | [`CLASSIFIERS.md`](CLASSIFIERS.md) | where the event classifiers came from and their limits |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | speed measurements, and checking which PyTorch build you have |
