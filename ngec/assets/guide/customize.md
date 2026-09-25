@@ -23,21 +23,38 @@ definition. The paper's validation on the ECAV election-violence dataset used
 this, with no retraining.
 
 The default definitions, in the format the default model was trained on, are
-`ngec/assets/event_definitions_v6.json`. Read a few before writing new ones,
-and write new ones in the same shape:
+`ngec/assets/event_definitions_v6.json`: a JSON list of entries like
 
+```json
+{"event_type": "ELECTORAL_VIOLENCE",
+ "mode": "",
+ "definition": "## Event: **ELECTORAL_VIOLENCE**: <one or two sentences on what the event is>\n## Special Instructions: <who counts as ACTOR and RECIPIENT>"}
 ```
-## Event: **ELECTORAL_VIOLENCE**: <one or two sentences on what the event is>
-## Specific Sub-Event: **<mode name>**: <what the sub-type is>      (optional)
-## Special Instructions: <who counts as ACTOR and RECIPIENT for this type>
+
+`mode` is `""` for the event type as a whole, or the name of a sub-type, whose
+definition then adds a `## Specific Sub-Event: **<mode>**: ...` line. Read a
+few of the shipped entries before writing new ones and copy their shape. To
+see the file:
+
+```python
+from importlib import resources
+print(resources.files("ngec").joinpath("assets", "event_definitions_v6.json").read_text()[:3000])
 ```
+
+Put the new entries in a JSON file of your own and pass it as
+`event_definitions_file` (to `PloverCoder` or `AttributeModel`). Its entries
+are added to the shipped ones, and replace any with the same `event_type` and
+`mode`, so the file needs only the types you add or reword. Every event type the
+classifier can emit needs a definition, or the attribute step raises an error
+naming the type.
 
 The Special Instructions matter most. Say explicitly who the actor and the
 recipient are when that is not obvious (e.g. "The recipients are both the
 targets and the victims of the attack").
 
-<!-- TODO(coordinator): the per-record `event_def` hook and the PloverCoder
-option for it, once the PloverCoder change lands. -->
+Rewording a PLOVER type's definition gives the model a prompt it was not
+trained on. That is fine and often the point, but check the output on a
+sample afterwards.
 
 ## New event types
 
@@ -55,14 +72,35 @@ for each story. Options, from least to most work:
    each story fits in step 1. The contract is in the module docstring of
    `ngec/classifiers/plover_sklearn.py`.
 3. **Train classifiers like the shipped ones**: sentence-embedding and TF-IDF
-   features with one logistic regression per type. This needs a few hundred
-   labeled stories per type. <!-- TODO(coordinator): point at the reference
-   training script once it is in the repo. -->
+   features with one logistic regression per type
+   (`ngec/classifiers/features.py` builds the features). This needs a few
+   hundred labeled stories per type. The model directory format is in the
+   docstring of `ngec/classifiers/plover_sklearn.py`. Load it with
+   `PloverSklearnClassifier(type_model_dir="my_models/",
+   codebook_path="my_types.csv")`. The event types come from the codebook
+   CSV (columns `event` and `mode`, one row per type or type-mode pair), not
+   from the directory: a model file for a type the CSV does not list is never
+   loaded.
+
+For options 1 and 2, a small class does it:
+
+```python
+class KnownEventTypes:
+    """Stories already selected as protests, e.g. by a keyword search."""
+    def process(self, story_list):
+        for story in story_list:
+            story["event_type"] = ["PROTEST"]
+            story["event_mode"] = []
+            story["event_type_confidence"] = {"PROTEST": 1.0}
+        return story_list
+
+coder = PloverCoder(es_client=es_client,
+                    event_classifier=KnownEventTypes(),
+                    event_definitions_file="my_definitions.json")  # for non-PLOVER types
+```
 
 Whatever the classifier, check its output on a sample of the user's own
 stories before using counts from it.
-
-<!-- TODO(coordinator): the PloverCoder option for supplying a classifier. -->
 
 ## Your own actor categories
 
@@ -96,12 +134,21 @@ Every agents file needs a matching **priorities file** that ranks the codes
 when several match, in the format of `ngec/assets/PLOVER_priorities.csv`
 (`code,priority,special`).
 
-Pass both to `ActorResolver(agents_file=..., priorities_file=...,
-override_sources=())`. `override_sources=()` stops Wikipedia's short
-description from always winning a disagreement with the span text, which is
-usually what a custom scheme wants.
+Pass both to the pipeline:
 
-<!-- TODO(coordinator): the PloverCoder options for these. -->
+```python
+coder = PloverCoder(es_client=es_client,
+                    agents_file="my_agents.txt",
+                    priorities_file="my_priorities.csv")
+```
+
+or, for the actor step alone, `ActorResolver(agents_file=...,
+priorities_file=..., override_sources=())`. There, `override_sources=()` stops
+Wikipedia's short description from always winning a disagreement with the
+span text, which is usually what a custom scheme wants; `PloverCoder` does not
+set it. To try patterns quickly without Elasticsearch,
+`AgentMatcher(agents_file="my_agents.txt").short_text_to_agent("...")` codes
+one description (`ngec guide pieces`).
 
 Iterate: code a sample, look at the spans that got no code or the wrong code,
 add patterns for them, repeat. The paper found this step the weakest when an
