@@ -28,13 +28,24 @@ The default definitions, in the format the default model was trained on, are
 ```json
 {"event_type": "ELECTORAL_VIOLENCE",
  "mode": "",
- "definition": "## Event: **ELECTORAL_VIOLENCE**: <one or two sentences on what the event is>\n## Special Instructions: <who counts as ACTOR and RECIPIENT>"}
+ "definition": "## Event: **ELECTORAL_VIOLENCE**: <what the event is>\n## Potential Ambiguities: <what it is easily confused with>\n## Attribute Guidance: ACTOR is <...>. RECIPIENT is <...>."}
 ```
 
-`mode` is `""` for the event type as a whole, or the name of a sub-type, whose
-definition then adds a `## Specific Sub-Event: **<mode>**: ...` line. Read a
-few of the shipped entries before writing new ones and copy their shape. To
-see the file:
+The `definition` is a series of `##` sections, one per line, in this order.
+These are the sections the default model was trained with (they are identical
+to the `definitions.json` published with the model on Hugging Face):
+
+| Section | In the shipped definitions | What goes in it |
+|---|---|---|
+| `## Event: **TYPE**:` | always | what the event is, with examples |
+| `## Specific Sub-Event: **mode**:` | entries for a mode | what the sub-type is |
+| `## Sub-Events:` | a type's own entry, when it has modes | the list of its modes |
+| `## Special Instructions:` | about two thirds | coding rules, e.g. who counts as the actor when a spokesperson speaks |
+| `## Potential Ambiguities:` | about two thirds | neighbouring event types it should not be confused with |
+| `## Attribute Guidance:` | always, last | who the ACTOR and RECIPIENT are, and when to leave one empty |
+
+`mode` is `""` for the event type as a whole. Read a few of the shipped
+entries before writing new ones and copy their shape. To see the file:
 
 ```python
 from importlib import resources
@@ -48,9 +59,11 @@ are added to the shipped ones, and replace any with the same `event_type` and
 classifier can emit needs a definition, or the attribute step raises an error
 naming the type.
 
-The Special Instructions matter most. Say explicitly who the actor and the
-recipient are when that is not obvious (e.g. "The recipients are both the
-targets and the victims of the attack").
+The Attribute Guidance matters most: every shipped definition ends with one.
+Say explicitly who the actor and the recipient are, and when the recipient
+should be left empty. PROTEST's reads, in part: "ACTOR is the protesting
+group. RECIPIENT is the entity the protest is directed against, and ONLY when
+the text states it as the target."
 
 Rewording a PLOVER type's definition gives the model a prompt it was not
 trained on. That is fine and often the point, but check the output on a
@@ -130,9 +143,31 @@ UNION_LEADER [~LAB]
 - Countries are assigned separately (from names and adjectives in the span or
   the Wikipedia article), so do not put countries in the codes.
 
-Every agents file needs a matching **priorities file** that ranks the codes
-when several match, in the format of `ngec/assets/PLOVER_priorities.csv`
-(`code,priority,special`).
+Every agents file needs a matching **priorities file**, in the format of
+`ngec/assets/PLOVER_priorities.csv`. An actor often matches more than one
+category: a minister who is also a party leader, say, or a person whose
+Wikipedia infobox lists both a military and a government office. The
+priorities file settles those cases. Each code gets a number, and the higher
+number wins. For example:
+
+```
+code,priority,special
+RUL,150,0
+OPP,140,0
+SEC,130,0
+CVL,10,0
+```
+
+Three things to know about it:
+
+- Only `code_1` (the first three characters) is ranked, so `COPLOC` and
+  `COPNAT` tie. `code_2` never breaks a tie.
+- A code left out of the file gets priority 0, so give every code your agents
+  file uses a number above 0.
+- `special` is almost always 0. A 1 marks a code that names a polity rather
+  than a role (PLOVER's `IGO`, for instance): it is moved into the `country`
+  field and `code_1` is left empty. Leave it at 0 unless that is what you
+  want.
 
 Pass both to the pipeline:
 
@@ -149,6 +184,15 @@ span text, which is usually what a custom scheme wants; `PloverCoder` does not
 set it. To try patterns quickly without Elasticsearch,
 `AgentMatcher(agents_file="my_agents.txt").short_text_to_agent("...")` codes
 one description (`ngec guide pieces`).
+
+**Cover officeholders.** For a person or organization linked to Wikipedia, it
+is their infobox office and short description that get matched against your
+patterns ("President of Zimbabwe", "military officer"), not the words in the
+story. A scheme without patterns for heads of state, ministers and legislators
+still codes those people, into whichever category is nearest: in a test with a
+four-category election scheme and no pattern for presidents, Zimbabwe's
+president came out as a security-forces actor. Add patterns for the offices the
+user's actors hold, and check a few well-known names by hand.
 
 Iterate: code a sample, look at the spans that got no code or the wrong code,
 add patterns for them, repeat. The paper found this step the weakest when an
