@@ -3,9 +3,10 @@
 Argparse rather than click, to match `ngec/doctor.py`, the other command in the
 package.
 
-There is one subcommand so far, and it is here rather than in `doctor.py`
-because the two do opposite things: doctor only ever reports, and this changes
-the environment.
+`ngec doctor` hands its arguments straight to `ngec/doctor.py`, which is also
+installed as `ngec-doctor`; its options are documented there. The doctor stays
+in its own module because the two kinds of command do opposite things: doctor
+only ever reports, and `download-models` changes the environment.
 """
 
 from __future__ import annotations
@@ -14,10 +15,19 @@ import argparse
 import logging
 import sys
 
+from . import doctor
+from .guide import TOPICS, read_guide, write_agents_file
 from .models import download_models
 
 
 def main(argv: list[str] | None = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    # The doctor has its own parser; hand everything after "doctor" to it
+    # rather than declaring its options a second time here.
+    if argv[:1] == ["doctor"]:
+        return doctor.main(argv[1:])
+
     parser = argparse.ArgumentParser(
         prog="ngec",
         description="NGEC command-line tools.")
@@ -44,7 +54,34 @@ def main(argv: list[str] | None = None) -> int:
                           help="skip the attribute model, e.g. when it runs on a "
                                "llama.cpp server")
 
+    subparsers.add_parser(
+        "doctor",
+        help="check the installation and report what is wrong with it",
+        description="The same as `ngec-doctor`; see `ngec doctor --help`.")
+
+    guide = subparsers.add_parser(
+        "guide",
+        help="print instructions for using NGEC, written for coding agents",
+        description=(
+            "Print the NGEC guide, which is written for AI coding agents but "
+            "readable by anyone. It ships with the package, so it describes the "
+            "installed version. With --init, add a short section to AGENTS.md "
+            "in the current directory telling agents to run this command."))
+    guide.add_argument("topic", nargs="?", default="overview", choices=list(TOPICS),
+                       help="which part of the guide to print (default: overview)")
+    guide.add_argument("--init", action="store_true",
+                       help="add the NGEC section to ./AGENTS.md instead of printing")
+
     args = parser.parse_args(argv)
+
+    if args.command == "guide":
+        if args.init:
+            path, action = write_agents_file(".")
+            print(f"{action.capitalize()} {path}" if action != "unchanged"
+                  else f"{path} already has the NGEC section; nothing to do.")
+        else:
+            print(read_guide(args.topic))
+        return 0
 
     # The work is reported through logging, and nothing has configured a handler
     # in a fresh interpreter running the console script.

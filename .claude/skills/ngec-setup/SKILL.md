@@ -8,6 +8,14 @@ description: Install, set up, repair or diagnose an NGEC environment on this mac
 Work from the setup doctor's findings, not from guesses. It is standard-library
 only and runs on any Python 3.8+, so it works before anything is installed.
 
+## First, ask what it is for
+
+Elasticsearch is most of the install time, and only geocoding and Wikipedia
+linking use it. If the user only wants event types, attribute spans, date
+resolution or actor categories from short text, say so and skip the
+Elasticsearch checks. `uv run ngec guide setup` has the table of which goal
+needs what.
+
 ## The loop
 
 1. Run `python3 setup/doctor/ngec_doctor.py --json` from the repo root.
@@ -65,7 +73,8 @@ An index that is present but far short of 7,601,204 (wiki) or 13,250,817
 
 ## Afterwards
 
-Once `import ngec` works, `uv run --extra cu12 ngec-doctor` is the other doctor:
+Once `import ngec` works, `uv run --extra cu12 ngec doctor` is the other doctor:
 it checks configuration and the PyTorch build from inside the environment.
-`uv run pytest` is the fast test suite; `tests/test_end_to_end.py` needs
-Elasticsearch.
+`uv run --extra cu12 ngec doctor --smoke` runs three stories through the whole
+pipeline. `uv run pytest` is the fast test suite; `tests/test_end_to_end.py`
+needs Elasticsearch. For what to do once it works, `uv run ngec guide`.

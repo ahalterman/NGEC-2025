@@ -224,3 +224,75 @@ def explode_events(event_list):
             exploded.append(new_event)
     return exploded, dropped
 
+
+
+def _actor_code(actor):
+    """The actor's code as one string, e.g. "SYR MIL" or "CVL OPP"."""
+    parts = [actor.get('country'), actor.get('code_1'), actor.get('code_2')]
+    return " ".join(p for p in parts if p)
+
+
+def events_to_table(event_list):
+    """
+    Flatten the pipeline's output into a table with one row per event.
+
+    The records PloverCoder returns are nested (lists of actor dicts, a location
+    dict, a date dict) and carry intermediate data such as the geoparser's
+    output. This keeps the fields most analyses need, as plain columns, for
+    saving to CSV or reading into R or Stata. The full records are still the
+    place to look when a row needs explaining.
+
+    An event can have several actors or recipients. Their values are joined
+    with "; " in the same order in each column, so the n-th actor code belongs
+    to the n-th actor span.
+
+    Parameters
+    ----------
+    event_list : list of dict
+        Output of PloverCoder.process() (or of Formatter.process()).
+
+    Returns
+    -------
+    pandas.DataFrame
+    """
+    import pandas as pd
+
+    rows = []
+    for event in event_list:
+        attributes = event.get('attributes') or {}
+        location = (event.get('event_location') or {}).get('event_loc') or {}
+        date = event.get('date_resolved') or {}
+        resolved_date = date.get('resolved_date')
+        row = {
+            'id': event.get('id'),
+            'story_id': event.get('orig_id'),
+            'pub_date': event.get('pub_date'),
+            'event_type': event.get('event_type'),
+            'event_mode': event.get('event_mode'),
+            'anchor_quote': attributes.get('anchor_quote'),
+            'date_text': "; ".join(attributes.get('date') or []),
+            'date': resolved_date.strftime("%Y-%m-%d") if hasattr(resolved_date, 'strftime') else resolved_date,
+            'date_granularity': date.get('granularity'),
+            'date_type': date.get('date_type'),
+            'location_text': "; ".join(attributes.get('location') or []),
+            # Only the default (v6) model returns these, and only for ASSAULT,
+            # PROTEST and COERCE.
+            'killed_text': "; ".join(attributes.get('killed') or []),
+            'injured_text': "; ".join(attributes.get('injured') or []),
+            'location_name': location.get('resolved_placename'),
+            'location_country': location.get('country_code3'),
+            'location_admin1': location.get('admin1_name'),
+            'lat': location.get('lat'),
+            'lon': location.get('lon'),
+            'geonameid': location.get('geonameid'),
+        }
+        for role in ('actor', 'recipient'):
+            coded = event.get(role) or []
+            # Actor resolution skips "N/A" spans, so skip them here as well to
+            # keep the text and code columns in step.
+            spans = [s for s in (attributes.get(role) or []) if s != "N/A"]
+            row[f'{role}_text'] = "; ".join(spans)
+            row[f'{role}_code'] = "; ".join(_actor_code(a) for a in coded)
+            row[f'{role}_wiki'] = "; ".join(a.get('wiki') or '' for a in coded)
+        rows.append(row)
+    return pd.DataFrame(rows)

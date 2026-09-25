@@ -21,6 +21,10 @@ NGEC has four moving parts: the Python package, a PyTorch build that matches you
 
 If a step fails, see [When something is wrong](#when-something-is-wrong) below.
 
+**Install or clone?** The steps below install NGEC as a package, which is all you need to *use* it: run the pipeline, use a single step such as date resolution or Wikipedia linking, or code events with your own actor categories, event definitions or classifier. Clone this repository only to *change* NGEC itself, retrain its models, rebuild the Elasticsearch indices, or run its tests; see [Working from a clone](#working-from-a-clone).
+
+**Not everything needs Elasticsearch.** Only geocoding and Wikipedia-based actor resolution use it. If you only need event types, attribute extraction, date resolution or actor categories, skip steps 1 and 5.
+
 ---
 
 ### Step 1. Start the index download
@@ -181,14 +185,14 @@ Elasticsearch takes a minute or so to start. It is ready when this prints a shor
 curl localhost:9200
 ```
 
-You can delete the tarball now. NGEC connects to `localhost:9200` by default. To use a different host or port, save [`.env.example`](.env.example) from this repository into your project folder as `.env`, and uncomment the lines you need. It lists every setting NGEC reads, with what each one does. The tests, the demo and `ngec-doctor` read `.env` automatically; your own scripts need to pass the host and port to `ngec.es_client.setup_es_client`.
+You can delete the tarball now. NGEC connects to `localhost:9200` by default. To use a different host or port, save [`.env.example`](.env.example) from this repository into your project folder as `.env`, and uncomment the lines you need. It lists every setting NGEC reads, with what each one does. The tests, the demo and `ngec doctor` read `.env` automatically; your own scripts need to pass the host and port to `ngec.es_client.setup_es_client`.
 
 The Elasticsearch version is pinned: a 7.10 data directory will not open on Elasticsearch 8. [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md) explains every flag, how to tell a wrong volume path from a half-loaded index, and how to build the indices yourself from a newer Wikipedia dump.
 
 ### Step 6. Check that it works
 
 ```shell
-uv run ngec-doctor --smoke
+uv run ngec doctor --smoke
 ```
 
 This checks the installation, then runs three real news articles all the way through the pipeline and prints the coded events. It takes a few minutes on CPU. If it prints events, the install is good. It never downloads anything: if a model is missing, it says so and tells you to run `ngec download-models`.
@@ -200,14 +204,14 @@ This checks the installation, then runs three real news articles all the way thr
 Without `--smoke`, the doctor checks the pieces in a few seconds, without running the pipeline:
 
 ```shell
-uv run ngec-doctor
+uv run ngec doctor
 ```
 
 It prints the installed version and commit, every environment variable NGEC reads, what the PyTorch build can see, and whether Elasticsearch is reachable with both indices in it. It also flags any key in your `.env` that NGEC does not read: a misspelled setting is otherwise ignored without error. Anything it flags is repeated at the bottom with the command that fixes it. `--json` gives the same findings machine-readably, which is the more useful thing to paste into a bug report. `--only` takes any subset of `install`, `config`, `compute`, `elasticsearch`, `smoke`.
 
 The most common thing it catches is the PyTorch problem from step 2: on a machine with an NVIDIA GPU it asks the driver directly and compares that against what PyTorch sees, so a build that has quietly fallen back to the CPU is reported rather than left to show up as a pipeline that is many times slower than expected.
 
-It exits non-zero only on a real failure, so it is also safe to run in CI. An unreachable Elasticsearch counts as one, so on a CI runner without it use `--only install,config,compute`. If the `ngec-doctor` command is not on your PATH, `python -m ngec.doctor` does the same; in a virtual environment without uv, activate it and run `ngec-doctor` directly.
+It exits non-zero only on a real failure, so it is also safe to run in CI. An unreachable Elasticsearch counts as one, so on a CI runner without it use `--only install,config,compute`. `ngec doctor` is also installed as `ngec-doctor`, and `python -m ngec.doctor` does the same if neither is on your PATH; in a virtual environment without uv, activate it and run `ngec doctor` directly.
 
 ### Working from a clone
 
@@ -220,6 +224,25 @@ python3 setup/doctor/ngec_doctor.py
 ```
 
 `--serve` opens a local page that runs each command for you and re-checks afterwards. See [`setup/doctor/README.md`](setup/doctor/README.md). Its fixes assume the clone workflow (`uv sync --extra …`), which is why it is here rather than in the steps above. Working with Claude Code, the `ngec-setup` skill drives the same loop conversationally.
+
+### With a coding agent
+
+If you use Claude Code, Codex or another coding agent, NGEC comes with a guide written for it:
+
+```shell
+uv run ngec guide --init
+```
+
+This adds a short section to `AGENTS.md` in your project folder (creating the file if there is none) telling the agent to run `ngec guide` before working with NGEC. The guide itself ships with the package, so it always describes the version you have installed; `ngec guide` prints it, and `ngec guide setup`, `run`, `pieces` and `customize` print its other topics. People can read it too.
+
+### Commands
+
+| Command | What it does |
+|---|---|
+| `ngec download-models` | downloads the spaCy, sentence-transformer and attribute models ([step 4](#step-4-download-the-models)) |
+| `ngec doctor` | checks the installation and prints the fix for anything wrong; `--smoke` also runs the pipeline on three stories |
+| `ngec guide` | prints the guide for coding agents; `--init` points your project's `AGENTS.md` at it |
+| `python3 setup/doctor/ngec_doctor.py` | in a clone only: checks a machine before anything is installed |
 
 ### Cached embeddings
 
@@ -362,6 +385,18 @@ pprint(event_list, sort_dicts=False, width=100)
                     'reason': '<Resolved day idiom to the publication day>'}}]
 ```
 
+
+### Saving the results
+
+`PloverCoder` returns one record per event, with nested fields. `events_to_table` flattens them into a pandas DataFrame with one row per event, for R, Stata or a spreadsheet:
+
+```python
+from ngec import events_to_table
+
+events_to_table(event_list).to_csv("events.csv", index=False)
+```
+
+`ngec guide run` has a fuller script for coding a whole corpus in batches, and `ngec guide pieces` shows how to use a single step, such as date resolution or Wikipedia linking, on its own.
 
 ### Logging
 
