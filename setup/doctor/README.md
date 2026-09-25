@@ -40,7 +40,7 @@ Six groups, in the order you have to satisfy them:
   CUDA that will shadow the PyTorch wheels' own libraries.
 - **Elasticsearch** — Docker and its daemon, a node answering on the host from
   `.env`, and `wiki` / `geonames` with document counts compared against the
-  expected 7,601,204 and 13,250,817, plus how old each index is. This is the
+  expected 7,936,742 and 13,472,152, plus how old each index is. This is the
   group that matters most: it is the longest and most failure-prone part of the
   install. The fixes are the two paths in
   [`elasticsearch/SETUP.md`](../../elasticsearch/SETUP.md).
@@ -94,11 +94,6 @@ either of those changed.
 
 ## Known gaps
 
-- **`PREBUILT_INDEX_URL` is `"TODO"`.** Nothing in this repository records where
-  the published index tarball lives. The constant is at the top of
-  `ngec_doctor.py`; fill it in and the pre-built-index fix becomes runnable. The
-  file size used for the download estimate (about 9.4 GB) comes from a local
-  copy of the packaged index, not from the published artifact.
 - The vllm first-run compile and the PyTorch wheel install are quoted as ranges
   from the reference box. They do not scale with anything the doctor can
   measure, so they are not estimated live.

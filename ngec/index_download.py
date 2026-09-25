@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 import tarfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -45,7 +46,16 @@ def download(url: str, path: Path) -> None:
     request = urllib.request.Request(url)
     if have:
         request.add_header("Range", f"bytes={have}-")
-    with urllib.request.urlopen(request) as response:
+    try:
+        response = urllib.request.urlopen(request)
+    except urllib.error.HTTPError as e:
+        # 416: nothing left after byte `have`, i.e. the file is already
+        # complete (e.g. fetched earlier with curl). The checksum decides.
+        if e.code == 416 and have:
+            logger.info(f"{path.name} is already fully downloaded.")
+            return
+        raise
+    with response:
         # 206 means the server is sending the rest; 200 means it ignored the
         # Range header and is sending the whole file, so start over.
         if have and response.status != 206:

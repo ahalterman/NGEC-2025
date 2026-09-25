@@ -3,139 +3,93 @@
 NGEC's actor resolution (step 5) and geolocation (step 2) both query one
 Elasticsearch node holding two indices:
 
-| Index      | Used by                          | Documents (reference box) |
-|------------|----------------------------------|---------------------------|
-| `wiki`     | actor resolution, entity linking | 7,601,204                 |
-| `geonames` | location resolution (mordecai3)  | 13,250,817                |
+| Index      | Used by                          | Documents (published 2026-09 index) |
+|------------|----------------------------------|-------------------------------------|
+| `wiki`     | actor resolution, entity linking | 7,936,742 (Wikipedia dump of 2026-09-01) |
+| `geonames` | location resolution (mordecai3)  | 13,472,152 (GeoNames of 2026-09-23)      |
 
 A single Elasticsearch node keeps **all of its indices in one data directory**,
-so both of these live together in whatever directory is mounted at
-`/usr/share/elasticsearch/data`. That is the one fact everything else here
-follows from.
+so the two travel together: the published index is simply that directory,
+archived.
 
-There are two ways to get them:
-
-- **Path A — mount a pre-built data directory.** Download the published
-  archive, unpack it, and point Elasticsearch at it. Minutes, plus the
-  download. Only works on Elasticsearch 7.10.x.
+- **Path A — download the pre-built index.** One command, about half an hour,
+  mostly the 11.6 GB download.
 - **Path B — build both indices from source dumps.** Half an hour for GeoNames,
-  most of a day for Wikipedia. For a newer Wikipedia dump, a different
-  gazetteer, or a changed index format.
+  most of a day for Wikipedia. Only for a newer dump or a changed index format.
 
-Path A stands on its own: nothing in it is NGEC-specific except the contents of
-the indices, so it is also the recipe for reusing the `wiki` index in an
-unrelated project. See
-[Reusing the index elsewhere](#reusing-the-index-elsewhere).
-
-To find out which of these you need on this machine:
-
-```shell
-python3 setup/doctor/ngec_doctor.py
-```
-
-The setup doctor reports whether Elasticsearch is answering, whether both
-indices are there, and whether their document counts look like a complete load
-or one that died part-way. It prints the right command for whichever is wrong.
-See [`setup/doctor/README.md`](../setup/doctor/README.md).
-
-> ⚠️ **There is currently no public download URL for the archive.** The
-> address the root `README.md` used to give,
-> `https://andrewhalterman.com/files/geonames_wiki_index_2023-03-02.tar.gz`,
-> returns **HTTP 404** (checked 2026-09-09). `PREBUILT_INDEX_URL` in
-> `setup/doctor/ngec_doctor.py` is the single constant `"TODO"`, and the setup
-> console refuses to run any command containing it. Fill that constant in once
-> an archive is published — the doctor, this document and `README.md` should
-> then agree. Until then, get the archive from Andy directly, or build it
-> (Path B).
+`python3 setup/doctor/ngec_doctor.py` (before installing) or `ngec doctor`
+(after) reports whether Elasticsearch is answering and whether both indices
+are there, and prints the command for whatever is wrong.
 
 ---
 
-## Path A — mount a pre-built data directory
+## Path A — download the pre-built index
 
-The archive is a tar of an Elasticsearch **data directory**, which you mount
-straight into the container. A 7.10 data directory only opens on
-Elasticsearch 7.10.x, which is why the version is pinned below.
+**You need:** Docker, and about 28 GB of free disk while it unpacks (11.6 GB
+archive, 15 GB unpacked; the archive is deleted afterwards).
 
-**You need:** Docker, and about 25 GB of free disk — roughly 10 GB for the
-tarball and 13 GB for the unpacked data directory. Delete the tarball afterwards.
-
-### 1. Download and unpack
+With NGEC installed:
 
 ```shell
-mkdir -p ~/ngec-es-data
-cd ~/ngec-es-data
-curl -LO <URL of the archive>
-tar -xzf geonames_wiki_index_*.tar.gz
-mv geonames_index wikigeo_index          # the folder name says "geo"; it holds both
+ngec download-index --start
 ```
 
-That is for the 2023 archive, whose directory name is historical. Renaming it
-is optional but saves the next person from assuming it only has the gazetteer
-in it. Newer archives, made by `tools/publish_index.sh`, are named
-`wikigeo_index.tar.gz` and already unpack to `wikigeo_index/`, so there is
-nothing to rename.
+That downloads `wikigeo_index_2026-09.tar.gz` (resuming if interrupted), checks
+it against its published SHA-256, unpacks it to `~/ngec-es-data/wikigeo_index`,
+and starts Elasticsearch over it on port 9200, where NGEC looks by default.
+`--dest` puts it elsewhere; without `--start` it prints the `docker run` instead
+of running it.
 
-Note the **absolute** path of the result. Docker will not expand `~`: given
-`~/…` it silently creates a directory named `~`.
-
-### 2. Start Elasticsearch over it
+Without NGEC installed, the same by hand:
 
 ```shell
+mkdir -p ~/ngec-es-data && cd ~/ngec-es-data
+curl -LO -C - https://andrewhalterman.com/files/wikigeo_index_2026-09.tar.gz
+curl -LO https://andrewhalterman.com/files/wikigeo_index_2026-09.tar.gz.sha256
+sha256sum -c wikigeo_index_2026-09.tar.gz.sha256      # macOS: shasum -a 256 -c ...
+tar -xzf wikigeo_index_2026-09.tar.gz && rm wikigeo_index_2026-09.tar.gz
+
 docker run -d --name ngec-es \
+  --user "$(id -u):0" \
   -p 9200:9200 \
   -e discovery.type=single-node \
   --restart unless-stopped \
-  -v /absolute/path/to/wikigeo_index:/usr/share/elasticsearch/data \
+  -v "$HOME/ngec-es-data/wikigeo_index":/usr/share/elasticsearch/data \
   elasticsearch:7.10.1
 ```
 
-Flag by flag, and why these and not others — this is the exact configuration of
-the container the reference machine has been serving from, read back out of
-`docker inspect`:
+Why these flags and no others:
 
 | Flag | Why |
 |---|---|
-| `elasticsearch:7.10.1` | The version the index was built with. A 7.10 data directory will not open on Elasticsearch 8. |
+| `elasticsearch:7.10.1` | The version the index was built with. A 7.10 data directory opens only on 7.10.x. |
+| `--user "$(id -u):0"` | The unpacked files belong to you; the image otherwise runs as uid 1000 and cannot write to them. It accepts any uid whose group is 0. Unpack as your ordinary user, not with `sudo`: Elasticsearch refuses to run as root. |
 | `-e discovery.type=single-node` | Otherwise the node waits to form a cluster and never becomes available. |
 | `-p 9200:9200` | NGEC connects to `localhost:9200` by default. |
-| `--restart unless-stopped` | Containers default to `restart=no`, which is why a reboot leaves Elasticsearch down and the pipeline mysteriously broken. `unless-stopped` rather than `always` so that stopping it deliberately sticks. |
-| `-v …:/usr/share/elasticsearch/data` | The whole point: the indices live in this directory, not in the image. |
+| `--restart unless-stopped` | So a reboot does not leave Elasticsearch, and so the pipeline, down. |
+| `-v …:/usr/share/elasticsearch/data` | The indices live in this directory, not in the image. Use an absolute path: Docker does not expand `~`. |
 
-**No memory flags.** The reference container sets no `ES_JAVA_OPTS` and no
-container memory limit; it runs on the image's default 1 GB heap and serves
-these two indices fine. If you are on a memory-constrained host and want to pin
-it, add `-e ES_JAVA_OPTS="-Xms2g -Xmx2g"` — but that is a tuning decision, not
-part of the recipe.
+No memory flags: the image's default 1 GB heap serves both indices. **Never run
+two Elasticsearch containers against one data directory** — they corrupt it.
 
-**Never run two Elasticsearch containers against one data directory.** They
-corrupt it, and they collide on port 9200. If you already have one running
-(`docker ps`), stop it before starting another.
+### Check that both indices are there
 
-### 3. Check that both indices are actually there
+It takes a minute to open them. Then:
 
 ```shell
-curl -s 'localhost:9200/_cat/indices?v'
+curl -s 'localhost:9200/_cat/indices?v&h=health,index,docs.count'
 ```
 
 ```
-health status index    docs.count  store.size
-green  open   wiki        7601204      10.1gb
-yellow open   geonames   13250817         2gb
+health index    docs.count
+green  geonames   13472152
+green  wiki        7936742
 ```
 
-Two failure modes worth naming:
-
-- **An empty list.** The volume path in step 2 was wrong. Elasticsearch starts
-  perfectly happily against an empty data directory rather than failing, so
-  this is the only place it shows up. Fix the path and re-create the container.
-- **A count far below the numbers above.** A load that died part of the way
-  through. Re-download, or rebuild that one index (Path B) — the other index
-  shares the data directory and is left alone.
-
-`yellow` health on a single-node cluster means it is trying, and failing, to
-allocate replica shards. It is harmless — the shipped `geonames` index is yellow
-because it was built with `number_of_replicas: 1`. To silence it permanently,
-see [Cluster health is yellow](README.md#cluster-health-is-yellow).
+**An empty list** means the volume path was wrong: Elasticsearch starts
+happily on an empty directory, so this is the only place it shows. Fix the path
+and re-create the container. Where the index came from and when it was built
+travels inside it, in each index's `_meta` (see [Provenance](#provenance)).
 
 ---
 
@@ -274,29 +228,37 @@ docker start <your-es-container>
 guards the manual procedure depends on you remembering, and is resumable with
 `--resume`. `tools/publish_index.sh` packages and uploads the result. Read
 [`README.md`](README.md) before using either — as of 2026-09-09 neither has been
-run end to end.
+run end to end (the 2026-09 release was packaged by hand, as below).
 
 ---
 
 ## Packaging an index to hand to someone else
 
-`tools/publish_index.sh` does this. It stops the Elasticsearch container
-serving port 9200 first, because a live data directory is not a consistent
-thing to copy: an archive taken while segments are being written can unpack
-into a corrupt index. Then it tars the data directory as `wikigeo_index/`,
-restarts the container, and writes into `elasticsearch/dist/`:
+The published index is the data directory, archived. The steps, which
+`tools/publish_index.sh` automates for a node on port 9200:
 
-- `wikigeo_index.tar.gz` — the archive, unpacking to `wikigeo_index/`
-- `wikigeo_index.tar.gz.sha256` — its checksum, for recipients to verify
-- `manifest.json` — document counts, dump dates and build dates for both
-  indices, read from each index's `_meta` (below)
+1. **Unregister any snapshot repositories** (`curl localhost:9200/_cat/repositories`;
+   `curl -XDELETE localhost:9200/_snapshot/<name>` leaves the snapshots on disk).
+   Registrations live in the cluster state, inside the data directory, so they
+   would ship with it and every recipient's Elasticsearch would log a stack
+   trace per repository at start.
+2. **Stop the container** (`docker stop`). A live data directory is not a
+   consistent thing to copy; after a clean stop its logs end in `stopped` /
+   `closed`, and everything is on disk.
+3. **Archive it as `wikigeo_index/`, owned 1000:0:**
+   `tar --owner=1000 --group=0 --numeric-owner -C <parent> -cf - wikigeo_index | pigz > wikigeo_index_YYYY-MM.tar.gz`,
+   then `sha256sum` it into `<archive>.sha256`, and start the container again.
+4. **Test the archive as a recipient would** — unpack it somewhere new as an
+   ordinary user, `docker run --user "$(id -u):0"` over it on a spare port, and
+   check both counts and a clean log — before uploading it.
+5. **Upload** the archive and its `.sha256` next to each other, and point
+   `INDEX_URL` in `ngec/index_download.py` and `PREBUILT_INDEX_URL` in
+   `setup/doctor/ngec_doctor.py` at it (a test keeps the two equal). Archive
+   names are dated, so an old URL keeps working.
 
-It refuses to publish an index that has no `_meta`, and asks before uploading
-anything. The upload goes to `NGEC_PUBLISH_DEST`, an rsync target such as
-`user@host:/srv/www/ngec/index/`; `--no-upload` packages without uploading.
-
-The recipient's side is [Path A](#path-a--mount-a-pre-built-data-directory)
-above.
+The 2026-09 release was made this way from the build node (port 9201):
+11,604,992,023 bytes, SHA-256
+`2e0328fd50b48f76984ba90df27145cfe3c552b005b87f571b1bfbd73b9dc266`.
 
 ### Provenance
 

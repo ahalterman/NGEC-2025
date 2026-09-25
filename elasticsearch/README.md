@@ -14,8 +14,8 @@ Most users should **not** build these. Get a pre-built index instead — see
 index to hand to someone else. Building the wiki
 index from scratch takes many hours and tens of GB of scratch space.
 
-Note that as of 2026-09-09 there is **no working public download URL** for
-the archive; see the warning at the top of SETUP.md.
+`ngec download-index --start` downloads the published archive and starts
+Elasticsearch over it.
 
 `python3 setup/doctor/ngec_doctor.py` reports which of the two indices this
 machine actually has, with document counts, and prints the command for whichever

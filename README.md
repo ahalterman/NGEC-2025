@@ -15,7 +15,7 @@ NGEC has four moving parts: the Python package, a PyTorch build that matches you
 | **Docker** | <https://www.docker.com/get-started/> — for Elasticsearch |
 | **Python** | 3.10 or newer |
 | **uv** | <https://docs.astral.sh/uv/getting-started/installation/> — or use pip; each step has the pip version |
-| **Disk** | ~30 GB free during install, ~18 GB once you delete the archive |
+| **Disk** | ~33 GB free during install, ~18 GB once the archive is deleted |
 | **Time** | About an hour, most of it downloading |
 | **GPU** | Optional. Everything runs on CPU, just slowly |
 
@@ -29,20 +29,15 @@ If a step fails, see [When something is wrong](#when-something-is-wrong) below.
 
 ### Step 1. Start the index download
 
-This is a ~10 GB download and the longest single step, so start it in a terminal window of its own and carry on with the other steps in another.
-
-> ⚠️ **There is currently no public download URL.** The address this README used
-> to give returns HTTP 404. For now, **ask Andy for the archive directly**, or
-> build the indices yourself — see [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md).
-> Building needs about **60 GB** of free disk, or about **180 GB** for the faster
-> option that decompresses the Wikipedia dump up front (it saves roughly 90
-> minutes). Only the ~16 GB index is kept afterwards.
+This is an 11.6 GB download and the longest single step, so start it in a terminal window of its own and carry on with the other steps in another. The archive is an Elasticsearch data directory holding both indices, Wikipedia (dump of 2026-09-01) and GeoNames (2026-09-23).
 
 ```shell
 mkdir -p ~/ngec-es-data
 cd ~/ngec-es-data
-curl -LO <URL of the index archive>
+curl -LO -C - https://andrewhalterman.com/files/wikigeo_index_2026-09.tar.gz
 ```
+
+If the download is interrupted, run the same `curl` again; `-C -` makes it carry on where it stopped.
 
 ### Step 2. Install PyTorch
 
@@ -156,38 +151,28 @@ With the venv active, run `ngec download-models`.
 
 ### Step 5. Start Elasticsearch on the index
 
-Unpack the archive from step 1. The 2023 archive unpacks to a directory named `geonames_index` for historical reasons, but it holds *both* indices — rename it so the next person isn't misled:
-
 ```shell
-cd ~/ngec-es-data
-tar -xzf geonames_wiki_index_2023-03-02.tar.gz
-mv geonames_index wikigeo_index
+uv run ngec download-index --start
 ```
 
-Newer archives are named `wikigeo_index.tar.gz` and already unpack to `wikigeo_index`, so there is nothing to rename.
+This finds the archive from step 1 in `~/ngec-es-data` (and finishes the download if it did not complete), checks it against its published checksum, unpacks it to `~/ngec-es-data/wikigeo_index`, deletes the archive, and starts Elasticsearch over it in Docker on port 9200, where NGEC looks by default. If you skipped step 1, it downloads the archive itself. `--dest` puts it somewhere other than `~/ngec-es-data`; without `--start` it prints the `docker run` command instead of running it.
 
-Then start Elasticsearch over it:
-
-```shell
-docker run -d --name ngec-es \
-  -p 9200:9200 \
-  -e discovery.type=single-node \
-  --restart unless-stopped \
-  -v "$HOME/ngec-es-data/wikigeo_index":/usr/share/elasticsearch/data \
-  elasticsearch:7.10.1
-```
-
-If you unpacked the archive somewhere else, change the path after `-v`, and write it out in full rather than with `~`. Given a path that does not exist, Docker creates an empty directory, and Elasticsearch starts happily with no indices in it instead of failing.
-
-Elasticsearch takes a minute or so to start. It is ready when this prints a short block of JSON instead of an error:
+Elasticsearch takes a minute or so to open the indices. It is ready when this prints a short block of JSON instead of an error:
 
 ```shell
 curl localhost:9200
 ```
 
-You can delete the tarball now. NGEC connects to `localhost:9200` by default. To use a different host or port, save [`.env.example`](.env.example) from this repository into your project folder as `.env`, and uncomment the lines you need. It lists every setting NGEC reads, with what each one does. The tests, the demo and `ngec doctor` read `.env` automatically; your own scripts need to pass the host and port to `ngec.es_client.setup_es_client`.
+NGEC connects to `localhost:9200` by default. To use a different host or port, save [`.env.example`](.env.example) from this repository into your project folder as `.env`, and uncomment the lines you need. It lists every setting NGEC reads, with what each one does. The tests, the demo and `ngec doctor` read `.env` automatically; your own scripts need to pass the host and port to `ngec.es_client.setup_es_client`.
 
-The Elasticsearch version is pinned: a 7.10 data directory will not open on Elasticsearch 8. [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md) explains every flag, how to tell a wrong volume path from a half-loaded index, and how to build the indices yourself from a newer Wikipedia dump.
+The Elasticsearch version is pinned: a 7.10 data directory will not open on Elasticsearch 8. [`elasticsearch/SETUP.md`](elasticsearch/SETUP.md) has the same steps with plain `curl`, `tar` and `docker run`, explains every flag, and describes how to build the indices yourself from a newer Wikipedia dump.
+
+<details>
+<summary>In a virtual environment without uv</summary>
+
+With the venv active, run `ngec download-index --start`.
+
+</details>
 
 ### Step 6. Check that it works
 

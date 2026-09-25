@@ -14,8 +14,9 @@
 #
 # Produces, in elasticsearch/dist/:
 #
-#   wikigeo_index.tar.gz        the ES data directory, unpacking to wikigeo_index/
-#   wikigeo_index.tar.gz.sha256 checksum, for users to verify
+#   wikigeo_index_YYYY-MM.tar.gz        the ES data directory, unpacking to
+#                                       wikigeo_index/ (the month it was packaged)
+#   wikigeo_index_YYYY-MM.tar.gz.sha256 checksum, for users to verify
 #   manifest.json               doc counts, dump dates and build dates for both
 #                               indices, read from each index's mapping _meta
 #
@@ -127,11 +128,15 @@ case "$ES_DATA" in "~"*) die "NGEC_ES_DATA must be an absolute path (no '~')" ;;
 ES_PARENT="$(dirname "$ES_DATA")"
 mkdir -p "$DIST_DIR"
 
+# Dated, so a new release never overwrites the file an old URL points at.
+# `ngec download-index` (ngec/index_download.py) and the setup doctor name the
+# current release; update INDEX_URL / PREBUILT_INDEX_URL when you publish one.
+STEM="wikigeo_index_$(date +%Y-%m)"
 case "$COMPRESS" in
-    gzip) TARBALL="$DIST_DIR/wikigeo_index.tar.gz" ;;
+    gzip) TARBALL="$DIST_DIR/$STEM.tar.gz" ;;
     zstd) command -v zstd >/dev/null || die "zstd requested but not installed"
-          TARBALL="$DIST_DIR/wikigeo_index.tar.zst" ;;
-    none) TARBALL="$DIST_DIR/wikigeo_index.tar" ;;
+          TARBALL="$DIST_DIR/$STEM.tar.zst" ;;
+    none) TARBALL="$DIST_DIR/$STEM.tar" ;;
     *)    die "--compress must be gzip, zstd, or none" ;;
 esac
 MANIFEST="$DIST_DIR/manifest.json"
@@ -186,6 +191,19 @@ if problems:
     sys.exit(1)
 PYEOF
 
+# Snapshot repositories registered on this node live in the cluster state,
+# which is inside the data directory, so they would travel in the archive and
+# every user's Elasticsearch would log a stack trace per repository at start
+# ("doesn't match any of the locations specified by path.repo"). Unregistering
+# one does not touch the snapshots in it.
+REPOS="$(curl -fsS "http://localhost:9200/_cat/repositories?h=id" 2>/dev/null | tr '\n' ' ' || true)"
+if [ -n "${REPOS// /}" ]; then
+    die "snapshot repositories are registered on this node: $REPOS
+       They would ship inside the archive. Unregister them first (the snapshot
+       files stay on disk), e.g.:
+         for r in $REPOS; do curl -XDELETE localhost:9200/_snapshot/\$r; done"
+fi
+
 # ---------------------------------------------------------------------------
 # Stop ES before tarring.
 #
@@ -207,12 +225,17 @@ else
     log "(this is ~13 GB of already-compressed Lucene data; expect it to be slow"
     log " and to shrink very little)"
     rm -f "$TARBALL"
+    # Store the files as owned by 1000:0, the image's own user, whatever owns
+    # them here. Unpacked by an ordinary user they become that user's anyway
+    # (hence `docker run --user "$(id -u):0"`); unpacked by root they then
+    # already suit the image's default user.
+    TAR_OWNER=(--owner=1000 --group=0 --numeric-owner)
     case "$COMPRESS" in
         # -1: Lucene data barely compresses, so higher levels burn CPU for
         # almost no size reduction.
-        gzip) tar -C "$ES_PARENT" -cf - wikigeo_index | gzip -1 > "$TARBALL" ;;
-        zstd) tar -C "$ES_PARENT" -cf - wikigeo_index | zstd -1 -T0 -o "$TARBALL" -f ;;
-        none) tar -C "$ES_PARENT" -cf "$TARBALL" wikigeo_index ;;
+        gzip) tar "${TAR_OWNER[@]}" -C "$ES_PARENT" -cf - wikigeo_index | gzip -1 > "$TARBALL" ;;
+        zstd) tar "${TAR_OWNER[@]}" -C "$ES_PARENT" -cf - wikigeo_index | zstd -1 -T0 -o "$TARBALL" -f ;;
+        none) tar "${TAR_OWNER[@]}" -C "$ES_PARENT" -cf "$TARBALL" wikigeo_index ;;
     esac
     log "Archive complete: $(human "$(file_size "$TARBALL")")"
 fi
