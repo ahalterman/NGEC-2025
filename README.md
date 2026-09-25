@@ -1,20 +1,27 @@
-# NGEC
+# NGEC -- the Next Generation Event Coder
 
 <table border="0">
 <tr>
 <td width="300"><img src="docs/ngec_logo.jpg" alt="The NGEC logo, a stack of newspapers being fed into a lego machine with small boxes coming out on the other side, in a Modernist style" width="300"></td>
 <td>
 
-NGEC (Next Generation Event Coder) turns news stories into political event data. For each story, it finds the events it describes, either using the [PLOVER](link) event ontology, or a custom ontology you've developed.
+NGEC (Next Generation Event Coder) turns news stories into political event
+data. 
 
-It identifies instances of events reported in text (protests,
-assaults, requests, etc.). Then, for each event, it extracts the actor and
-recipient, when and where it happened, and optionally, other attributes like 
-how many people were killed or
-injured in the event. It then classifies these entities PLOVER categories (government, military,
-civilians, ...) and links them to Wikipedia. It resolves the date to a calendar
-date and the location to a place in GeoNames. A much earlier version of this
-pipeline produced the [POLECAT](https://dataverse.harvard.edu/dataverse/POLECAT) dataset.
+
+For each story, NGEC:
+
+1. **Detects event types** in news stories with a classifier.
+2. **Extracts the event's attributes**: who did it (the actor), to whom (the
+   recipient), when, where, and optionally things like how many people were
+   killed. A small language model does this locally, with no API
+   key or per-story cost.
+3. **Categorizes the actors and recipients** into categories (government, military, civilians,
+   ...). For named people and organizations, it looks them up in a local copy
+   of Wikipedia to find out who they are.
+4. **Resolves** the date to a calendar date and the place names to coordinates using
+   the GeoNames gazetteer.
+
 </td>
 </tr>
 </table>
@@ -24,15 +31,29 @@ pipeline produced the [POLECAT](https://dataverse.harvard.edu/dataverse/POLECAT)
 
 <br clear="left">
 
+A note on "ontologies": all event data projects begin with an ontology, which defines the event types to code,
+how events are represented, and the way that actors and recipients should be categorized. By default, NGEC
+uses a common event ontology ([PLOVER], similar to the older CAMEO ontolgy)(https://github.com/openeventdata/plover).
+However, NGEC is designed to be used with custom ontologies or codebooks that define different types of events and political actors.
+
+The event classifiers that come with NGEC are demonstration models; for
+research data you will probably want to train your own (see [Before coding a
+corpus](#before-coding-a-corpus)).
+
+A much earlier version of this pipeline
+produced the [POLECAT](https://dataverse.harvard.edu/dataverse/POLECAT) dataset.
+
+
 **Table of Contents** 
 
 - [Quickstart](#quickstart)
-- [Letting a coding agent set it up](#letting-a-coding-agent-set-it-up)
+- [Letting a coding agent set it up](#setting-up-with-a-coding-agent)
 - [Running NGEC on your own stories](#coding-your-own-stories)
 - [Creating custom event data](#customizing-ngec)
 - [Using single steps](#using-single-steps)
 - [Before coding a corpus](#before-coding-a-corpus)
 - [When something goes wrong](#when-something-goes-wrong)
+- [FAQs](#faqs)
 - [More documentation](#more-documentation)
 
 ## Quickstart
@@ -43,8 +64,8 @@ You need:
   Python and NGEC. See [`docs/INSTALL.md`](docs/INSTALL.md#installing-with-pip) for
   instructions on installing with pip.
 - [Docker](https://www.docker.com/get-started/), which runs Elasticsearch, the
-  search engine that holds NGEC's copy of Wikipedia and of the GeoNames
-  gazetteer.
+  search engine that holds NGEC's local copy of Wikipedia and GeoNames (steps 3
+  and 4 above).
 - About 20 GB of free disk space and an hour, mostly waiting for downloads.
 
 Then, in a terminal:
@@ -75,8 +96,8 @@ using the table below:
 What the commands do:
 
 - **`ngec download-models`** downloads the language models NGEC uses (spaCy,
-  three sentence encoders, and the model that extracts event attributes) into
-  your user cache so that NGEC starts up quickly when you first run it.
+  three sentence encoders, and the model that extracts event attributes) 
+  so that NGEC starts up quickly when you first run it.
 - **`ngec download-index --start`** downloads the Wikipedia and GeoNames index to
   `~/ngec-es-data`, checks it, unpacks it, and starts Elasticsearch on it on
   port 9200. It is the slowest step, so you can run it in a second terminal
@@ -89,12 +110,15 @@ What the commands do:
 
 **Not everything needs Elasticsearch.** The Elasticsearch indices are the heavy 
 lift for setup, but only geocoding and Wikipedia-based actor
-resolution use it. If you only need event types, the extracted attribute text,
-date resolution or actor categories, skip `download-index`.
+resolution use it. If you only need event types, to extract attribute text,
+date resolution or actor categories for generic descriptions ("Kenyan police",
+"protesters"), you can skip `download-index`. However, coding named actors ("Emmanuel Macron")
+needs the Wikipedia index.
+
 [`docs/INSTALL.md`](docs/INSTALL.md#do-you-need-all-of-it) has more details
 on which downloads you'll need for each.
 
-## Vibe setup with a coding agent
+## Setting up with a coding agent
 
 If you use Claude Code, Codex or another coding agent, it can do the installation
 for you. Open it in an empty folder and ask it to:
@@ -128,7 +152,8 @@ Here's an example of how to code stories using the built-in PLOVER ontology. If 
 want to code different kinds of events, see [Customizing NGEC](#customizing-ngec).
 
 Each story needs an `id`, the `event_text`, and a `pub_date`, which is used to
-resolve relative dates like "today" or "last Tuesday":
+resolve relative dates like "today" or "last Tuesday" and make sure that people
+are assigned to the job they had when the event took place:
 
 ```python
 from ngec import events_to_table
@@ -136,24 +161,32 @@ from ngec.es_client import es_client_from_env
 from ngec.logging import quiet_third_party_loggers
 from ngec.plover_coder import PloverCoder
 
-quiet_third_party_loggers()
 
-coder = PloverCoder(es_client=es_client_from_env())
+def main():
+    quiet_third_party_loggers()
 
-stories = [
-    {"id": "story1",
-     "event_text": "Protesters were in the streets in Paris again today to protest "
-                   "against the government's austerity measures.",
-     "pub_date": "2016-05-01"},
-]
-events = coder.process(stories)
+    coder = PloverCoder(es_client=es_client_from_env())
 
-# create a simplified table output
-table = events_to_table(events)
-table.to_csv("events.csv", index=False)
+    stories = [
+        {"id": "story1",
+         "event_text": "Protesters were in the streets in Paris again today to protest "
+                       "against the Hollande government's austerity measures.",
+         "pub_date": "2016-05-01"},
+    ]
+    events = coder.process(stories)
+
+    # create a simplified table output
+    table = events_to_table(events)
+    table.to_csv("events.csv", index=False)
+
+
+# On a GPU, NGEC starts a second process that re-reads this file. This line
+# keeps that process from running the pipeline again.
+if __name__ == "__main__":
+    main()
 ```
 
-Save it as a file in your project folder (e.g. `code_events.py`) and run it with
+Save the code above as a file in your project folder (e.g. `code_events.py`) and run it with
 `uv run python code_events.py`. `events.csv` has one row per event.
 
 ```
@@ -162,7 +195,7 @@ story_id          story1
 pub_date          2016-05-01
 event_type        PROTEST
 event_mode        demo
-anchor_quote      Protesters were in the streets in Paris again today to protest against the government's austerity measures
+anchor_quote      Protesters were in the streets in Paris again today to protest against the Hollande government's austerity measures
 date_text         today
 date              2016-05-01
 date_granularity  day
@@ -179,32 +212,38 @@ geonameid         2988507
 actor_text        Protesters
 actor_code        CVL OPP
 actor_wiki
-recipient_text    government
-recipient_code    GOV
-recipient_wiki
+recipient_text    Hollande government
+recipient_code    FRA GOV
+recipient_wiki    François Holland
 ```
 
 - **`event_type` and `event_mode`** are the PLOVER event type and its mode
-  (here, a demonstration). A story can produce several events. It produces one
-  per event type and mode that the classifier detects, and more if the story
-  describes more than one such event.
+  (here, `demo`, a demonstration, as opposed to e.g. a riot or a strike). A story can include
+  several different event types, and more than one instance of each event type could be present. (For example,
+  a news story could report two separate demonstrations). The attribute model
+  will return separate records for each separate instance of an event type reported in a story.
+- **`actor` and `recipient`** are who carried out the event and who it was
+  directed at (the "source" and "target" in older CAMEO-coded data).
 - **`anchor_quote`** is the passage the attribute model identified as the 
   best short span describing the event (though it can identify information
   from elsewhere in the story). `*_text` columns are the exact spans the model identified
   as reporting the actor, recipient, date, and location of the event.
-- **`date`** is the resolved calendar date. `date_granularity` is precise
-  it is (day, week, month, quarter, year) and `date_type` whether it is exact,
+- **`date`** is the resolved calendar date. `date_granularity` is how
+  precise it is (day, week, month, quarter, year) and `date_type` whether it is exact,
   approximate or a range.
 - **`location_`, `lat`, `lon` and `geonameid`** are the GeoNames information for
-  the event's location. If the geoparser is not confident, it will leave these blank. 
-- **`actor_code`/`recipient_code`** reports the PLOVER actor/recipient categories (here, civilians who are
-  opposition, and the government which is GOV), and `actor_wiki`/`recipient_wiki` gives the Wikipedia page when the actor is a
-  named person or organization.
+  the event's location. If the geoparser ([mordecai3](https://github.com/ahalterman/mordecai3/) is not confident, it will
+  leave these blank.
+- **`actor_code`/`recipient_code`** are the PLOVER actor categories. A code can
+  have several parts: `CVL OPP` is civilians (`CVL`) in the opposition (`OPP`),
+  and `GOV` is the government. 
+- **`actor_wiki`/`recipient_wiki`** report the
+  Wikipedia page when the actor is a named person or organization.
 
-`events` itself is a list of Python dictionaries with more detail than the
-table, including the classifier's confidence, every place mordecai3 found in
+The `events` object itself is a list of Python dictionaries that have more detail than the
+simplified table output, including the classifier's confidence, every place the geoparser found in
 the story, and why each date and location was or wasn't resolved. We recommend
-working with the JSON in production.  [`PIPELINE.md`](PIPELINE.md) documents
+working with the full `events` object in production.  [`PIPELINE.md`](PIPELINE.md) documents
 all of the fields.
 
 ## Customizing NGEC
@@ -216,13 +255,13 @@ it uses by default.
 
 For example, say you're interested in coding legislative events, which aren't
 part of the default PLOVER ontology. If you wanted to identify `INTRODUCE_BILL`
-events, you would  write a new definitions for the event type, retrain the
-event classifiers to detect your new event types, and run the attribute model
-using your new event types. The attribute model can extract information for
-event types it didn't see during training, so you can use it as-is with new
-event definitions.  In many cases, the attribute model can also extract new
-*attributes* (e.g., `num_cosponsors`)  without retraining, but this will
-require testing it on your corpus.
+events, you would write new definitions for the event type, retrain the event
+classifiers to detect your new event types (a few hundred labeled stories per
+type), and run the attribute model using your new event types. The attribute
+model can extract information for event types it didn't see during training, so
+you can use it as-is with new event definitions.  In many cases, the attribute
+model can also extract new *attributes* (e.g., `num_cosponsors`)  without
+retraining, but this will require testing it on your corpus.
 
 You can also change the *entity classification* step. To use the same example,
 PLOVER's default `LEG`islative category isn't useful for researchers studying different
@@ -263,14 +302,15 @@ chain a few steps without running the whole pipeline.
 
 **The event classifiers are demonstration models.** These are not the models
 that produced POLECAT. They were trained on Voice of America stories labeled by
-an LLM applying the PLOVER codebook. For your own event data, you may want to
-train your own; see [`CLASSIFIERS.md`](CLASSIFIERS.md).
-[Customizing NGEC](#customizing-ngec) covers using your own classifier.
+an LLM applying the PLOVER codebook to generate some example training data. For
+your own event data, you'll probably want to train your own; see
+[`CLASSIFIERS.md`](CLASSIFIERS.md). [Customizing NGEC](#customizing-ngec)
+describes how you can use your own event classifiers.
 
-**Speed.** Most of time it takes to run NGEC comes from the attribute extraction model, which runs
-once for each (story, event type) pair. On a desktop CPU, this that is about 4.6
-seconds each, so a story with three event types takes about 14 seconds. On a
-Linux machine with an NVIDIA GPU (`ngec[cu12,vllm]`), it is many times faster (around 20-40 per second).
+**Speed.** Most of the time it takes to run NGEC comes from the attribute extraction model, which runs
+once for each event type and mode detected in a story. On a desktop CPU, that
+takes about 4 seconds each, so a story with three event types takes about 14 seconds. On a
+Linux machine with an NVIDIA GPU (`ngec[cu12,vllm]`), it is many times faster (around 20-40 prompts per second).
 You should time a batch of 20 stories before planning a large run.
 `ngec guide run` has a script for coding a whole corpus in batches, and
 [`RUNNING.md`](RUNNING.md) describes what to expect at scale.
@@ -302,9 +342,65 @@ is listed at the bottom with the command that fixes it. `--json` gives the same
 report in a form to paste into a
 [GitHub issue](https://github.com/ahalterman/ngec-2025/issues).
 
-The most common problem is a PyTorch build that cannot use the GPU, so the
-pipeline runs on the CPU, many times more slowly, with no error. The doctor
-checks for this.
+The most common problem is a PyTorch build that cannot use the GPU, which makes the pipeline (silently) 
+fall back on the (much slower) CPU. The doctor will check that the pipeline is properly running on the GPU
+if it's supposed to be.
+
+## FAQs
+
+1. How is this different from asking ChatGPT or Claude to code the stories?
+
+A few answers:
+- Replicability and privacy: NGEC's models can be re-run to produce identical
+  output for replication, which is not possible with closed-weight LLMs. This
+  is especially important when you're coding events over time and don't want
+  sudden shifts in your coding pipeline as vendors deprecate models.
+- Cost: the cost for coding thousands of stories: the paper reports a
+  comparison with a closed-weight LLM that costs around $45 per 500 stories.
+- LLMs can't do all of the steps reliably, including codes actors against
+  Wikipedia as of the story's date, geocoding against GeoNames, and returning
+  the same structured fields every time. 
+- You can do both! The modular nature of NGEC means that if an LLM works as an event
+  detector or attribute model for you, you can just swap it in for those
+  individual steps.
+
+2. How accurate is it?
+
+[TODO with final replication]
+
+3. Does it work on non-English text?
+
+NGEC is currently configured to code English-language text only. Many of its
+dependencies, including spaCy, the custom attribute model, and Wikipedia are
+all English language only. Porting it to other languages is possible in theory,
+but would involve a major effort.
+
+4. Does NGEC de-duplicate events?
+
+No. If an event is reported several times across different stories, NGEC will
+generate a record for each. This is a challenging and still open research
+problem, and different researchers will want to de-duplicate in different ways
+depending on their needs. And some "events" can produce multiple events (e.g.,
+a protest that involves both a demonstration and blocking traffic could
+generate separate records for "PROTEST-demo" and "PROTEST-obstruct".  Use
+caution in treating rows as synonymous with events.
+
+5. Where do I get the news stories?
+
+One of the major remaining challenges in producing custom event data is
+obtaining news text. We cannot distribute copyrighted news text, so researchers
+will be responsible for obtaining their own corpora of text to code.
+
+6. Can I use it on text that isn't news?
+
+Maybe! The models were trained and evaluated on news text, but they will run on
+NGO or government reports, social media, or other text, but likely with
+somewhat degraded accuracy. Getting good performance on "different" looking
+text may require retraining some models.
+
+## Citing NGEC
+
+[TODO]
 
 ## More documentation
 
