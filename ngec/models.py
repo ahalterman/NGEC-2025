@@ -1,11 +1,12 @@
 """Getting the models NGEC needs, and failing usefully when they're missing.
 
 `download_models()` (also `ngec download-models`) fetches everything the
-pipeline loads by name, about 3 GB together, so that the first pipeline run is
+pipeline loads by name, 3 to 4 GB together, so that the first pipeline run is
 not also a download:
 
 - the two spaCy models (about 900 MB), which need special handling -- see below;
-- the attribute-extraction LLM (about 1.2 GB for the default);
+- the attribute-extraction LLM (about 1.2 GB for the default), plus its GGUF
+  file (834 MB) when llama-cpp-python is installed, for the llamacpp backend;
 - three sentence encoders (about 700 MB together): the one the event
   classifiers were trained with, and the two the actor matcher uses.
 
@@ -214,7 +215,8 @@ def download_encoders() -> None:
     manager.load_trf_model()
 
 
-def download_attribute_model(model_name: str | None = None, force: bool = False) -> None:
+def download_attribute_model(model_name: str | None = None, force: bool = False,
+                             gguf: bool | None = None) -> None:
     """Download the attribute-extraction LLM into the Hugging Face cache.
 
     Which model is resolved exactly as `AttributeModel` resolves it:
@@ -222,8 +224,10 @@ def download_attribute_model(model_name: str | None = None, force: bool = False)
     given as a local directory has nothing to download.
 
     The vllm, transformers and mlx backends all load from the Hugging Face
-    cache, so this covers all three. The llamacpp backend talks to a
-    `llama-server` running a GGUF file, which this does not provide.
+    cache, so this covers all three. The llamacpp backend also needs the
+    model's GGUF file, which is downloaded too when `gguf` is True, or, by
+    default, when llama-cpp-python is installed. (It needs the model itself as
+    well, for the tokenizer that renders the prompt.)
 
     Files already in the cache are only downloaded again if they have changed
     on the hub, or if `force` is set.
@@ -235,13 +239,38 @@ def download_attribute_model(model_name: str | None = None, force: bool = False)
     name = resolve_model_name(model_name)
     if Path(name).expanduser().is_dir():
         logger.info("%s is a local directory, nothing to download.", name)
+    else:
+        logger.info("Downloading %s (attribute extraction)...", name)
+        snapshot_download(repo_id=name, force_download=force)
+
+    if gguf is None:
+        gguf = importlib.util.find_spec("llama_cpp") is not None
+    if gguf:
+        download_attribute_gguf(name, force=force)
+
+
+def download_attribute_gguf(model_name: str, force: bool = False) -> None:
+    """Download the published GGUF file of `model_name`, for the llamacpp
+    backend. Logs and does nothing for a model with no published GGUF."""
+    from huggingface_hub import hf_hub_download
+
+    from .llm.llamacpp import gguf_for_model
+
+    published = gguf_for_model(model_name)
+    if published is None:
+        logger.info("%s has no published GGUF file; the llamacpp backend needs "
+                    "one of your own (gguf_path= or NGEC_ATTRIBUTE_GGUF).",
+                    model_name)
         return
-    logger.info("Downloading %s (attribute extraction)...", name)
-    snapshot_download(repo_id=name, force_download=force)
+    repo_id, filename = published
+    logger.info("Downloading %s from %s (attribute extraction with llama.cpp)...",
+                filename, repo_id)
+    hf_hub_download(repo_id=repo_id, filename=filename, force_download=force)
 
 
 def download_models(force: bool = False, attribute_model: str | None = None,
-                    include_attribute_model: bool = True) -> None:
+                    include_attribute_model: bool = True,
+                    gguf: bool | None = None) -> None:
     """Download every model the pipeline loads by name.
 
     That is the spaCy models, the sentence encoders and the attribute LLM;
@@ -255,6 +284,9 @@ def download_models(force: bool = False, attribute_model: str | None = None,
             `AttributeModel` would use by default.
         include_attribute_model: Set to False to skip the attribute model, for
             example when it runs on a llama.cpp server.
+        gguf: Whether to also download the attribute model's GGUF file, for
+            the llamacpp backend. The default None does so when
+            llama-cpp-python is installed.
 
     Also reachable as `ngec download-models`.
     """
@@ -263,4 +295,4 @@ def download_models(force: bool = False, attribute_model: str | None = None,
     download_spacy_models(force=force)
     download_encoders()
     if include_attribute_model:
-        download_attribute_model(attribute_model, force=force)
+        download_attribute_model(attribute_model, force=force, gguf=gguf)

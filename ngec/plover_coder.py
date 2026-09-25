@@ -20,7 +20,7 @@ class PloverCoder:
                  es_client,
                  event_threshold: float | None = None,
                  event_classifier=None,
-                 attribute_backend: str = "transformers",
+                 attribute_backend: str = "auto",
                  attribute_model_name: str | None = None,
                  event_definitions_file: str | None = None,
                  agents_file: str | None = None,
@@ -60,8 +60,14 @@ class PloverCoder:
             PLOVER also needs definitions for them in the attribute step; see
             `event_definitions_file`.
         attribute_backend: inference backend for the attribute LLM. One of
-            "transformers" (portable, works everywhere), "vllm" (much faster,
-            Linux/CUDA), or "mlx" (macOS). See the README on installing these.
+            "vllm" (Linux with an NVIDIA GPU; fastest), "llamacpp" (any CPU),
+            "mlx" (a Mac with Apple Silicon), or "transformers" (deprecated;
+            about three times slower than llamacpp on a CPU). Each needs its
+            extra installed; see the README. The default "auto" uses vllm if it is installed
+            and there is a CUDA GPU, mlx on an Apple Silicon Mac if it is
+            installed, and llamacpp otherwise. llamacpp runs the model in this
+            process unless NGEC_LLAMACPP_URL points it at a llama-server, and
+            takes its thread count from NGEC_LLAMACPP_THREADS if set.
         attribute_model_name: (customization) the attribute LLM, as a Hugging
             Face model name or a path to a local model directory. The default
             None uses the NGEC_ATTRIBUTE_MODEL environment variable if set, and
@@ -89,9 +95,9 @@ class PloverCoder:
             PLOVER priorities. Codes missing from this table all tie at 0, so
             with a custom `agents_file` and the default priorities the choice
             between your codes falls back to the order the evidence came in.
-        gpu: run the attribute LLM on the GPU. "transformers" runs on CPU by
-            default, which is fine for a handful of stories but slow for a
-            corpus.
+        gpu: run the "transformers" backend on the GPU. The other backends
+            ignore it: vllm always runs on the GPU, llamacpp on the CPU, and
+            mlx on the Mac's own GPU.
         max_gpu_memory: only used by the "vllm" backend, which reserves this
             fraction of the GPU's *total* memory up front. The default of 0.8
             fails on a GPU that is already partly in use (vLLM reports that free

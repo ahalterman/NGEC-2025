@@ -30,7 +30,15 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 #   of input the AttributeModel expects and what kind of output it produces.
 #
 
-BackendType = Literal["vllm", "transformers", "mlx", "llamacpp"]
+BackendType = Literal["auto", "vllm", "llamacpp", "mlx", "transformers"]
+
+# What to install for each backend, for the error raised when it is missing.
+BACKEND_INSTALL_HINTS = {
+    "vllm": 'pip install "ngec[vllm]" (Linux with an NVIDIA GPU)',
+    "mlx": 'pip install "ngec[mlx]" (a Mac with Apple Silicon)',
+    "llamacpp": ('pip install "ngec[llamacpp]" --extra-index-url '
+                 'https://abetlen.github.io/llama-cpp-python/whl/cpu'),
+}
 
 # Which model to extract attributes with, and the prompt format it was trained
 # on. The two are not independent: a model produces markedly worse spans when
@@ -390,7 +398,7 @@ def _load_vllm_sampling_params(max_tokens=1024, greedy=False):
     try:
         from vllm import SamplingParams
     except ImportError:
-        raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
+        raise ImportError("vLLM is not installed. " + _install_message("vllm"))
 
     if greedy:
         return SamplingParams(temperature=0.0, max_tokens=max_tokens)
@@ -408,6 +416,13 @@ def _load_vllm_sampling_params(max_tokens=1024, greedy=False):
 
 
 
+def _install_message(backend: str) -> str:
+    """What to install for `backend`, and the alternatives."""
+    return (f"Install it with: {BACKEND_INSTALL_HINTS[backend]}. "
+            f"On a CPU, backend='llamacpp' needs only: "
+            f"{BACKEND_INSTALL_HINTS['llamacpp']}")
+
+
 class AttributeModel:
     def __init__(self,
                  event_definitions_file=None,
@@ -418,8 +433,10 @@ class AttributeModel:
                  base_path=None,
                  max_gpu_memory=0.8,
                  vllm_model=None,
-                 backend: BackendType="vllm",
+                 backend: BackendType="auto",
                  llamacpp_url: str | None = None,
+                 llamacpp_threads: int | None = None,
+                 gguf_path: str | None = None,
                  model_name: str | None = None,
                  prompt_format: PromptFormat | None = None,
                  seed: int | None = None,
@@ -461,15 +478,44 @@ class AttributeModel:
             GPU memory utilization for vLLM
         vllm_model : vllm.LLM, optional
             Pre-initialized vLLM model to use
-        backend: BackendType="vllm"
-            Which backend to use: "vllm", "transformers", "mlx", or "llamacpp"
+        backend : {"auto", "vllm", "llamacpp", "mlx", "transformers"}, default="auto"
+            Which backend runs the model:
+
+            - "vllm": Linux with an NVIDIA GPU (the `vllm` extra). Fastest.
+            - "llamacpp": any CPU (the `llamacpp` extra). Runs the model's
+              published GGUF file in this process, downloading it the first
+              time, unless `llamacpp_url` (or NGEC_LLAMACPP_URL) points it at a
+              running `llama-server`.
+            - "mlx": a Mac with Apple Silicon (the `mlx` extra).
+            - "transformers": deprecated. Still works, but on a CPU it took
+              about three times as long per prompt as "llamacpp" (15 s against
+              4.6 s on an i9-12900K) and twice the memory.
+            - "auto": vllm if it is installed and there is a CUDA GPU, mlx on a
+              Mac with Apple Silicon if it is installed, and llamacpp
+              otherwise (see ngec.llm.choose_backend). The choice is logged.
+        llamacpp_url : str, optional
+            The URL of a running `llama-server`, for the llamacpp backend.
+            Defaults to the NGEC_LLAMACPP_URL environment variable. With
+            neither, the llamacpp backend runs the model in this process.
+        llamacpp_threads : int, optional
+            CPU threads for the in-process llamacpp backend. Defaults to the
+            NGEC_LLAMACPP_THREADS environment variable, or else the number of
+            performance cores, at most 8 (see ngec.llm.llamacpp.default_threads).
+            Using every logical CPU is usually much slower.
+        gguf_path : str, optional
+            A local GGUF file for the in-process llamacpp backend to load.
+            Defaults to the NGEC_ATTRIBUTE_GGUF environment variable, or else
+            the published GGUF of `model_name`, downloaded from Hugging Face
+            (see ngec.llm.llamacpp.KNOWN_GGUF_FILES). It must be a conversion
+            of `model_name`, which still supplies the prompt format and the
+            chat template.
         model_name : str, optional
             A Hugging Face model name or a path to a local model directory.
             Defaults to DEFAULT_MODEL, or to the NGEC_ATTRIBUTE_MODEL
-            environment variable if that is set. Note that the llamacpp backend
-            loads its weights from whatever `llama-server` was started with —
-            this only selects the tokenizer there, so the two have to be kept in
-            step by hand.
+            environment variable if that is set. Note that with a
+            `llama-server`, the weights are whatever the server was started
+            with -- this only selects the tokenizer there, so the two have to
+            be kept in step by hand.
         prompt_format : {"legacy", "v5", "v6"}, optional
             The prompt format the model was trained on. Defaults to looking
             `model_name` up in KNOWN_PROMPT_FORMATS, then in the model's own
@@ -490,6 +536,10 @@ class AttributeModel:
             current working directory.
         """
         self.silent=silent
+        if backend == "auto":
+            from .llm import choose_backend
+            backend = choose_backend()
+            logger.info(f"Attribute model backend: {backend} (chosen automatically)")
         self.backend = backend
         self.model_name = resolve_model_name(model_name)
         self.prompt_format: PromptFormat = (prompt_format
@@ -524,9 +574,8 @@ class AttributeModel:
             try:
                 from vllm import LLM
             except ImportError:
-                if not self.silent: 
-                    logger.error("vLLM not available. Use another backend.")
-                raise ImportError("vLLM is not installed. Please install it or use backend='transformers'")
+                raise ImportError("The vllm backend needs vLLM, which is not "
+                                  "installed. " + _install_message("vllm")) from None
             
             if not self.silent: 
                 logger.debug("Loading vLLM model")
@@ -548,6 +597,16 @@ class AttributeModel:
                                                               greedy=self.greedy)
             self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         elif self.backend == "transformers":
+            # Logged whatever `silent` says: PloverCoder always passes
+            # silent=True, and this is the one message a user of this backend
+            # needs to see.
+            logger.warning(
+                "The transformers backend is deprecated. "
+                "It still works, but on a CPU it is about three times slower "
+                "than backend='llamacpp' and uses twice the memory. "
+                "Use backend='llamacpp' on a CPU, 'vllm' on Linux with an "
+                "NVIDIA GPU, or 'mlx' on a Mac with Apple Silicon -- or "
+                "backend='auto' to pick among them.")
             from .llm.transformers import TransformersEngine
             self.engine = TransformersEngine(
                 model_name=self.model_name,
@@ -564,7 +623,8 @@ class AttributeModel:
                 from mlx_lm import load, generate
                 from mlx_lm.sample_utils import make_sampler
             except ImportError:
-                raise ImportError("mlx_lm is not installed. Please install it or use another backend.")
+                raise ImportError("The mlx backend needs mlx-lm, which is not "
+                                  "installed. " + _install_message("mlx")) from None
             
             if not self.silent: 
                 logger.debug("Loading MLX model")
@@ -580,31 +640,38 @@ class AttributeModel:
                 min_tokens_to_keep=1,
             )
         elif self.backend == "llamacpp":
-            # Talks to a running `llama-server` over HTTP rather than loading a
-            # model in-process. This is the fast path on CPU: the model is
-            # served quantized, which cuts the weight bytes that dominate
-            # decode. On an AVX2 desktop, Q8_0 measured ~4x faster per call than
-            # the transformers backend in float32, and the server's prompt cache
-            # also reuses the shared document prefix across the several event
-            # types extracted from one document.
-            #
-            # Start the server separately, e.g.
-            #   llama-server -m attr-q8.gguf --port 8080 -c 8192
-            # and point NGEC_LLAMACPP_URL at it. See DEVELOPING.md.
-            from .llm.llamacpp import LlamaCppServerEngine
-            self.engine = LlamaCppServerEngine(
-                model_name=self.model_name,
-                url=llamacpp_url,
-                config=generation_config,
-                silent=self.silent,
-            )
+            # The fast path on a CPU: the model runs as an 8-bit GGUF file,
+            # which cuts the weight bytes that dominate decoding. Runs in this
+            # process through llama-cpp-python, unless a llama-server URL is
+            # given, in which case it talks to that server over HTTP (how the
+            # demo deployment runs; the server's prompt cache also reuses the
+            # shared start of the prompts). See DEVELOPING.md.
+            from .llm import llamacpp_server_url
+            url = llamacpp_server_url(llamacpp_url)
+            if url:
+                from .llm.llamacpp import LlamaCppServerEngine
+                self.engine = LlamaCppServerEngine(
+                    model_name=self.model_name,
+                    url=url,
+                    config=generation_config,
+                    silent=self.silent,
+                )
+            else:
+                from .llm.llamacpp import LlamaCppLocalEngine
+                self.engine = LlamaCppLocalEngine(
+                    model_name=self.model_name,
+                    gguf_path=gguf_path,
+                    n_threads=llamacpp_threads,
+                    config=generation_config,
+                    silent=self.silent,
+                )
             # Keep the attribute alive for make_prompt() and the demo; delete when
             # the last backend becomes an engine.
             self.tokenizer = self.engine.tokenizer
         else:
             raise ValueError(
                 f"Unknown backend: {self.backend}. "
-                "Must be 'vllm', 'transformers', 'mlx', or 'llamacpp'"
+                "Must be 'auto', 'vllm', 'llamacpp', 'mlx', or 'transformers'"
             )
 
         self.batch_size=batch_size
@@ -828,12 +895,12 @@ class AttributeModel:
                 "self.engine.generate([self._build_conversation(event)])."
             )
         elif self.backend == "llamacpp":
-            # This backend generates through LlamaCppServerEngine now, so there
-            # is no HTTP call here. process() never reaches this branch; it
-            # exists to give a direct caller a real message instead of an
-            # AttributeError on a half-migrated object.
+            # This backend generates through an engine (LlamaCppLocalEngine
+            # or LlamaCppServerEngine) now. process() never reaches this
+            # branch; it exists to give a direct caller a real message instead
+            # of an AttributeError on a half-migrated object.
             raise RuntimeError(
-                "The llamacpp backend generates through LlamaCppServerEngine, "
+                "The llamacpp backend generates through self.engine, "
                 "not call_llm_batch(). Use process(), or "
                 "self.engine.generate([self._build_conversation(event)])."
             )

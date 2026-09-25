@@ -40,9 +40,10 @@ def main(argv: list[str] | None = None) -> int:
         "download-models",
         help="download the models NGEC needs",
         description=(
-            "Download the models NGEC needs, about 3 GB together: the two spaCy "
+            "Download the models NGEC needs, 3 to 4 GB together: the two spaCy "
             "models, the sentence encoders used for event classification and "
-            "actor resolution, and the attribute-extraction LLM. None of them "
+            "actor resolution, and the attribute-extraction LLM (with its GGUF "
+            "file, when llama-cpp-python is installed). None of them "
             "come with installing ngec, and without this step they would "
             "download the first time the pipeline runs (except the spaCy "
             "models, which do not download on their own at all)."))
@@ -56,6 +57,10 @@ def main(argv: list[str] | None = None) -> int:
     download.add_argument("--no-attribute-model", action="store_true",
                           help="skip the attribute model, e.g. when it runs on a "
                                "llama.cpp server")
+    download.add_argument("--gguf", action="store_true", default=None,
+                          help="also download the attribute model's GGUF file, "
+                               "for the llamacpp backend (the default when "
+                               "llama-cpp-python is installed)")
 
     index = subparsers.add_parser(
         "download-index",
@@ -136,7 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         try:
             download_models(force=args.force,
                             attribute_model=args.attribute_model,
-                            include_attribute_model=not args.no_attribute_model)
+                            include_attribute_model=not args.no_attribute_model,
+                            gguf=args.gguf)
         except RuntimeError as exc:
             print(exc, file=sys.stderr)
             return 1

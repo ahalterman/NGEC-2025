@@ -61,7 +61,7 @@ def describe_event(event: dict) -> str:
 
     return (f"{event_type}: {actor_names(event.get('actor'))} -> "
             f"{actor_names(event.get('recipient'))}; "
-            f"in {location.get('name') or '-'}; on {date or '-'}")
+            f"in {location.get('resolved_placename') or '-'}; on {date or '-'}")
 
 
 def run() -> dict:
@@ -69,7 +69,15 @@ def run() -> dict:
     from .plover_coder import PloverCoder
 
     stories = load_smoke_test_stories()
-    coder = PloverCoder(es_client=es_client_from_env())
+    # The in-process llama.cpp backend when it is installed: it runs on any
+    # CPU, starts in seconds, and leaves a GPU that other work may be using
+    # alone. Otherwise the pipeline's own automatic choice.
+    try:
+        import llama_cpp  # noqa: F401
+        backend = "llamacpp"
+    except ImportError:
+        backend = "auto"
+    coder = PloverCoder(es_client=es_client_from_env(), attribute_backend=backend)
     events = coder.process(stories)
 
     return {

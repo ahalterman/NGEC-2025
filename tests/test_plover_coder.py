@@ -1,4 +1,5 @@
 import logging
+from importlib.util import find_spec
 
 import pytest
 
@@ -12,7 +13,11 @@ def test_plover_coder(es_client_local):
         {"id": "story1", "event_text": "Protesters were in the streets in Paris again today to protest against the government's austerity measures.", "pub_date": "2016-05-01"}
     ]
 
-    pc = PloverCoder(es_client=es_client_local)
+    # A CPU backend, named rather than left to "auto": on a machine with vllm
+    # and a GPU, "auto" would start vLLM, which reserves most of a (possibly
+    # shared) GPU for the length of the test run.
+    backend = "llamacpp" if find_spec("llama_cpp") else "transformers"
+    pc = PloverCoder(es_client=es_client_local, attribute_backend=backend)
     
     event_list = pc.process(story_list)
     
@@ -47,7 +52,7 @@ def test_defaults_are_unchanged(built):
     assert built["PloverSklearnClassifier"] == {"threshold": None}
     assert built["AttributeModel"]["event_definitions_file"] is None
     assert built["AttributeModel"]["model_name"] is None
-    assert built["AttributeModel"]["backend"] == "transformers"
+    assert built["AttributeModel"]["backend"] == "auto"
     assert built["ActorResolver"]["agents_file"] is None
     assert built["ActorResolver"]["priorities_file"] is None
 

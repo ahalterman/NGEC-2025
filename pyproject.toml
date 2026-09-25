@@ -108,6 +108,18 @@ vllm = [
     'torchaudio',
 ]
 
+# llama.cpp backend, run in-process: the recommended backend on a CPU. It runs
+# the attribute model's 8-bit GGUF file, which AttributeModel downloads from
+# Hugging Face the first time. PyPI has only the source of llama-cpp-python, so
+# pip compiles llama.cpp unless pointed at the project's ready-built CPU wheels:
+#   pip install "ngec[llamacpp]" --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+# uv goes there on its own ([tool.uv.sources] below). 0.3.35 is the release
+# tested with the Qwen3.5 GGUF (architecture "qwen35"); older releases bundle a
+# llama.cpp that may predate it, and 0.4 may change the API.
+llamacpp = [
+    'llama-cpp-python>=0.3.35,<0.4',
+]
+
 # MLX backend (macOS only)
 mlx = [
     'mlx>=0.1.0; sys_platform == "darwin"',
@@ -171,6 +183,13 @@ name = "pytorch-cu13"
 url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
+# Ready-built CPU wheels of llama-cpp-python (PyPI has only the source), for
+# Linux x86-64 and ARM, Windows, and Apple Silicon Macs.
+[[tool.uv.index]]
+name = "llama-cpp-python-cpu"
+url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
+explicit = true
+
 [tool.uv.sources]
 # Send torch (and the two companion packages vllm pulls in) to whichever index
 # matches the extra that was selected. cu129 covers every 12.x driver: CUDA's
@@ -188,6 +207,7 @@ torchvision = [
 torchaudio = [
     { index = "pytorch-cu12", extra = "vllm" },
 ]
+llama-cpp-python = { index = "llama-cpp-python-cpu" }
 # Pinned to a specific commit, not to the default branch. mordecai3 is installed
 # from git and its Geoparser signature has changed under us before (which breaks
 # ngec/geolocation.py); since uv.lock is not committed, this rev is the only

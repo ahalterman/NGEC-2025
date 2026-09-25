@@ -1,11 +1,11 @@
 """
 Test the differnet possible backend and GPU configurations for AttributeModel.
 
-| Platform | GPU possible | transformers | vLLM | mlx | 
-|----------|--------------|--------------|------|-----|
-| Linux    |            x |            x |    x |     |
-| MacOS    |              |            x |      |   x |
-| Windows  |            x |            x |    x |     |
+| Platform | GPU possible | transformers | vLLM | mlx | llamacpp |
+|----------|--------------|--------------|------|-----|----------|
+| Linux    |            x |            x |    x |     |        x |
+| MacOS    |              |            x |      |   x |        x |
+| Windows  |            x |            x |    x |     |        x |
 
 """
 
@@ -105,17 +105,58 @@ def test_vllm_cpu(sample_attribute_model_input):
     assert output is not None
 
 
-def test_llamacpp(sample_attribute_model_input):
+def test_llamacpp_server(sample_attribute_model_input):
+    import os
     from ngec.attribute_model import AttributeModel
 
     if not llamacpp_server_available():
         pytest.skip("No llama-server reachable; set NGEC_LLAMACPP_URL or start one "
                     "(see DEVELOPING.md).")
 
-    am = AttributeModel(silent=True, gpu=False, backend="llamacpp")
+    # The URL is passed explicitly: without one, the llamacpp backend runs the
+    # model in this process instead (test_llamacpp_in_process).
+    url = os.environ.get("NGEC_LLAMACPP_URL", "http://127.0.0.1:8080")
+    am = AttributeModel(silent=True, gpu=False, backend="llamacpp", llamacpp_url=url)
     output = am.process(sample_attribute_model_input)
 
     assert len(output) == 1
     attributes = output[0]["attributes"]
     assert attributes["event_type"]
     assert isinstance(attributes["actor"], list)
+
+
+def published_gguf_is_downloaded():
+    """Whether the default model's GGUF file is already in the Hugging Face cache."""
+    from huggingface_hub import try_to_load_from_cache
+    from ngec.attribute_model import DEFAULT_MODEL
+    from ngec.llm.llamacpp import KNOWN_GGUF_FILES
+
+    repo_id, filename = KNOWN_GGUF_FILES[DEFAULT_MODEL]
+    return isinstance(try_to_load_from_cache(repo_id, filename), str)
+
+
+def test_llamacpp_in_process(sample_attribute_model_input, monkeypatch):
+    """The real GGUF, run in this process. Opt-in in the sense that it only runs
+    where llama-cpp-python is installed and the GGUF is already downloaded
+    (`ngec download-models --gguf`); it never downloads the 834 MB file itself."""
+    from ngec.attribute_model import AttributeModel
+    from ngec.llm.llamacpp import LlamaCppLocalEngine
+
+    if not has_package("llama_cpp"):
+        pytest.skip("llama-cpp-python not installed (the llamacpp extra).")
+    if not published_gguf_is_downloaded():
+        pytest.skip("GGUF not downloaded; run `ngec download-models --gguf`.")
+    monkeypatch.delenv("NGEC_LLAMACPP_URL", raising=False)
+    monkeypatch.delenv("NGEC_ATTRIBUTE_GGUF", raising=False)
+    monkeypatch.delenv("NGEC_ATTRIBUTE_MODEL", raising=False)
+
+    am = AttributeModel(silent=True, backend="llamacpp")
+    assert isinstance(am.engine, LlamaCppLocalEngine)
+    output = am.process(sample_attribute_model_input)
+    am.engine.close()
+
+    assert len(output) == 1
+    attributes = output[0]["attributes"]
+    assert attributes["event_type"] == "PROTEST"
+    assert any("Hindu nationalists" in actor for actor in attributes["actor"])
+    assert any("Dehli" in place for place in attributes["location"])

@@ -8,6 +8,8 @@ import json, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "..", ".."))
 
+import os
+
 from ngec.attribute_model import AttributeModel
 
 DOCS = [
@@ -20,7 +22,10 @@ DOCS = [
 TYPES = ["PROTEST", "ASSAULT", "COERCE", "ACCUSE", "REQUEST",
          "AGREE", "CONSULT", "THREATEN", "REJECT"]
 
-am = AttributeModel(silent=True, backend="llamacpp")
+# Point at the running llama-server: with no URL, the llamacpp backend now
+# loads the model in-process, which this script only needs for its prompts.
+am = AttributeModel(silent=True, backend="llamacpp",
+                    llamacpp_url=os.environ.get("NGEC_LLAMACPP_URL", "http://127.0.0.1:8080"))
 
 out = []
 for doc_i, (date, doc) in enumerate(DOCS):

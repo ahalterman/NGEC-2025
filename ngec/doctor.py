@@ -224,7 +224,9 @@ SETTINGS = [
             "ngec.actors", always_shown=False),
     Setting("NGEC_AGENT_ENCODER", "BAAI/bge-small-en-v1.5", "ngec.actors",
             always_shown=False),
-    Setting("NGEC_LLAMACPP_URL", "http://127.0.0.1:8080", "ngec.llm.llamacpp"),
+    Setting("NGEC_LLAMACPP_URL", "unset: the model runs in-process", "ngec.llm.llamacpp"),
+    Setting("NGEC_LLAMACPP_THREADS", "performance cores, at most 8", "ngec.llm.llamacpp"),
+    Setting("NGEC_ATTRIBUTE_GGUF", "the published GGUF", "ngec.llm.llamacpp"),
     Setting("ES_HOST", "localhost", "tests, demo, smoke test"),
     Setting("ES_PORT", "9200", "tests, demo, smoke test"),
     Setting("ES_USER", "", "tests, demo, smoke test", secret=True),
@@ -558,6 +560,25 @@ def _attribute_model_is_local(name: str) -> bool:
         return False
 
 
+def _gguf_missing(model: str) -> str | None:
+    """The GGUF file the llamacpp backend would need, if that is the backend
+    in use and the file is not cached; otherwise None."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        from .llm import choose_backend, llamacpp_server_url
+        from .llm.llamacpp import gguf_for_model
+    except ImportError:
+        return None
+    if (choose_backend() != "llamacpp" or llamacpp_server_url()
+            or os.environ.get("NGEC_ATTRIBUTE_GGUF")):
+        return None
+    known = gguf_for_model(model)
+    if known is None or isinstance(try_to_load_from_cache(*known), str):
+        return None
+    return f"{known[0]}/{known[1]}"
+
+
 def _last_line(text: str) -> str:
     lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
     return lines[-1] if lines else "no output"
@@ -596,6 +617,11 @@ def smoke() -> list[Check]:
             "Attribute model", FAIL, f"{model} is not downloaded",
             "attribute extraction, and so the pipeline as a whole",
             "ngec download-models"))
+    gguf_missing = _gguf_missing(model)
+    if gguf_missing:
+        checks.append(Check(
+            "Attribute model GGUF", FAIL, f"{gguf_missing} is not downloaded",
+            "attribute extraction with the llamacpp backend", "ngec download-models --gguf"))
 
     # One row rather than the whole Elasticsearch group, which a plain
     # `--smoke` run also shows; the first failure is enough to act on.
