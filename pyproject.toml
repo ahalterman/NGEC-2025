@@ -29,8 +29,8 @@ dependencies = [
     'pandas>=2.2.0,<3.0',
     # Not imported by NGEC itself. transformers 5.17 fails on import when Pillow
     # is missing (NameError: PILImageResampling), and loading the event
-    # classifiers with skops imports it. Development installs get Pillow through
-    # torchvision, so only a fresh install shows the error.
+    # classifiers with skops imports it. torchvision brings Pillow in too, but
+    # this says so directly.
     'pillow>=10.0',
     'platformdirs>=4.0.0,<5.0',
     'pylcs>=0.1.1,<1.0',
@@ -44,6 +44,14 @@ dependencies = [
     'tqdm>=4.60.0,<5.0',
     'textacy>=0.13.0,<1.0',
     'torch>=2.6.0,<3.0',
+    # Not imported by NGEC itself, and needed for the same reason as Pillow.
+    # Importing skops.io (to load the event classifiers) looks up scipy's ufuncs
+    # by name in every loaded module; if transformers 5 is already loaded, that
+    # lookup makes it import image processors that need torchvision, and
+    # without it the classifiers fail to load with
+    # "ModuleNotFoundError: No module named 'torchvision'". It is compiled
+    # against torch, so [tool.uv.sources] sends it to the same index.
+    'torchvision',
     # 5.x is needed for the Qwen3.5 architecture of the default attribute model
     # (ahalt/qwen3.5-event-extraction-0.8b) on the transformers backend.
     # vLLM 0.19.1 excludes 5.0 through 5.5.0, hence the floor.
@@ -75,12 +83,15 @@ ngec-doctor = "ngec.doctor:main"
 # [tool.uv.sources] below, so these extras only do their job under uv.
 cpu = [
     'torch>=2.6.0,<3.0',
+    'torchvision',
 ]
 cu12 = [
     'torch>=2.6.0,<3.0',
+    'torchvision',
 ]
 cu13 = [
     'torch>=2.6.0,<3.0',
+    'torchvision',
 ]
 
 # The two spaCy models the pipeline needs are deliberately not an extra; they are
@@ -196,7 +207,7 @@ url = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 explicit = true
 
 [tool.uv.sources]
-# Send torch (and the two companion packages vllm pulls in) to whichever index
+# Send torch (and torchvision, and torchaudio for vllm) to whichever index
 # matches the extra that was selected. cu129 covers every 12.x driver: CUDA's
 # minor version compatibility means a 12.9 build runs on any driver from 525 on.
 torch = [
@@ -204,9 +215,12 @@ torch = [
     { index = "pytorch-cu12", extra = "cu12" },
     { index = "pytorch-cu13", extra = "cu13" },
 ]
-# torchvision and torchaudio only come in with vllm, which is CUDA 12 only, so
-# they have a single destination rather than one per extra.
+# torchvision is compiled against torch, so it follows torch. vllm is CUDA 12
+# only, so it sends torchvision (and torchaudio below) to cu12.
 torchvision = [
+    { index = "pytorch-cpu", extra = "cpu" },
+    { index = "pytorch-cu12", extra = "cu12" },
+    { index = "pytorch-cu13", extra = "cu13" },
     { index = "pytorch-cu12", extra = "vllm" },
 ]
 torchaudio = [
