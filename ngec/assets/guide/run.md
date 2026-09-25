@@ -60,31 +60,39 @@ from ngec.es_client import es_client_from_env
 from ngec.logging import quiet_third_party_loggers
 from ngec.plover_coder import PloverCoder
 
-quiet_third_party_loggers()
+def main():
+    quiet_third_party_loggers()
 
-es_client = es_client_from_env()   # reads ES_HOST etc. from .env, else localhost:9200
+    es_client = es_client_from_env()   # reads ES_HOST etc. from .env, else localhost:9200
 
-# See `ngec guide setup` for choosing attribute_backend on this machine.
-coder = PloverCoder(es_client=es_client)
+    # See `ngec guide setup` for choosing attribute_backend on this machine.
+    coder = PloverCoder(es_client=es_client)
 
-# Code in batches and write each batch out as it finishes, so a crash
-# halfway through a long run does not lose the finished part.
-all_events = []
-batch_size = 500
-with open("events.jsonl", "w", encoding="utf-8") as f:
-    for start in range(0, len(story_list), batch_size):
-        events = coder.process(story_list[start:start + batch_size])
-        for event in events:
-            # default=str: resolved dates are datetime objects
-            f.write(json.dumps(event, default=str) + "\n")
-        all_events.extend(events)
-        done = min(start + batch_size, len(story_list))
-        print(f"{done} of {len(story_list)} stories done, {len(all_events)} events so far")
+    # Code in batches and write each batch out as it finishes, so a crash
+    # halfway through a long run does not lose the finished part.
+    all_events = []
+    batch_size = 500
+    with open("events.jsonl", "w", encoding="utf-8") as f:
+        for start in range(0, len(story_list), batch_size):
+            events = coder.process(story_list[start:start + batch_size])
+            for event in events:
+                # default=str: resolved dates are datetime objects
+                f.write(json.dumps(event, default=str) + "\n")
+            all_events.extend(events)
+            done = min(start + batch_size, len(story_list))
+            print(f"{done} of {len(story_list)} stories done, {len(all_events)} events so far")
 
-# One row per event.
-table = events_to_table(all_events)
-table.to_csv("events.csv", index=False)
-table.to_stata("events.dta", write_index=False)   # for Stata
+    # One row per event.
+    table = events_to_table(all_events)
+    table.to_csv("events.csv", index=False)
+    table.to_stata("events.dta", write_index=False)   # for Stata
+
+
+# The vllm backend starts a subprocess that re-imports this file. This line
+# keeps it from running the pipeline a second time, and the function lets the
+# models be freed so the script exits when it finishes.
+if __name__ == "__main__":
+    main()
 ```
 
 Load the models once (one `PloverCoder`) and reuse it for every batch; creating
