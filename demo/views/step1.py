@@ -86,11 +86,9 @@ if result:
     with st.expander("Timing breakdown"):
         timing_table(result["timing"])
 
-# TODO(andy): the training scripts these steps describe used to live in
-# `setup/train_classifiers/codebook_llm/`, which plover_sklearn.py's load warning,
-# features.py and CLAUDE.md all still point at but which is not in the repo. Either
-# restore that directory or fix those pointers; until then this text gives the
-# recipe rather than sending a reader to a path that does not exist.
+# The training scripts behind these steps are in
+# setup/train_classifiers/codebook_llm/ (committed 2026-09-24), so this text could
+# now point readers there instead of giving the recipe inline.
 with st.expander("Customizing event classification"):
     st.markdown("""*Or, use conflibert*,
 
