@@ -37,8 +37,18 @@ def write_intermediate(records, step_name, intermediate_dir=None):
     return path
 
 
-def load_nlp():
+def load_nlp(use_gpu=True):
+    """en_core_web_trf with the "token_tensors" pipe that mordecai3 needs.
+
+    With use_gpu (the default) spaCy runs on the GPU when one is usable and on
+    the CPU otherwise; the transformer is the slowest part of geoparsing, so
+    this matters. It must be decided before the model loads.
+    """
     spacy_doc_setup()
+    if use_gpu:
+        import spacy
+        if spacy.prefer_gpu():
+            logger.info("spaCy: running en_core_web_trf on the GPU")
     nlp = load_spacy("en_core_web_trf")
     nlp.add_pipe("token_tensors")
     return nlp
