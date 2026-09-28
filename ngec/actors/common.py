@@ -42,6 +42,9 @@ WIKI_ENCODERS = {
     # minimum ranker probability for the top candidate to be accepted, swept
     # per encoder on the gold document split and the institution probes
     # (train_wiki_model/06_threshold_sweep.py); it is encoder-specific.
+    # "ranker_asset_no_context" / "ranker_threshold_no_context" are the same
+    # for mentions that arrive without a story (see WikiMatcher._call_ranker).
+    # An encoder without them uses its context ranker there too.
     "jinaai/jina-embeddings-v3": {
         "load_kwargs": {"trust_remote_code": True,
                         "model_kwargs": {"use_flash_attn": False}},
@@ -60,6 +63,12 @@ WIKI_ENCODERS = {
         "query_prefix": "",
         "ranker_asset": "xgb_model_static-mrl.json",
         "ranker_threshold": 0.3,   # 86.0% vs 84.4% gold top-1 at 0.1, -3 institution probes
+        # Fit on rows generated with the story withheld and mentions split by
+        # the v3 splitter (train_NGEC_2026, output_2026-09-24_v3): 78.7% top-1
+        # on the held-out gold documents, against 72.6% for the context ranker
+        # above used without context.
+        "ranker_asset_no_context": "xgb_model_static-mrl_nocontext.json",
+        "ranker_threshold_no_context": 0.1,
     },
 }
 DEFAULT_ENCODER = "sentence-transformers/static-retrieval-mrl-en-v1"
@@ -483,8 +492,10 @@ class CountryDetector:
             if match:
                 # Remove the matched country/nationality from text
                 trimmed_text = re.sub(pattern, "", text).strip()
+                # The possessive is left behind wherever the country was:
                 # "Mexico's Zapatista rebel group" -> "'s Zapatista rebel group"
-                trimmed_text = re.sub(r"^'s\b", "", trimmed_text).strip()
+                # "southern Mexico's Zapatista rebel group" -> "southern 's Zapatista rebel group"
+                trimmed_text = re.sub(r"(^|\s)'s\b", " ", trimmed_text).strip()
                 trimmed_text = re.sub(r" +", " ", trimmed_text).strip()
                 found.append((country, trimmed_text.strip(), match))
         

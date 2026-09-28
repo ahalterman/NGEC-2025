@@ -1,22 +1,45 @@
 from collections import Counter
 from copy import deepcopy
+from datetime import date, datetime
 from importlib import resources
 import logging
+import os
 import re
-import time
 
 import dateparser
 from elasticsearch import Elasticsearch
 import jsonlines
 from rich.progress import track
 
-from .common import ModelManager, clean_query, CountryDetector, strip_ents
+from .common import ModelManager, clean_query, CountryDetector
 from .agent_matcher import AgentMatcher
+from ..formatter import _is_missing, country_name_dict
+from ..utilities import write_intermediate
 from .wiki_matcher import WikiMatcher
 
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+
+# ISO-3 code -> country name, for converting a `known_country` code. "IGO" is
+# in countries.csv's lookup as a pseudo-country; it is not one here.
+COUNTRY_NAMES = {code: name for code, name in country_name_dict().items()
+                 if code and code != "IGO"}
+
+# For recognizing US House seats in Wikipedia infoboxes (see _parse_congress_seats).
+US_STATES = {
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado",
+    "Connecticut", "Delaware", "Florida", "Georgia", "Hawaii", "Idaho",
+    "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", "Louisiana", "Maine",
+    "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+    "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey",
+    "New Mexico", "New York", "North Carolina", "North Dakota", "Ohio",
+    "Oklahoma", "Oregon", "Pennsylvania", "Rhode Island", "South Carolina",
+    "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", "Virginia",
+    "Washington", "West Virginia", "Wisconsin", "Wyoming",
+    "District of Columbia", "Puerto Rico", "Guam", "American Samoa",
+    "U.S. Virgin Islands", "Northern Mariana Islands",
+}
 
 
 
@@ -301,6 +324,256 @@ def core_query_is_degenerate(core_query, span):
 
 
 #######################################################
+# Splitting a mention into country, description, and core entity
+#######################################################
+
+def country_from_context(country_detector, text, context, window=200):
+    """
+    Return the country *name* mentioned nearest to `text` in `context`.
+
+    Looks at `window` characters on either side of the first occurrence
+    of the mention (or the first 2*window characters if the mention is not
+    found verbatim), mirroring how the wiki ranker's training data was
+    built. Returns "" if no country or nationality is mentioned.
+    """
+    mention = re.sub(r"\s+", " ", text).strip()
+    pos = context.find(mention)
+    if pos >= 0:
+        passage = context[max(0, pos - window): pos + len(mention) + window]
+    else:
+        passage = context[: 2 * window]
+    country, _ = country_detector.search_nat(passage, use_name=True)
+    return country or ""
+
+
+# Which mention splitter the pipeline uses. "v1" is the original
+# (`_split_mention_v1` below): strip the nationality, then take the longest
+# PERSON (else ORG) entity spaCy finds as the thing to search Wikipedia for.
+# "v3" is the rewrite in `mention_split_v3.py`, which decides where to cut with
+# the PLOVER agents file, the wiki index and capitalisation instead of a list
+# of role words. Flip this one line to switch the whole pipeline; individual
+# callers can override it with `splitter="v1"` / `splitter="v3"`.
+# v3 became the default on 2026-09-24. It needs a wiki index built from
+# 2026-09 on (it reads the `.keyword` sub-fields) and warns if it gets an
+# older one.
+SPLITTER = "v3"
+
+# The v3 splitter embeds every agent pattern when it is built, so it is built
+# once and kept: one per agents file and Elasticsearch connection, so that a
+# resolver with a custom agents file, or pointed at a different index, gets a
+# splitter that uses the same ones.
+_V3_SPLITTERS = {}
+
+
+def _v3_splitter(nlp, country_detector, es_client=None, agents_file=None):
+    """The v3 splitter for this agents file and Elasticsearch client, built on first use.
+
+    With no client, the wiki index it consults is the one NGEC_WIKI_URL names,
+    defaulting to the local node. With no agents file, it uses the packaged
+    PLOVER_agents.txt.
+    """
+    if agents_file is None:
+        agents_file = resources.files("ngec") / "assets" / "PLOVER_agents.txt"
+    key = (str(agents_file), id(es_client))
+    if key not in _V3_SPLITTERS:
+        from .mention_split_v3 import SplitterV3
+        _V3_SPLITTERS[key] = SplitterV3(
+            country_detector,
+            str(agents_file),
+            es_url=os.environ.get("NGEC_WIKI_URL", "http://localhost:9200/wiki"),
+            nlp=nlp,
+            es_client=es_client)
+    return _V3_SPLITTERS[key]
+
+
+def split_mention(text, nlp, country_detector, context="", known_country="",
+                  splitter=None, doc=None, es_client=None, agents_file=None):
+    """
+    Take an actor mention apart into country, description, and core entity.
+
+    A thin dispatcher over the implementations; see `SPLITTER` above and
+    `_split_mention_v1` below for the contract all of them honour.
+
+    Args:
+        splitter: "v1" or "v3". None uses the module-level `SPLITTER`.
+        doc: a parsed spaCy document of the story, if the caller has one.
+            Neither splitter reads it today; it is accepted because
+            `actor_to_code` has one to offer and a splitter that reads entities
+            off by offset would want it.
+        es_client, agents_file: v3 only. The Elasticsearch client whose wiki
+            index it looks names up in, and the agents file it reads role
+            words from; `ActorResolver` passes its own, so the split uses the
+            same index and agents as the rest of resolution.
+    """
+    if (splitter or SPLITTER) == "v3":
+        split = _v3_splitter(nlp, country_detector, es_client=es_client,
+                             agents_file=agents_file).split(
+            text, context=context, known_country=known_country)
+        # v3 decides the cut without spaCy, but the gate in `actor_to_code`
+        # ("is this a generic collective? an unlinkable reference?") reads
+        # the parsed span, and without it every mention would go to
+        # Wikipedia -- "protesters" included.
+        split["doc"], split["ents"], _ = parse_span(split["trimmed_text"], nlp)
+        return split
+    return _split_mention_v1(text, nlp, country_detector, context=context,
+                             known_country=known_country)
+
+
+def parse_span(trimmed_text, nlp):
+    """
+    Parse a mention (after nationality stripping) with spaCy.
+
+    Returns (doc, ents, ent_text): the parsed span, its named entities, and
+    their text joined. `actor_to_code`'s gate reads all three to decide
+    whether the span names anyone in particular ("the police" does not), so
+    every splitter has to supply them. `doc` is None when the span is empty
+    or spaCy fails on it.
+    """
+    doc, ents, ent_text = None, [], ""
+    if trimmed_text:
+        try:
+            doc = nlp(trimmed_text)
+            ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
+            ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ != ""])
+            logger.debug(f"Found named entities: {ents}")
+        except IndexError:
+            # Usually caused by a mismatch between token and embedding
+            logger.info(f"Token alignment error on {trimmed_text}")
+            doc = None
+    return doc, ents, ent_text
+
+
+def _split_mention_v1(text, nlp, country_detector, context="", known_country=""):
+    """
+    Take an actor mention apart into the pieces the resolver searches with.
+
+    A mention as the attribute model returns it is rarely the name of a
+    Wikipedia article. "former US Secretary of State Colin Powell" is a
+    country, a job description, and a person, and only the person is the
+    article title. This function separates the three so that the search is
+    for the person, the country narrows the candidates, and the description
+    is scored against each candidate's introduction:
+
+        text        former US Secretary of State Colin Powell
+        country     USA        (found in the span; removed from it)
+        trimmed     former Secretary of State Colin Powell
+        core_query  Colin Powell                 (longest PERSON, else ORG, by NER)
+        actor_desc  former Secretary of State    (what was left around the core)
+
+    The country the search should be narrowed to (`country_name`, a name like
+    "United States" rather than a code) comes from `known_country` when the
+    caller has one, else from the passage around the mention in `context`,
+    else from the span itself. The context is preferred over the span because
+    the span's country is sometimes the actor's target rather than its home
+    ("the US ambassador to China").
+
+    NER is not trusted blindly. If the core it proposes is a worse search term
+    than the span it came from -- "House" out of "House Judiciary" -- the
+    whole trimmed span is kept as the core and the description is left empty
+    (see `core_query_is_degenerate`).
+
+    Args:
+        text: the actor mention
+        nlp: a loaded spaCy pipeline, used for NER on the trimmed span
+        country_detector: a `CountryDetector`
+        context: the sentence or passage the mention came from, if any
+        known_country: country name to use, if the caller already knows it
+
+    Returns:
+        dict with keys
+        - `country`: ISO-3 code of a country or nationality named in the
+          span, else None
+        - `country_name`: country name for the Wikipedia search, else ""
+        - `trimmed_text`: the span with the country removed
+        - `core_query`: the part of the span to search Wikipedia for
+        - `actor_desc`: the rest of the trimmed span, "" when nothing was split off
+        - `ner_extracted_specific`: True when NER cut the span down to a
+          multi-word entity, in which case the searcher should not expand the
+          query again from the context
+        - `alt_query_terms`: the other surface forms of the mention (the raw
+          span and the trimmed span), for a second search
+        - `ents`, `ent_text`, `doc`: the spaCy entities found in the trimmed
+          span, their text joined, and the parsed span itself. `doc` is None
+          when the span was empty after trimming or spaCy failed on it.
+    """
+    country, trimmed_text = country_detector.search_nat(text)
+    logger.debug(f"Identified country from text: {country}")
+
+    # Parse what is left. A country-only span ("Israeli", "the U.N.") leaves
+    # nothing to parse.
+    doc, ents, ent_text = parse_span(trimmed_text, nlp)
+
+    # The country to narrow the Wikipedia search to, as a name.
+    country_name = known_country or ""
+    if not country_name and context:
+        country_name = country_from_context(country_detector, text, context)
+        logger.debug(f"Country detected from context: {country_name!r}")
+    if not country_name and country:
+        country_name = country_detector.search_nat(text, use_name=True)[0] or ""
+
+    # Extract core entity and role from the span using NER
+    # This handles noisy spans like "Republican Senator Pat Roberts of Kansas"
+    # --> core_query="Pat Roberts", actor_desc="Republican Senator"
+    # Prefer PERSON over ORG (most queries are people)
+    # Use the longest match (NOT the first match as before: this caused problems).
+    core_query = trimmed_text
+    actor_desc = ""
+    if ents:
+        persons = [e for e in ents if e.label_ == 'PERSON']
+        orgs = [e for e in ents if e.label_ == 'ORG']
+        best_ent = None
+        for candidates in [persons, orgs]:
+            if candidates:
+                best_ent = max(candidates, key=lambda e: len(e.text))
+                break
+        if best_ent:
+            core_query = best_ent.text
+            before = trimmed_text[:best_ent.start_char].strip().strip(',').strip()
+            after = trimmed_text[best_ent.end_char:].strip().strip(',').strip()
+            desc_parts = [p for p in [before, after] if p]
+            actor_desc = ' '.join(desc_parts)
+    # Guard against NER handing back a core entity that is a worse query
+    # than the span it came from ("House Judiciary" -> "House").
+    if core_query != trimmed_text and core_query_is_degenerate(core_query, trimmed_text):
+        logger.debug(f"Core entity '{core_query}' is degenerate; searching on '{trimmed_text}' instead")
+        core_query = trimmed_text
+        actor_desc = ""
+    if core_query != trimmed_text:
+        logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
+
+    # Skip query expansion when NER already extracted a specific multi-word entity.
+    # Sometimes they also should be expanded, but can also replace the correct name with something worse.
+    # Just do allow expansion for single-word entities (e.g. okay to expand "Robertson", but will also expand "Hamas").
+    ner_extracted_specific = (core_query != trimmed_text and len(core_query.split()) >= 2)
+
+    # The other surface forms of this same mention: the raw span, and the
+    # span after nationality stripping but before NER cut it down. The
+    # matcher searches the first one that differs from the main term and
+    # merges the two candidate lists, because the form the article is
+    # titled under is often not the one the pipeline settled on.
+    raw_span = re.sub(r"['’]s\s*$", "", text).strip()
+    alt_query_terms = []
+    for term in [raw_span, trimmed_text, core_query]:
+        if term and term != core_query and term not in alt_query_terms:
+            alt_query_terms.append(term)
+
+    return {
+        "text": text,
+        "country": country,
+        "country_name": country_name,
+        "trimmed_text": trimmed_text,
+        "core_query": core_query,
+        "actor_desc": actor_desc,
+        "ner_extracted_specific": ner_extracted_specific,
+        "alt_query_terms": alt_query_terms,
+        "ents": ents,
+        "ent_text": ent_text,
+        "doc": doc,
+    }
+
+
+
+#######################################################
 # Cache Management
 #######################################################
 
@@ -524,8 +797,50 @@ class WikiParser:
                 offices.append(office)
             except KeyError:
                 continue
-                
+
+        offices.extend(self._parse_congress_seats(infobox, offices))
         return offices
+
+    def _parse_congress_seats(self, infobox, offices):
+        """
+        Seats in the US Congress, which the officeholder infobox records
+        without an `office` field.
+
+        A senator's seat is `jr/sr{n}` ("United States Senator") next to
+        `state{n}`; a representative's is `state{n}` next to `district{n}`
+        (or `constituency{n}`).
+        Without this, a sitting member of Congress got no office at all, and
+        their code fell back to the article's short description ("American
+        politician and activist" -> civilian opposition).
+
+        A House seat is only recognized when the state is a US state or
+        territory, since infoboxes for other countries also use `state` and
+        `district`.
+        """
+        already_numbered = {office["office_num"] for office in offices}
+        seats = []
+        for key in infobox:
+            match = re.fullmatch(r"state(\d*)", key)
+            if not match or match.group(1) in already_numbered:
+                continue
+            num = match.group(1)
+            state = str(infobox[key]).strip()
+            senate = str(infobox.get(f"jr/sr{num}", "")).strip()
+            if senate:
+                seat = f"{senate} from {state}" if state else senate
+            elif state in US_STATES and (f"district{num}" in infobox
+                                         or f"constituency{num}" in infobox):
+                district = str(infobox.get(f"district{num}")
+                               or infobox.get(f"constituency{num}") or "").strip()
+                seat = "Member of the U.S. House of Representatives from " + state
+                if district:
+                    seat += f"'s {district} district"
+            else:
+                continue
+            term_start, term_end = self._parse_office_term_dates(infobox, key, num)
+            seats.append({"office": seat, "office_num": num,
+                          "term_start": term_start, "term_end": term_end})
+        return seats
 
     def get_current_office(self, offices, query_date):
         """
@@ -538,9 +853,13 @@ class WikiParser:
         Returns:
             tuple: (active_offices, detected_countries)
         """
-        # Parse query date if it's a string
+        # Parse query date if it's a string. A plain date (no time) has to
+        # become a datetime: comparing the two raises a TypeError, which the
+        # loop below catches, so no office would ever count as current.
         if isinstance(query_date, str):
             query_date = dateparser.parse(query_date)
+        elif isinstance(query_date, date) and not isinstance(query_date, datetime):
+            query_date = datetime(query_date.year, query_date.month, query_date.day)
             
         active_offices = []
         detected_countries = []
@@ -1207,13 +1526,16 @@ class ActorResolver:
                 agents_file: None | str = None,
                 priorities_file: None | str = None,
                 override_sources: None | list | tuple = None,
+                device: None | str = None,
+                intermediate_dir: None | str = None,
                 ):
         """
         Initialize the ActorResolver with the necessary models and data.
         
         Args:
             spacy_model: Pre-loaded spaCy model to use
-            save_intermediate: Whether to save intermediate results
+            save_intermediate: Write the output of process() to a timestamped
+                "*_actor_resolution_output.jsonl" file, for debugging.
             wiki_sort_method: Method to use for sorting Wikipedia results
             gpu: Whether to use GPU for model inference
             agents_file: Path to a custom PLOVER/CAMEO-format agents file. The
@@ -1233,12 +1555,22 @@ class ActorResolver:
                 None keeps the historical behaviour, in which a Wikipedia short
                 description beats the span-text match whenever the two
                 disagree. Pass `[]` to let priorities_file arbitrate instead.
+            device: Explicit torch device ('cpu' or 'cuda') for the sentence
+                encoders. Overrides `gpu`. The default None keeps the old
+                behaviour ('cuda' when gpu=True, otherwise
+                sentence-transformers' own choice, which is CUDA when a card is
+                visible). Pass 'cpu' to hold the encoders on the CPU on a
+                machine that has a GPU -- gpu=False alone does not do that.
+            intermediate_dir: The directory the save_intermediate file goes in.
+                The default None uses the current working directory.
         """
         # TODO: #26, make it possible to override models
         # This impacts all the other related classes here
 
-        # Set device for model inference
-        self.device = 'cuda' if gpu else None
+        # Set device for model inference. `device` wins when given, so a
+        # caller can pin the encoders to the CPU; `gpu` alone only ever asks
+        # for CUDA and leaves the choice to sentence-transformers otherwise.
+        self.device = device if device is not None else ('cuda' if gpu else None)
         
         # Initialize utility classes
         self.cache_manager = CacheManager()
@@ -1263,6 +1595,10 @@ class ActorResolver:
             wiki_sort_method=wiki_sort_method,
             device=self.device, 
         )
+        # Kept for the v3 mention splitter, which looks names up in the same
+        # index and reads role words from the same agents file.
+        self.es_client = es_client
+        self.agents_file = agents_file
         self.wiki_parser = WikiParser(
             self.country_detector,
             self.agent_matcher,
@@ -1275,25 +1611,26 @@ class ActorResolver:
         
         # Store configuration
         self.save_intermediate = save_intermediate
+        self.intermediate_dir = intermediate_dir
         self.wiki_sort_method = wiki_sort_method
 
     def _country_from_context(self, text, context, window=200):
-        """
-        Return the country *name* mentioned nearest to `text` in `context`.
+        """The country *name* mentioned nearest to `text` in `context`; see `country_from_context`."""
+        return country_from_context(self.country_detector, text, context, window)
 
-        Looks at `window` characters on either side of the first occurrence
-        of the mention (or the first 2*window characters if the mention is not
-        found verbatim), mirroring how the wiki ranker's training data was
-        built. Returns "" if no country or nationality is mentioned.
+    def split_mention(self, text, context="", known_country="", splitter=None):
         """
-        mention = re.sub(r"\s+", " ", text).strip()
-        pos = context.find(mention)
-        if pos >= 0:
-            passage = context[max(0, pos - window): pos + len(mention) + window]
-        else:
-            passage = context[: 2 * window]
-        country, _ = self.country_detector.search_nat(passage, use_name=True)
-        return country or ""
+        Take a mention apart into country, description, and core entity.
+
+        See the module-level `split_mention` for what the pieces are. This is
+        the first thing `actor_to_code` does with a mention, and it is exposed
+        so that a caller (the demo, a test) can show or check the split on
+        its own, using exactly the code the pipeline runs.
+        """
+        return split_mention(text, self.nlp, self.country_detector,
+                             context=context, known_country=known_country,
+                             splitter=splitter, es_client=self.es_client,
+                             agents_file=self.agents_file)
 
     def actor_to_code(self, text, doc=None, context="", query_date="today", known_country="", search_limit_term="") -> dict | None:
         """
@@ -1306,12 +1643,22 @@ class ActorResolver:
                 this function needs.
             context: Additional context to help with disambiguation
             query_date: Date to use when determining current offices
-            known_country: Country code if already known
+            known_country: The actor's country, if the caller already knows it,
+                used to narrow the Wikipedia search. A country name ("Germany")
+                or an ISO-3 code ("DEU"); a code is converted to the name the
+                search expects.
             search_limit_term: Term to limit Wikipedia search results
             
         Returns:
             dict or None: Actor code information or None if resolution fails
         """
+        # The splitters and the Wikipedia search expect a country name. Accept
+        # an ISO-3 code too, since that is what most datasets carry; before
+        # this, a code was passed through as a "name" and silently narrowed
+        # the search to nothing useful.
+        if known_country and known_country.upper() in COUNTRY_NAMES:
+            known_country = COUNTRY_NAMES[known_country.upper()]
+
         # Check cache first. The key includes the context and country because
         # the same mention ("the Liberal Party") resolves differently in
         # different documents; keying on the mention alone would return the
@@ -1323,16 +1670,27 @@ class ActorResolver:
             logger.debug("Returning from cache")
             return cached_result
         
-        # NB: `doc` is not used. The span has to be re-parsed below anyway,
+        # NB: `doc` is not used. The span is parsed inside `split_mention`,
         # after nationality stripping changes it, so parsing `text` here was
         # a spaCy call per mention whose result was thrown away. The argument
         # is kept because it is part of the public signature.
 
-        # TODO: replace this with the new entity splitter
+        # Take the mention apart: the country named in it, the part to search
+        # Wikipedia for, and the description around that part. Everything
+        # below works from these pieces.
+        split = split_mention(text, self.nlp, self.country_detector,
+                              context=context, known_country=known_country,
+                              doc=doc, es_client=self.es_client,
+                              agents_file=self.agents_file)
+        country = split["country"]
+        trimmed_text = split["trimmed_text"]
+        known_country = split["country_name"]
+        doc = split["doc"]
+        ents = split["ents"]
+        ent_text = split["ent_text"]
+        core_query = split["core_query"]
+        actor_desc = split["actor_desc"]
 
-        country, trimmed_text = self.country_detector.search_nat(text)
-        logger.debug(f"Identified country from text: {country}")
-        
         # Handle country-only case
         if country and not trimmed_text:
             logger.debug("Country only, returning as-is")
@@ -1354,8 +1712,6 @@ class ActorResolver:
             # code itself stays country-only.
             if span_looks_like_organisation(text):
                 logger.debug(f"Country-only span '{text}' looks like an organisation. Trying Wikipedia.")
-                if not known_country and context:
-                    known_country = self._country_from_context(text, context)
                 wiki = self.wiki_matcher.query_wiki(
                     query_term=text,
                     country=known_country,
@@ -1368,24 +1724,6 @@ class ActorResolver:
             self.cache_manager.set(cache_key, code_full_text)
             return self.code_selector.clean_best(code_full_text)
 
-        # Parse entities in text
-        # TODO: all of this probably goes away with the new entity splitter
-        try:
-            doc = self.nlp(trimmed_text)
-            non_ent_text = strip_ents(doc)
-            ents = [i for i in doc.ents if i.label_ in ['EVENT', 'FAC', 'GPE', 'LOC', 'NORP', 'ORG', 'PERSON']]
-            token_level_ents = [i.ent_type_ for i in doc]
-            ent_text = ''.join([i.text_with_ws for i in doc if i.ent_type_ != ""])
-            logger.debug(f"Found named entities: {ents}")
-        except IndexError:
-            # Usually caused by a mismatch between token and embedding
-            logger.info(f"Token alignment error on {trimmed_text}")
-            doc = None
-            non_ent_text = trimmed_text
-            token_level_ents = ['']
-            ent_text = ""
-            ents = []
-            
         # Try direct matching first
         code_full_text = None
         if trimmed_text:
@@ -1411,19 +1749,13 @@ class ActorResolver:
         # swallowed almost every institution mention in the corpus: 164 of 173
         # institution probes never reached the linker, because "the defence
         # ministry" is lowercase, multi-word, and a very good agent match.
-        # Detect the country from the passage around the mention when the
-        # caller did not supply one, falling back to a country named in the
-        # span itself ("Norway's central bank"). The wiki ranker's
-        # country_match feature and the "Title (Country)" retrieval variants
-        # need it, and the gate below only sends a generically named
-        # institution to the linker when there is a country to disambiguate
-        # with: "the defence ministry" with no context has no right answer.
-        if not known_country and context:
-            known_country = self._country_from_context(text, context)
-            logger.debug(f"Country detected from context: {known_country!r}")
-        if not known_country and country:
-            known_country = self.country_detector.search_nat(text, use_name=True)[0] or ""
-
+        # `known_country` (from the caller, else the passage around the
+        # mention, else the span itself -- see `split_mention`) matters here:
+        # the wiki ranker's country_match feature and the "Title (Country)"
+        # retrieval variants need it, and the gate below only sends a
+        # generically named institution to the linker when there is a
+        # country to disambiguate with: "the defence ministry" with no
+        # context has no right answer.
         skip_wiki_reason = ""
         if trimmed_text and doc is not None and span_is_generic_collective(doc):
             skip_wiki_reason = "generic collective"
@@ -1431,6 +1763,10 @@ class ActorResolver:
             skip_wiki_reason = "unlinkable reference"
         elif (code_full_text and doc is not None
                 and not ents
+                # a splitter that cut a name off a description ("Indian
+                # nationalist Prime Minister | Modi") has found someone in
+                # particular even when spaCy tags no entity
+                and not split["ner_extracted_specific"]
                 and not (span_names_an_institution(doc) and known_country)
                 and (code_full_text['conf'] > THRESHOLD_VERY_HIGH_CONFIDENCE
                      # With no context and no country there is nothing to
@@ -1460,61 +1796,19 @@ class ActorResolver:
             self.cache_manager.set(cache_key, skipped_code)
             return skipped_code
 
-        # Extract core entity and role from the span using NER
-        # This handles noisy spans like "Republican Senator Pat Roberts of Kansas"
-        # --> core_query="Pat Roberts", actor_desc="Republican Senator"
-        # Prefer PERSON over ORG (most queries are people)
-        # Use the longest match (NOT the first match as before: this caused problems).
-        core_query = trimmed_text
-        actor_desc = ""
-        if ents:
-            persons = [e for e in ents if e.label_ == 'PERSON']
-            orgs = [e for e in ents if e.label_ == 'ORG']
-            best_ent = None
-            for candidates in [persons, orgs]:
-                if candidates:
-                    best_ent = max(candidates, key=lambda e: len(e.text))
-                    break
-            if best_ent:
-                core_query = best_ent.text
-                before = trimmed_text[:best_ent.start_char].strip().strip(',').strip()
-                after = trimmed_text[best_ent.end_char:].strip().strip(',').strip()
-                desc_parts = [p for p in [before, after] if p]
-                actor_desc = ' '.join(desc_parts)
-        # Guard against NER handing back a core entity that is a worse query
-        # than the span it came from ("House Judiciary" -> "House").
-        if core_query != trimmed_text and core_query_is_degenerate(core_query, trimmed_text):
-            logger.debug(f"Core entity '{core_query}' is degenerate; searching on '{trimmed_text}' instead")
-            core_query = trimmed_text
-            actor_desc = ""
-        if core_query != trimmed_text:
-            logger.debug(f"Extracted core entity: '{core_query}' (desc: '{actor_desc}') from '{trimmed_text}'")
-
-        # Try Wikipedia lookup for better resolution
+        # Try Wikipedia lookup for the core entity, with the description and
+        # country from the split narrowing the ranking, and the other surface
+        # forms of the mention searched alongside.
         logger.debug(f"Trying Wikipedia lookup with: {core_query}")
         wiki_codes = []
-        # Skip _expand_query when NER already extracted a specific multi-word entity.
-        # Sometimes they also should be expanded, but can also replace the correct name with something worse.
-        # Just do allow expansion for single-word entities (e.g. okay to expand "Robertson", but will also expand "Hamas").
-        ner_extracted_specific = (core_query != trimmed_text and len(core_query.split()) >= 2)
-        # The other surface forms of this same mention: the raw span, and the
-        # span after nationality stripping but before NER cut it down. The
-        # matcher searches the first one that differs from the main term and
-        # merges the two candidate lists, because the form the article is
-        # titled under is often not the one the pipeline settled on.
-        raw_span = re.sub(r"['’]s\s*$", "", text).strip()
-        alt_query_terms = []
-        for term in [raw_span, trimmed_text, core_query]:
-            if term and term != core_query and term not in alt_query_terms:
-                alt_query_terms.append(term)
         wiki = self.wiki_matcher.query_wiki(
             query_term=core_query,
             country=known_country,
             context=context,
             actor_desc=actor_desc,
             limit_term=search_limit_term,
-            skip_expansion=ner_extracted_specific,
-            alt_query_terms=alt_query_terms,
+            skip_expansion=split["ner_extracted_specific"],
+            alt_query_terms=split["alt_query_terms"],
         )
 
         if wiki:
@@ -1531,8 +1825,9 @@ class ActorResolver:
             )
             if wiki:
                 wiki_codes = self.wiki_parser.wiki_to_code(wiki, query_date)
-        elif ent_text:
+        elif ent_text.strip() and ent_text.strip() != core_query:
             # Try again with just entity text if original lookup failed
+            # (unless the span *was* the entity text, which was just searched)
             logger.debug(f"No wiki results. Trying with entity text: {ent_text}")
             wiki = self.wiki_matcher.query_wiki(
                 query_term=ent_text,
@@ -1569,7 +1864,7 @@ class ActorResolver:
         self.cache_manager.set(cache_key, best)
         return best
 
-    def process(self, event_list, save_intermediate=False):
+    def process(self, event_list, save_intermediate=None):
         """
         Process a list of events to resolve actor attributes.
         
@@ -1577,7 +1872,8 @@ class ActorResolver:
         
         Args:
             event_list: List of event dictionaries
-            save_intermediate: Whether to save intermediate results
+            save_intermediate: Whether to save intermediate results. The default
+                None uses the value given when the resolver was created.
             
         Returns:
             list: The same event list with actor resolution information added
@@ -1601,8 +1897,14 @@ class ActorResolver:
 
         for event in track(event_list, description="Resolving actors..."):
 
-            # Get the date from the event
-            query_date = event.get('pub_date', "today")
+            # Get the date from the event. A missing publication date (None,
+            # NaN, or a string such as "nan" from a blank spreadsheet cell) is
+            # treated like an absent one, instead of being handed to
+            # dateparser, which reads "nan" as a date about a month before
+            # the day of the run.
+            query_date = event.get('pub_date')
+            if _is_missing(query_date):
+                query_date = "today"
 
             # 'attributes' is a single dict (one event per record). .get() guards
             # against a record with no attributes.
@@ -1678,10 +1980,10 @@ class ActorResolver:
 
 
         # Save intermediate results if requested
+        if save_intermediate is None:
+            save_intermediate = self.save_intermediate
         if save_intermediate:
-            fn = time.strftime("%Y_%m_%d-%H") + "_actor_resolution_output.jsonl"
-            with jsonlines.open(fn, "w") as f:
-                f.write_all(event_list)
+            write_intermediate(event_list, "actor_resolution_output", self.intermediate_dir)
                 
         return event_list
 
@@ -1698,7 +2000,7 @@ def main():
     """
     import argparse
 
-    from es_client import setup_es_client
+    from ngec.es_client import setup_es_client
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Resolve actors in events to PLOVER codes")
@@ -1744,46 +2046,3 @@ if __name__ == "__main__":
     )
     
     main()
-
-    exit(0)  # Exit cleanly after running main
-
-    ## Testing junk to remove later
-
-    from actor_resolution import (
-        ActorResolver,
-        AgentMatcher,
-        CountryDetector,
-        ModelManager,
-        WikiMatcher,
-        WikiParser,
-    )
-    from es_client import setup_es_client
-
-    es_client = setup_es_client()
-
-    event = {'event_text': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'id': '789_0', '_doc_position': 2, 'event_type': 'ASSAULT', 'event_mode': '', 'attributes': {'event_type': 'ASSAULT', 'anchor_quote': 'Turkish forces and Turkish-backed militias battled with YPG militants in Syria.', 'actor': ['Turkish forces', 'Turkish-backed militias'], 'recipient': ['YPG militants'], 'date': ['N/A'], 'location': ['Syria']}}
-    agent_matcher = AgentMatcher()
-    actor_match = agent_matcher.trf_agent_match("Chancellor", country="DEU")
-    #{'pattern': 'chancellor', 'code_1': 'GOV', 'code_2': '', 'country': 'DEU', 'description': 'chancellor', 'query': 'Chancellor', 'conf': np.float64(0.9557092082997871)}
-    
-    resolver = ActorResolver(es_client=es_client)
-    resolver.actor_to_code("German Chancellor")
-    resolver.actor_to_code("Angela Merkel")
-    resolver.actor_to_code("Angela Merkel",
-                           query_date="2015-01-01")
-    
-    # Now demonstrate the wiki lookup functionality
-    wiki = resolver.wiki_matcher.query_wiki("Merkel", context = "Angela Merkel is the Chancellor of Germany.")
-    
-    res = resolver.wiki_matcher.query_wiki("Obama", method="rules")
-    resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Michelle Obama is the former First Lady of the United States.",
-                                     method = "rules")
-    
-    resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Obama is the former First Lady of the United States.",
-                                     method = "rules")
-    
-    resolver.wiki_matcher.query_wiki("Obama",
-                                     context = "Obama is the former First Lady of the United States.",
-                                     method = "neural")

@@ -24,3 +24,22 @@ def test_geolocation_model_process(es_client_local):
 
     assert 'geolocated_ents' in story_list[0]
     assert len(story_list[0]['geolocated_ents']) > 0
+
+def test_geolocation_batch_matches_one_at_a_time(es_client_local):
+    """process() runs mordecai3's batched core; it must place every name the
+    same way as geoparse_doc on one document at a time."""
+    nlp = load_nlp()
+    geolocation_model = GeolocationModel(nlp=nlp, es_client=es_client_local, quiet=True)
+    texts = ["Protesters marched through central Nairobi on Tuesday, and police fired tear gas near Uhuru Park.",
+             "Gunmen attacked a checkpoint in the Mexican state of Guerrero, killing two soldiers outside Chilpancingo.",
+             "No places here at all."]
+    docs = list(nlp.pipe(texts))
+    one_at_a_time = [geolocation_model.geo.geoparse_doc(d)["geolocated_ents"] for d in docs]
+    batched = geolocation_model.process([{"event_text": t} for t in texts], docs)
+    from_texts = geolocation_model.process([{"event_text": t} for t in texts])
+
+    def key(ents):
+        return [(e["start_char"], e["end_char"], e.get("geonameid"), e.get("no_match")) for e in ents]
+
+    for a, b, c in zip(one_at_a_time, batched, from_texts):
+        assert key(a) == key(b["geolocated_ents"]) == key(c["geolocated_ents"])

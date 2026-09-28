@@ -1,4 +1,5 @@
 
+import os
 from dataclasses import asdict, dataclass
 from elasticsearch import Elasticsearch, TransportError
 from typing import Any
@@ -81,3 +82,33 @@ def es_is_available(es_config: ESConfig | dict) -> tuple[bool, str]:
         return False, f"Authentication/transport error: {str(e)}"
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
+
+
+def es_client_from_env(**kwargs):
+    """Connect to Elasticsearch using the settings in .env.
+
+    Reads ES_HOST, ES_PORT, ES_USER and ES_PASSWORD from a .env file in the
+    current directory (or a parent), or from the environment, falling back to
+    localhost:9200. It forces a real connection so that a dead
+    Elasticsearch fails here rather than halfway through the pipeline. Extra
+    keyword arguments go to the client, e.g. `timeout=5`.
+    """
+    try:
+        from dotenv import find_dotenv, load_dotenv
+        # usecwd: by default python-dotenv searches upwards from the file that
+        # calls it, which for an installed ngec is site-packages, not the
+        # directory the user is working in.
+        load_dotenv(find_dotenv(usecwd=True))
+    except ImportError:
+        pass
+
+    host = os.environ.get("ES_HOST", "localhost")
+    port = int(os.environ.get("ES_PORT", "9200"))
+    user = os.environ.get("ES_USER")
+    password = os.environ.get("ES_PASSWORD")
+    if user and password:
+        kwargs["http_auth"] = (user, password)
+
+    client = setup_es_client(hosts=[host], port=port, **kwargs)
+    client.info()
+    return client

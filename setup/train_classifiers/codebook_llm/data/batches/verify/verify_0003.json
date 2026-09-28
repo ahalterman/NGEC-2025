@@ -1,0 +1,209 @@
+[
+  {
+    "id": "usa_impeachment-inquiry_republicans-defend-trump-public-impeachment-hearings",
+    "label": 1,
+    "quote": "he is accusing Democrats of conducting a witch hunt, calling the entire impeachment inquiry a hoax",
+    "modes": [
+      "investigate",
+      "allege"
+    ]
+  },
+  {
+    "id": "africa_attorney-hopeful-icc-will-drop-charges-against-kenya-leader",
+    "label": 1,
+    "quote": "The ICC accuses the two leaders of playing a role in Kenya’s 2007-2008 post-election violence",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_impeachment-inquiry_what-happens-next-us-house-impeachment-inquiry",
+    "label": 1,
+    "quote": "The report will allege Trump used hundreds of millions of dollars in U.S. military aid and a coveted White House meeting",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_us-politics_battle-lines-drawn-impeachment-tria",
+    "label": 1,
+    "quote": "In accusing the then-president of inciting a “violent mob to attack the United States Capitol,”",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "a_zambian-opposition-leader-charged-with-criminal-libel-hate-speech_6816767",
+    "label": 1,
+    "quote": "The opposition and human rights defenders have accused the ruling party of suppressing dissent.",
+    "modes": [
+      "allege",
+      "disapprove"
+    ]
+  },
+  {
+    "id": "a_trump-assails-republican-lawmaker-who-called-for-his-impeachment_4923628",
+    "label": 1,
+    "quote": "U.S. President Donald Trump on Sunday assailed Congressman Justin Amash as \"a total lightweight\"",
+    "modes": [
+      "disapprove",
+      "allege"
+    ]
+  },
+  {
+    "id": "south-central-asia_sri-lanka-ag-accuses-police-chief-defense-minister-crimes-against-humanity",
+    "label": 1,
+    "quote": "Sri Lanka's police chief and the nation's former defense secretary should be charged with crimes against humanity",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "arts-culture_bill-cosby-goes-trial-his-legacy-and-freedom-stake",
+    "label": 1,
+    "quote": "Bill Cosby went on trial Monday on charges he drugged and sexually assaulted a woman",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_clinton-internet-claim-about-libya-attack-proves-nothing",
+    "label": 1,
+    "quote": "Republican presidential candidate Mitt Romney and some of his party's lawmakers in Congress have accused the Obama administration of misleading Americans about the violence",
+    "modes": [
+      "allege",
+      "investigate"
+    ]
+  },
+  {
+    "id": "africa_kenya-lawmakers-accompany-deputy-president-ruto-icc-tria",
+    "label": 1,
+    "quote": "The Kenyan deputy president faces charges of complicity in the violence that left about 1,300 people dead",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "africa_kenya-denies-undermining-international-criminal-cour",
+    "label": 1,
+    "quote": "Kenyan officials are pursuing ?regional and political campaigns? to halt the case against six suspects accused of organizing the violence",
+    "modes": [
+      "allege",
+      "investigate"
+    ]
+  },
+  {
+    "id": "usa_us-politics_prosecutors-theres-clear-overwhelming-evidence-trump-incited-insurrection",
+    "label": 1,
+    "quote": "Impeachment prosecutors contended Thursday that there was “clear and overwhelming” evidence that former President Donald Trump incited insurrection",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_judge-key-harvey-weinstein-hearing-be-held-secre",
+    "label": 1,
+    "quote": "dozens of women who have accused Weinstein of sexual misconduct but whose allegations haven't led to criminal charges",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_us-comedian-bill-cosby-convicted-sexual-assau",
+    "label": 1,
+    "quote": "In all, more than 60 women have accused Cosby of sexual assaulting them over several decades.",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_trump-lawyer-giuliani-says-he-would-testify-presidents-impeachment-tria",
+    "label": 1,
+    "quote": "Trump is accused of abusing the office of the presidency by pressing Kyiv to open an investigation of one of his top",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "africa_au-requests-kenyatta-icc-trial-delay",
+    "label": 1,
+    "quote": "The two men deny charges that they orchestrated a killing spree after a disputed 2007 election.",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "africa_ugandan-opposition-leader-detail-government-harassmen",
+    "label": 1,
+    "quote": "President Yoweri Museveni?s government continues to use state institutions to systematically intimidate and harass the opposition as part of a well orchestrated plan",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_trump-impeachment_trump-impeachment-senators-give-speeches-ahead-expected-vote-acqui",
+    "label": 1,
+    "quote": "Trump is accused of pressuring Ukrainian President Volodymyr Zelenskiy during the July 25 call to open a corruption investigation into political rival",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "usa_trump-impeachment_democrats-trump-engaged-corrupt-scheme-cheat-2020-election",
+    "label": 1,
+    "quote": "The Democrats accused Trump of designing \"a corrupt scheme\" to press Ukraine to investigate a political rival",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "arts-culture_cosby-lawyers-ask-court-void-conviction-prison-sentence",
+    "label": 1,
+    "quote": "The defense also complained that an audio recording played to jurors of a 2005 conversation between Cosby and Gianna Constand",
+    "modes": [
+      "disapprove"
+    ]
+  },
+  {
+    "id": "usa_bill-cosby-could-get-trial-date-evidence-hearing-tuesday",
+    "label": 1,
+    "quote": "Cosby, 79, is charged with drugging and molesting a woman he mentored at Temple University in 2004.",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "a_republicans-assail-new-york-prosecutor-investigating-trump_7013618",
+    "label": 1,
+    "quote": "Three committee chairmen in the House of Representatives accused Manhattan District Attorney Alvin Bragg of prosecutorial misconduct",
+    "modes": [
+      "disapprove",
+      "allege",
+      "investigate"
+    ]
+  },
+  {
+    "id": "usa_trial-pakistani-scientist-begins-us",
+    "label": 1,
+    "quote": "A Pakistani woman went to trial on Tuesday, accused by the U.S. government of attempted murder in an attack on U.S. troops",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "east-asia-pacific_indian-gang-rape-suspects-appear-cour",
+    "label": 1,
+    "quote": "The five suspects, between the ages of 19 and 35, have been charged with murder, rape, and kidnapping of the young woman",
+    "modes": [
+      "allege"
+    ]
+  },
+  {
+    "id": "2020-usa-votes_trump-lead-impeachment-lawyers-part-ways-week-tria",
+    "label": 1,
+    "quote": "The former president is facing charges of “incitement of insurrection” in connection with the mob that invaded the Capitol on Jan. 6.",
+    "modes": [
+      "allege"
+    ]
+  }
+]

@@ -106,6 +106,64 @@ def test_list_values_are_stripped_but_not_resplit():
     assert events[0]["actor"] == ["students", "workers"]
 
 
+def test_v6_list_values_keep_semicolons_inside_a_span():
+    """A v6 model writes lists, so a semicolon inside an element is part of the span."""
+    events, failure = parse_response(
+        '[{"event_type": "ASSAULT", "mode": "", "actor": ["gunmen"], '
+        '"recipient": ["police; soldiers"], "date": [], "location": ["in Kabul"], '
+        '"killed": ["three officers", null, ""], "injured": []}]')
+
+    assert failure is None
+    assert events[0]["recipient"] == ["police; soldiers"]
+    assert events[0]["date"] == []
+    assert events[0]["killed"] == ["three officers"]
+    assert events[0]["injured"] == []
+    assert events[0]["mode"] == ""
+
+
+def test_leading_in_is_dropped_from_locations_only():
+    """ "in Paris" -> "Paris"; "near" and "outside" say something and stay."""
+    events, failure = parse_response(
+        '[{"event_type": "PROTEST", "actor": ["in-laws"], "recipient": [], "date": ["in May"], '
+        '"location": ["in Paris", "near Kabul", "outside the capital", "in", "In Amenas", "Inner Mongolia"]}]')
+
+    assert failure is None
+    assert events[0]["location"] == ["Paris", "near Kabul", "outside the capital", "in",
+                                     "In Amenas", "Inner Mongolia"]
+    assert events[0]["date"] == ["in May"]
+    assert events[0]["actor"] == ["in-laws"]
+
+
+def test_truncated_repetition_keeps_the_distinct_finished_records():
+    """The v6 failure shape: greedy decoding repeats records until the token
+    limit cuts the response off mid-record."""
+    first = ('{"event_type": "ACCUSE", "mode": "allege", "anchor_quote": "she said he hit her", '
+             '"actor": ["former wife"], "recipient": ["Rob Porter"], "date": [], "location": []}')
+    second = ('{"event_type": "ACCUSE", "mode": "allege", "anchor_quote": "a second woman said", '
+              '"actor": ["second wife"], "recipient": ["Rob Porter"], "date": [], "location": []}')
+    raw = "[" + ", ".join([first, second] * 5) + ', {"event_type": "ACCUSE", "mode": "all'
+
+    events, failure = parse_response(raw)
+
+    assert failure == "truncated"
+    assert [e["actor"] for e in events] == [["former wife"], ["second wife"]]
+
+
+def test_exact_duplicate_records_are_dropped_from_valid_json():
+    record = '{"event_type": "PROTEST", "actor": ["students"], "location": ["in Paris"]}'
+    events, failure = parse_response(f"[{record}, {record}]")
+
+    assert failure is None
+    assert len(events) == 1
+
+
+def test_semicolon_string_drops_empty_pieces():
+    events, failure = parse_response('[{"event_type": "PROTEST", "actor": "students; ; workers;"}]')
+
+    assert failure is None
+    assert events[0]["actor"] == ["students", "workers"]
+
+
 @pytest.mark.parametrize("raw, reason", [
     ("", "json_decode_error"),
     ("   ", "json_decode_error"),

@@ -237,6 +237,16 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
     keeps the merged list roughly sorted by "how highly did *some* query rank
     this", which is what the downstream trim and ranker expect.
 
+    An article that both searches found keeps the *primary* search's copy,
+    whichever list it is taken from. The two copies differ in `raw_es_score`
+    (each query scores on its own scale) and in `from_alt_query`, and the
+    primary's is the one the ranker should see: "Colin Powell" searched as
+    "Colin Powell" is not a candidate that only the alternative form turned
+    up. Before this, the copy that happened to come first in the interleave
+    won, and a correct article ranked higher by the alternative search was
+    handed to the ranker with a foreign, much lower ES score -- on that span
+    the ranker's score fell from 0.99 to 0.25.
+
     Args:
         primary: results for the main query term, in rank order
         alternate: results for the alternative query term, in rank order
@@ -245,6 +255,7 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
     Returns:
         list: the merged, de-duplicated, capped list of articles
     """
+    primary_by_title = {article['title']: article for article in primary}
     merged = []
     seen_titles = set()
     for rank in range(max(len(primary), len(alternate))):
@@ -253,9 +264,80 @@ def merge_ranked_results(primary: list[dict], alternate: list[dict], max_results
                 article = results[rank]
                 if article['title'] not in seen_titles:
                     seen_titles.add(article['title'])
-                    merged.append(article)
+                    merged.append(primary_by_title.get(article['title'], article))
     return merged[:max_results]
 
+
+
+# Infobox keys whose values name an office, a rank or a profession. Wikipedia
+# numbers repeated fields, so a person who has held four offices has `office`,
+# `office1` ... `office3`; matching on the prefix picks all of them up.
+OFFICE_KEY_PREFIXES = ("office", "title", "position", "occupation", "rank",
+                       "profession", "order_of")
+
+# Words that carry no office information, so that "former Secretary of State"
+# is compared on "secretary" and "state" rather than on "of".
+DESC_STOPWORDS = {"the", "a", "an", "of", "for", "and", "to", "in", "at", "on",
+                  "by", "with", "former", "ex", "acting", "outgoing", "interim",
+                  "incoming", "current", "senior", "chief", "deputy", "new",
+                  "s", "his", "her", "their", "its"}
+
+
+def office_text(infobox: dict) -> str:
+    """
+    The office-like values of an infobox, joined into one string.
+
+    Wikipedia's short description for a person is usually a bare
+    "Mexican politician (born 1966)", which says nothing about *which* office
+    they hold -- so scoring a mention's description against it, as
+    `actor_desc_sim_short` does, throws away the part of the mention that
+    disambiguates. The infobox does carry it: Enrique Peña Nieto's says
+    "Governor of the State of Mexico", which is what the mention
+    "the governor of Mexico State, Enrique Pena Nieto" is describing.
+    """
+    if not isinstance(infobox, dict):
+        return ""
+    values = [str(v) for k, v in infobox.items()
+              if any(k.startswith(p) for p in OFFICE_KEY_PREFIXES) and v]
+    return " ; ".join(values)
+
+
+def first_sentence(text: str) -> str:
+    """
+    The first sentence of an article's introduction.
+
+    The rest of an intro paragraph is biography and dilutes the comparison;
+    the first sentence is the one that says what the subject *is*.
+    """
+    if not text:
+        return ""
+    # Find the first sentence-final punctuation mark followed by whitespace or
+    # end of text. (The earlier `(.+?[.!?])(?:\s|$)` form is quadratic on a
+    # long paragraph with no such mark -- e.g. Urdu/Arabic text using "۔" --
+    # and stalled the linker for minutes per candidate list.)
+    text = text.strip()
+    match = re.search(r"[.!?](?=\s|$)", text)
+    return text[:match.end()].strip() if match else text[:300].strip()
+
+
+def content_words(text: str) -> set:
+    """Lower-cased words of a description, minus the ones carrying no office."""
+    words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'’\-]+", text or "")}
+    return words - DESC_STOPWORDS
+
+
+def desc_office_overlap(actor_desc: str, infobox: dict) -> float:
+    """
+    Fraction of a mention's description words that appear in the candidate's
+    office fields. 0 when either side is empty.
+    """
+    desc_words = content_words(actor_desc)
+    if not desc_words:
+        return 0.0
+    office_words = content_words(office_text(infobox))
+    if not office_words:
+        return 0.0
+    return len(desc_words & office_words) / len(desc_words)
 
 
 def title_concept_features(title: str, intro_length: int, doc_country: str,
@@ -315,11 +397,22 @@ class WikiClient:
     
     def __init__(self,
                  es_client: Elasticsearch,
+                 # folding on, importance off: docs/memos/2026-09-10-wiki-retrieval-eval.md
+                 use_folded: bool = True,
+                 use_importance: bool = False,
                  ):
         """Initialize the Wikipedia client.
 
         es_config is a dict with es_host, es_port, es_user, es_password
+
+        use_folded and use_importance are the defaults for `run_wiki_search`;
+        see that method for what each one adds to the query. Both need index
+        features that only exist in wiki indices built from 2026-09 on. See
+        docs/memos/2026-09-10-wiki-retrieval-eval.md for the measurements behind
+        the defaults.
         """
+        self.use_folded = use_folded
+        self.use_importance = use_importance
         try:
             es_client.ping()
             self.conn = Search(using=es_client, index="wiki")
@@ -356,7 +449,8 @@ class WikiClient:
 
     def run_wiki_search(self, query_term, limit_term="", max_results=200,
                         country="",
-                        use_importance=False,
+                        use_importance=None,
+                        use_folded=None,
                         title_exact_boost=250,
                         title_and_boost=120,
                         title_fuzzy_boost=50,
@@ -380,8 +474,23 @@ class WikiClient:
                 if known. Used to add country-qualified title clauses; see
                 `country_phrase_variants`. Passing "" is the old behavior.
             use_importance: also boost articles by redirect count and by having
-                an infobox/short description
+                an infobox/short description. Needs a `redirect_count` field,
+                which only 2026-09-and-later indices have. None uses the
+                instance default set in `__init__`.
+            use_folded: also match the accent-folded `.folded` sub-fields of
+                title/redirects/alternative_names, so that "Lopez Obrador"
+                reaches "López Obrador". The sub-fields only exist in
+                2026-09-and-later indices, and turning the clauses on is a
+                deliberate ranking change: it roughly doubles the title-fuzzy
+                contribution and moves every `raw_es_score`, so the XGBoost
+                ranker sees different inputs. Measured in
+                docs/memos/2026-09-10-wiki-retrieval-eval.md. None uses the
+                instance default set in `__init__`.
         """
+        if use_importance is None:
+            use_importance = self.use_importance
+        if use_folded is None:
+            use_folded = self.use_folded
 
         # Base matching clauses.
         #
@@ -401,16 +510,25 @@ class WikiClient:
             {"match_phrase": {"alternative_names": {"query": query_term, "boost": alternative_names_boost}}},
             # Looser bag-of-words matches
             {"match": {"title": {"query": query_term, "boost": title_fuzzy_boost}}},
-            # Folded (ASCII-normalized + stemmed) title match
-            {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
             {"match": {"redirects": {"query": query_term, "boost": redirects_fuzzy_boost}}},
-            # Folded redirects match (handles diacritics + plurals)
-            {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
             {"match": {"alternative_names": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
-            {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
             {"match": {"intro_para": {"query": query_term, "boost": intro_para_boost}}},
             {"match": {"short_desc": {"query": query_term, "boost": short_desc_boost}}}
         ]
+
+        if use_folded:
+            # Accent-folded `.folded` sub-fields on title/redirects/alternative_names
+            # exist in wiki indices built from 2026-09 on (see
+            # elasticsearch/es_wiki/wiki_mapping.json); against an older index
+            # these clauses simply match nothing. They are what lets a mention
+            # written without diacritics reach the article that has them.
+            base_should_clauses += [
+                # The `folded` analyzer is lowercase + asciifolding (no stemmer),
+                # so these are the same tokens with the diacritics taken off.
+                {"match": {"title.folded": {"query": query_term, "boost": title_fuzzy_boost}}},
+                {"match": {"redirects.folded": {"query": query_term, "boost": redirects_fuzzy_boost}}},
+                {"match": {"alternative_names.folded": {"query": query_term, "boost": alternative_names_fuzzy_boost}}},
+            ]
 
         # Country-qualified title clauses. News text says "the electoral
         # commission"; Wikipedia says "Electoral Commission of Kenya". These
@@ -510,19 +628,28 @@ class WikiSearcher:
     
     def __init__(self, 
                  wiki_client: None | WikiClient=None, 
-                 es_client: None | Elasticsearch=None):
+                 es_client: None | Elasticsearch=None,
+                 use_folded: bool = True,
+                 use_importance: bool = False):
         """
         Initialize the Wikipedia searcher.
         
         Args:
             wiki_client: WikiClient instance
             es_client: Elasticsearch client (used if wiki_client not provided)
+            use_folded: match the accent-folded sub-fields as well (see
+                `WikiClient.run_wiki_search`). Only used when this class builds
+                its own WikiClient; a caller passing a `wiki_client` sets the
+                flags on it.
+            use_importance: boost by redirect count as well (same caveat)
         """
         match wiki_client, es_client:
             case None, None:
                 raise ValueError("Must provide either wiki_client or es_client")
             case None, _:
-                self.wiki_client = WikiClient(es_client=es_client)
+                self.wiki_client = WikiClient(es_client=es_client,
+                                              use_folded=use_folded,
+                                              use_importance=use_importance)
             case _, _:
                 self.wiki_client = wiki_client
     
@@ -639,31 +766,36 @@ class WikiSearcher:
 #######################################################
 
 
-def load_wiki_ranker_model(model_path: str | Path) -> tuple[XGBClassifier, XGBClassifier]:
+def load_wiki_ranker_model(model_path: str | Path,
+                           no_context_model_path: None | str | Path = None,
+                           ) -> tuple[XGBClassifier, XGBClassifier]:
     """
-    Load the Wikipedia ranker models
+    Load the Wikipedia ranker models.
 
-    One model has context-related features and the other doesn't.
-    (We need this to handle the case where the context is not provided)
-    
+    There are two: one for mentions that come with their story, and one for
+    mentions that arrive alone. The second is trained on rows generated with
+    the story withheld, so it does not lean on the context features, which are
+    all zero when there is no story.
+
     Args:
-        model_dir: Directory containing the ranker model
-        
+        model_path: the ranker for mentions with context
+        no_context_model_path: the ranker for mentions without it. If None,
+            the context ranker is used for both.
+
     Returns:
-        XGBoost models: Tuple of loaded ranker model
+        (context ranker, no-context ranker)
     """
-    model_path = Path(model_path)
-    
     wiki_ranker = XGBClassifier()
-    wiki_ranker.load_model(model_path)
-    logger.warning("Using context-based XGBoost model for *no context* ranking.")
-    wiki_ranker_no_context =  XGBClassifier()
-    wiki_ranker_no_context.load_model(model_path)
-    
+    wiki_ranker.load_model(Path(model_path))
+    if no_context_model_path is None:
+        logger.warning("No no-context ranker given; using the context ranker for mentions without context.")
+        return wiki_ranker, wiki_ranker
+    wiki_ranker_no_context = XGBClassifier()
+    wiki_ranker_no_context.load_model(Path(no_context_model_path))
     return wiki_ranker, wiki_ranker_no_context
 
 
-def load_actor_sim_model(model_dir: str | Path) -> SentenceTransformer:
+def load_actor_sim_model(model_dir: str | Path, device=None) -> SentenceTransformer:
     """
     Load the actor similarity model trained on Wikipedia redirects.
     
@@ -671,12 +803,15 @@ def load_actor_sim_model(model_dir: str | Path) -> SentenceTransformer:
     
     Args:
         model_dir: Directory containing the similarity model
+        device: Torch device ('cpu' or 'cuda') to load it on. The default None
+            leaves the choice to sentence-transformers, which takes CUDA when a
+            card is visible -- pass 'cpu' to keep this model off the GPU.
         
     Returns:
         SentenceTransformer: Loaded similarity model
     """
     model_dir = Path(model_dir)
-    return SentenceTransformer(str(model_dir))
+    return SentenceTransformer(str(model_dir), device=device)
 
 
 class WikiMatcher:
@@ -704,7 +839,11 @@ class WikiMatcher:
                  actor_sim_model: None | str | Path=None, 
                  wiki_ranker_model: None | str | Path=None,
                  ranker_threshold: float | None = None,
+                 wiki_ranker_model_no_context: None | str | Path = None,
+                 ranker_threshold_no_context: float | None = None,
                  device=None,
+                 use_folded: bool = True,
+                 use_importance: bool = False,
                  ):
         """
         Initialize the Wikipedia matcher.
@@ -715,11 +854,24 @@ class WikiMatcher:
             actor_sim_model: Actor similarity model
             ranker_threshold: Minimum ranker probability to accept the top
                 candidate as the article; below it the mention gets no page
-            device: Device to use for inference ('cuda' or None)
+            wiki_ranker_model_no_context, ranker_threshold_no_context: the
+                same two, for mentions that arrive without a story. By default
+                they come from the encoder's WIKI_ENCODERS entry; an encoder
+                without a no-context ranker uses its context ranker and
+                threshold for these mentions too.
+            device: Device to use for inference ('cuda', 'cpu', or None). Passed
+                to the actor-similarity model as well as the query encoder.
             wiki_sort_method: Method to use for sorting results
+            use_folded: match the accent-folded sub-fields in retrieval as well
+            use_importance: boost candidates by redirect count as well
+
+        Both retrieval flags need a 2026-09-or-later Wikipedia index and change
+        the candidate list the ranker sees; see `WikiClient.run_wiki_search`.
         """
         # Initialize components or use provided ones
-        self.wiki_searcher = WikiSearcher(es_client=es_client)
+        self.wiki_searcher = WikiSearcher(es_client=es_client,
+                                          use_folded=use_folded,
+                                          use_importance=use_importance)
             
         # Initialize models if not provided
         if trf_model is None:
@@ -741,31 +893,42 @@ class WikiMatcher:
         # Actor similarity model 
         if actor_sim_model is None:
             actor_sim_model = Path(str(resources.files("ngec"))) / "assets" / "actor_sim_model2"
-        self.actor_sim = load_actor_sim_model(actor_sim_model)
+        self.actor_sim = load_actor_sim_model(actor_sim_model, device=device)
 
         # Wiki Ranker models (xgboost). The ranker was trained on one encoder's
         # similarity features, so pick the asset that matches the encoder in
         # use; fall back to xgb_model.json (a copy of the default encoder's).
+        # A caller who passes their own context ranker has told us nothing
+        # about a no-context one, so that ranker is then used for both.
+        assets = Path(str(resources.files("ngec"))) / "assets"
+        settings = {}
+        if trf_model is None and model_manager is not None:
+            settings = model_manager.encoder_settings
         if wiki_ranker_model is None:
-            assets = Path(str(resources.files("ngec"))) / "assets"
-            asset_name = "xgb_model.json"
-            if trf_model is None and model_manager is not None:
-                asset_name = model_manager.encoder_settings.get("ranker_asset", asset_name)
+            asset_name = settings.get("ranker_asset", "xgb_model.json")
             wiki_ranker_model = assets / asset_name
             if not wiki_ranker_model.exists():
                 logger.warning(f"No ranker asset {asset_name} for this encoder; using xgb_model.json")
                 wiki_ranker_model = assets / "xgb_model.json"
-        logger.info(f"Loading wiki ranker from {wiki_ranker_model}")
-        self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(wiki_ranker_model)
+            if wiki_ranker_model_no_context is None and settings.get("ranker_asset_no_context"):
+                wiki_ranker_model_no_context = assets / settings["ranker_asset_no_context"]
+        logger.info(f"Loading wiki rankers from {wiki_ranker_model} and {wiki_ranker_model_no_context}")
+        self.wiki_ranker, self.wiki_ranker_no_context = load_wiki_ranker_model(
+            wiki_ranker_model, wiki_ranker_model_no_context)
         # Minimum ranker probability for the top candidate to be accepted as
         # the article. Encoder-specific (see WIKI_ENCODERS["ranker_threshold"]
         # in common.py for the measured values); a caller may override it.
         if ranker_threshold is None:
-            if trf_model is None and model_manager is not None:
-                ranker_threshold = model_manager.encoder_settings.get("ranker_threshold", 0.1)
-            else:
-                ranker_threshold = 0.1
+            ranker_threshold = settings.get("ranker_threshold", 0.1)
         self.ranker_threshold = ranker_threshold
+        # The no-context ranker has its own threshold, unless it is the
+        # context ranker standing in, which keeps the context threshold.
+        if ranker_threshold_no_context is None:
+            if wiki_ranker_model_no_context is None:
+                ranker_threshold_no_context = ranker_threshold
+            else:
+                ranker_threshold_no_context = settings.get("ranker_threshold_no_context", 0.1)
+        self.ranker_threshold_no_context = ranker_threshold_no_context
 
         self.wiki_sort_method = wiki_sort_method
             
@@ -1051,6 +1214,11 @@ class WikiMatcher:
                 'title_is_generic_concept': is_generic_concept,
                 'title_has_other_country': has_other_country,
                 'from_alt_query': article.get('from_alt_query', 0),
+                # How much of the mention's description ("former Secretary of
+                # State") the candidate's infobox offices account for. Lexical,
+                # so it costs nothing to compute and needs no encoder.
+                'actor_desc_office_overlap': desc_office_overlap(
+                    actor_desc, article.get('infobox', {})),
                 'name_coverage': name_coverage,
                 'cat_overlap': cat_overlap,
                 'raw_es_score': article.get('raw_es_score', 0),
@@ -1061,6 +1229,7 @@ class WikiMatcher:
                 'context_sim_short': 0,  # Will be filled in later
                 'actor_desc_sim_intro': 0,  # Will be filled in later
                 'actor_desc_sim_short': 0,  # Will be filled in later
+                'actor_desc_sim_first_sent': 0,  # Will be filled in later
                 'combined_score': 0  # Will be calculated after all scores are in
             })
 
@@ -1119,6 +1288,17 @@ class WikiMatcher:
             # Add to dataframe
             df['actor_desc_sim_intro'] = desc_sims_intro[0].tolist()
             df['actor_desc_sim_short'] = desc_sims_short[0].tolist()
+            # The same comparison against the *first sentence* of the intro
+            # only. "Colin Powell was an American politician and general who
+            # served as Secretary of State" carries the office; the rest of the
+            # paragraph is biography that dilutes it. Only computed when there
+            # is a description to compare against, like the two above.
+            first_sents = [first_sentence(article.get('intro_para', ''))
+                           for article in articles]
+            first_sent_embeddings = self.trf.encode(first_sents, batch_size=8,
+                                                    show_progress_bar=False)
+            desc_sims_first = cos_sim(desc_embedding.reshape(1, -1), first_sent_embeddings)
+            df['actor_desc_sim_first_sent'] = desc_sims_first[0].tolist()
 
         # The ranker expects an "empty text" feature, which lets it 
         # discount the context similarity columns when they're all 0.
@@ -1135,6 +1315,7 @@ class WikiMatcher:
         # existing counterparts (`country_match`, `context_sim_intro`) have them.
         for col in ['title_sim', 'context_sim_intro', 'context_sim_short',
                     'actor_desc_sim_intro', 'actor_desc_sim_short',
+                    'actor_desc_sim_first_sent', 'actor_desc_office_overlap',
                     'lcs', 'levenshtein', 'country_match', 'exact_title_match',
                     'alt_name_match', 'redirect_match',
                     'cm_doc', 'cm_title', 'cm_cat',
@@ -1361,14 +1542,13 @@ class WikiMatcher:
     
     def _call_ranker(self, score_df, context):
         if context:
-            X = score_df[self.wiki_ranker.feature_names_in_]
-            y_proba = self.wiki_ranker.predict_proba(X)[:, 1]
+            ranker, threshold = self.wiki_ranker, self.ranker_threshold
         else:
-            X = score_df[self.wiki_ranker_no_context.feature_names_in_]
-            y_proba = self.wiki_ranker_no_context.predict_proba(X)[:, 1]
-        score_df['ranker_score'] = y_proba
+            ranker, threshold = self.wiki_ranker_no_context, self.ranker_threshold_no_context
+        X = score_df[ranker.feature_names_in_]
+        score_df['ranker_score'] = ranker.predict_proba(X)[:, 1]
         score_df['is_max_for_task'] = (score_df['ranker_score'] == score_df['ranker_score'].max()).astype(int)
-        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > self.ranker_threshold)
+        score_df['is_predicted_match'] = score_df['is_max_for_task'] & (score_df['ranker_score'] > threshold)
         pick = score_df[score_df['is_predicted_match'] == True]
         if not pick.empty:
             pick = pick.iloc[0].to_dict()
@@ -1529,41 +1709,30 @@ class WikiMatcher:
                 return cleaned
         return ""
 
-    def query_wiki(self,
-                   query_term,
-                   limit_term="",
-                   country="",
-                   context="",
-                   actor_desc="",
-                   method="neural",
-                   max_results=200,
-                   skip_expansion=False,
-                   alt_query_terms: list[str] | None = None):
+    def retrieve_candidates(self,
+                            query_term,
+                            limit_term="",
+                            country="",
+                            context="",
+                            max_results=200,
+                            skip_expansion=False,
+                            alt_query_terms: list[str] | None = None):
         """
-        Search Wikipedia and return the best matching article.
+        Everything `query_wiki` does before the ranker: settle on the query
+        term, search Elasticsearch, and merge in the alternative form's hits.
 
-        Args:
-            query_term: Term to search for
-            limit_term: Term to limit results by
-            country: Country *name* (e.g. "Ghana") to help with disambiguation
-            context: Context text to help with disambiguation
-            actor_desc: Actor description (automatically parsed)
-            max_results: Maximum results to return from search
-            skip_expansion: If True, skip NER-based query expansion (use when
-                the caller already extracted the core entity via NER)
-            alt_query_terms: Other surface forms of the same mention (e.g. the
-                raw span before country-stripping, or the span before NER
-                expansion). The first one that differs from `query_term` is
-                searched as well and the two candidate lists are merged. One
-                extra Elasticsearch round trip buys about a point of recall,
-                because whichever surface form the article is titled under is
-                often not the one the pipeline settled on.
+        This is a separate method so that the ranker's *training* rows can be
+        generated through exactly the code that serves them. The features the
+        ranker reads (`raw_es_score`, `index`, `from_alt_query`) depend on the
+        query term the expansion settles on and on how the two candidate lists
+        are merged, so a training script that rebuilt any of that by hand would
+        silently drift from production -- which is how the ranker came to be
+        trained against a merge that no longer exists. See
+        `setup/train_wiki_model/generate_features.py`.
 
         Returns:
-            dict or None: Best matching Wikipedia article or None if no good match
+            tuple: (the query term actually searched, the merged candidate list)
         """
-        if method not in ["neural", "rules"]:
-            raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
         # Strip possessive suffix before searching
         query_term = re.sub(r"['’]s\s*$", "", query_term).strip()
         # Do NER expansion unless caller already extracted a specific (multi-word) entity
@@ -1601,6 +1770,53 @@ class WikiMatcher:
             for article in alt_results:
                 article['from_alt_query'] = 1
             results = merge_ranked_results(results, alt_results, max_results)
+
+        return query_term, results
+
+    def query_wiki(self,
+                   query_term,
+                   limit_term="",
+                   country="",
+                   context="",
+                   actor_desc="",
+                   method="neural",
+                   max_results=200,
+                   skip_expansion=False,
+                   alt_query_terms: list[str] | None = None):
+        """
+        Search Wikipedia and return the best matching article.
+
+        Args:
+            query_term: Term to search for
+            limit_term: Term to limit results by
+            country: Country *name* (e.g. "Ghana") to help with disambiguation
+            context: Context text to help with disambiguation
+            actor_desc: Actor description (automatically parsed)
+            max_results: Maximum results to return from search
+            skip_expansion: If True, skip NER-based query expansion (use when
+                the caller already extracted the core entity via NER)
+            alt_query_terms: Other surface forms of the same mention (e.g. the
+                raw span before country-stripping, or the span before NER
+                expansion). The first one that differs from `query_term` is
+                searched as well and the two candidate lists are merged. One
+                extra Elasticsearch round trip buys about a point of recall,
+                because whichever surface form the article is titled under is
+                often not the one the pipeline settled on.
+
+        Returns:
+            dict or None: Best matching Wikipedia article or None if no good match
+        """
+        if method not in ["neural", "rules"]:
+            raise ValueError(f"Wiki selection method must be 'neural' or 'rules'. You provided: {method}")
+        query_term, results = self.retrieve_candidates(
+            query_term,
+            limit_term=limit_term,
+            country=country,
+            context=context,
+            max_results=max_results,
+            skip_expansion=skip_expansion,
+            alt_query_terms=alt_query_terms,
+        )
 
         best = self.pick_best_wiki(
             query_term, 

@@ -1,0 +1,172 @@
+[
+  {
+    "id": "africa_violence-mars-burundi-election-effor",
+    "candidates": ["PROTEST", "ASSAULT", "THREATEN", "ACCUSE"],
+    "quotes": {
+      "PROTEST": "protesting the death of an opposition activist, fought a street battle with riot police",
+      "ASSAULT": "Two unidentified men gunned down the opposition activist last week",
+      "THREATEN": "vowed to punish those responsible for threatening the peace in upcoming elections",
+      "ACCUSE": "has also condemned political violence in recent speeches"
+    }
+  },
+  {
+    "id": "a_chinese-diplomat-liu-jianchao-meets-with-singapore-s-leaders-_7547460",
+    "candidates": ["CONSULT", "SUPPORT", "COOPERATE", "ACCUSE", "REQUEST", "ASSAULT"],
+    "quotes": {
+      "CONSULT": "was in the city-state to meet with Prime Minister Lee Hsien Loong",
+      "SUPPORT": "reiterated their shared commitment to continue expanding cooperation in traditional areas like trade and investments",
+      "COOPERATE": "a mutual 30-day visa waiver for citizens of both countries was announced",
+      "ACCUSE": "the U.S. has not abandoned its policy to oppress and contain China",
+      "REQUEST": "the Philippines summoned Beijing’s envoy in Manila over alleged \"aggressive actions\" in the disputed waters",
+      "ASSAULT": "a Philippines-flagged vessel colliding with a Chinese Coast Guard ship"
+    }
+  },
+  {
+    "id": "east-asia_un-urgesthailand-speed-probe-missing-activis",
+    "candidates": ["REQUEST", "ACCUSE", "COERCE", "ASSAULT"],
+    "quotes": {
+      "REQUEST": "called on the Thai Government to speed up investigations into the disappearance",
+      "ACCUSE": "already under criticism for suspending democratic rule and sharply curtailing political freedoms",
+      "COERCE": "17 student activists arrested in Southern Thailand on April 2 without charge",
+      "ASSAULT": "more than 60 cases of enforced disappearance over the past more than a decade"
+    }
+  },
+  {
+    "id": "africa_burkina-faso-arrests-suspects-armory-raid",
+    "candidates": ["COERCE", "ASSAULT", "SANCTION"],
+    "quotes": {
+      "COERCE": "10 soldiers have been arrested in connection with a pre-dawn raid",
+      "ASSAULT": "al-Qaida-linked terrorists killed at least 29 people and wounded scores more",
+      "SANCTION": "Diendere was jailed for treason and the RSP was officially disbanded"
+    }
+  },
+  {
+    "id": "a_analysts-un-rights-review-shows-limits-of-china-s-global-influence-campaign_7461568",
+    "candidates": ["ACCUSE", "REQUEST", "CONCEDE", "AGREE"],
+    "quotes": {
+      "ACCUSE": "expressed concerns about Beijing’s crackdown on civil society",
+      "REQUEST": "recommended China “remove excessive restrictions on the functioning of independent NGOs”",
+      "CONCEDE": "China announced that it will adopt 30 new measures to safeguard human rights",
+      "AGREE": "promised to participate in the review “with an open, candid attitude.”"
+    }
+  },
+  {
+    "id": "usa_schools-challenged-help-native-american-children-autis",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "africa_nigeria-leader-lacks-moral-right-seek-re-election",
+    "candidates": ["ACCUSE", "REJECT"],
+    "quotes": {
+      "ACCUSE": "lacks the moral right to seek a second full year term in office",
+      "REJECT": "Mohammed denied the APC has politicized the current security challenges"
+    }
+  },
+  {
+    "id": "africa_al-shabab-gunmen-attack-un-compound-mogadishu",
+    "candidates": ["ASSAULT", "ACCUSE"],
+    "quotes": {
+      "ASSAULT": "suicide and gun attack by Somali militant group al-Shabab on a U.N. compound",
+      "ACCUSE": "condemned Wednesday’s attack"
+    }
+  },
+  {
+    "id": "archive_china-defends-decision-invite-sudan-zimbabwe-africa-summi",
+    "candidates": ["ACCUSE", "REJECT", "CONSULT", "REQUEST", "AGREE", "SUPPORT"],
+    "quotes": {
+      "ACCUSE": "has drawn criticism from international human rights advocates",
+      "REJECT": "reaffirmed his government's refusal to allow U.N. peacekeepers into Darfur",
+      "CONSULT": "urging the Sudanese leader, when the two met on Thursday, to push for a diplomatic",
+      "REQUEST": "China hopes the Sudanese government will maintain dialogue with all parties in the conflict",
+      "AGREE": "China's decision to invite Sudanese President Omar Hassan al-Bashir to the Africa summit",
+      "SUPPORT": "it will support the presence of U.N. troops only if Sudan agrees"
+    }
+  },
+  {
+    "id": "africa_au-announces-progress-against-somali-militants-mogadishu",
+    "candidates": ["ASSAULT"],
+    "quotes": {
+      "ASSAULT": "heavy fighting between the two sides Thursday killed at least 17 people"
+    }
+  },
+  {
+    "id": "a_russia-strikes-sievierodonetsk-chemical-plant-in-eastern-ukraine_6614398",
+    "candidates": ["ASSAULT", "SUPPORT", "CONSULT", "THREATEN"],
+    "quotes": {
+      "ASSAULT": "Russian forces bombarded a chemical plant sheltering hundreds of soldiers and civilians",
+      "SUPPORT": "expressed full support for the Russian invasion Sunday",
+      "CONSULT": "European Commission President Ursula von der Leyen is visiting Kyiv to discuss Ukraine’s European Union",
+      "THREATEN": "will throw all their reserves in order to capture the city"
+    }
+  },
+  {
+    "id": "a_israel-says-it-s-recovered-bodies-of-5-hostages-held-in-gaza-_7712224",
+    "candidates": ["ASSAULT", "CONSULT", "ACCUSE", "SUPPORT", "THREATEN"],
+    "quotes": {
+      "ASSAULT": "Israel's counteroffensive in Gaza has killed more than 39,100 Palestinians",
+      "CONSULT": "Netanyahu met Thursday with President Joe Biden at the White House",
+      "ACCUSE": "Hamas exploited the humanitarian area and used it to hold our hostages captive",
+      "SUPPORT": "Israel has a right to defend itself. And how it does so matters.",
+      "THREATEN": "he vowed to press forward with Israel's war until he achieves \"total victory.\""
+    }
+  },
+  {
+    "id": "usa_us-congressional-panel-examines-terrorism-threat-posed-libya-mideast-unres",
+    "candidates": ["SUPPORT", "RETREAT"],
+    "quotes": {
+      "SUPPORT": "he welcomes the positive changes in Egypt and Tunisia",
+      "RETREAT": "Egypt and Tunisia have disbanded their long-feared state security forces"
+    }
+  },
+  {
+    "id": "usa_us-politics_us-poll-biden-holds-slight-edge-over-trump-2020-presidential-race",
+    "candidates": ["ACCUSE"],
+    "quotes": {
+      "ACCUSE": "Trump and Biden regularly trade political barbs"
+    }
+  },
+  {
+    "id": "science-health_scientists-reprogram-cells-dna-using-nanotechnology",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "archive_baseball-tigers-pound-devil-rays",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "east-asia_pakistan-confident-us-tri-lateral-talks-afghanistan-will-resume-soon",
+    "candidates": ["AGREE", "ACCUSE", "ASSAULT", "REQUEST", "COERCE", "REJECT"],
+    "quotes": {
+      "AGREE": "confident the tri-lateral talks will be re-scheduled soon",
+      "ACCUSE": "Pakistani police have accused the U.S embassy official of killing two Pakistanis",
+      "ASSAULT": "killing two Pakistanis in a shooting incident in Lahore late last month",
+      "REQUEST": "The United States wants Davis freed immediately",
+      "COERCE": "rising tensions over the detention of American diplomat Raymond Davis",
+      "REJECT": "the United States postponed a key meeting with Pakistani and Afghan officials"
+    }
+  },
+  {
+    "id": "south-central-asia_china-lends-1b-pakistan-sources-repor",
+    "candidates": ["AID"],
+    "quotes": {
+      "AID": "China has lent Pakistan $1 billion to boost the South Asian country's plummeting foreign"
+    }
+  },
+  {
+    "id": "usa_us-politics_clinton-says-fbi-wikileaks-sexism-among-reasons-election-loss",
+    "candidates": ["ACCUSE"],
+    "quotes": {
+      "ACCUSE": "blamed FBI Director James Comey and the website WikiLeaks"
+    }
+  },
+  {
+    "id": "archive_more-malians-flee-mauritania",
+    "candidates": ["AID"],
+    "quotes": {
+      "AID": "The refugees receive initial assistance at Fassala, about 3 kilometers from the Mali border."
+    }
+  }
+]

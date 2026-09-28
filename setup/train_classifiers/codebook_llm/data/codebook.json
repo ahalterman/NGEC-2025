@@ -1,0 +1,314 @@
+{
+  "AGREE": {
+    "definition": "Agree to, offer, promise, or otherwise indicate willingness or commitment to cooperate, including promises to sign or ratify agreements.",
+    "modes": {},
+    "exemplars": [
+      "Indicate willingness to cooperate in the future",
+      "Promise to sign a treaty",
+      "Expressing willingness to meet in the future",
+      "Invite a delegation to visit (note: this only includes invitations: actual visits/meetings do not fall under this definition)",
+      "Agree to cooperate in the future",
+      "Express willingness to end a conflict"
+    ],
+    "notes": [
+      "If two parties make a reciprocal agreement, code both as ACTOR (with no RECIPIENT)"
+    ],
+    "contrasts": [
+      "CONCEDE",
+      "SUPPORT",
+      "RETREAT"
+    ]
+  },
+  "CONSULT": {
+    "definition": "All consultations and meetings: this includes visiting and hosting visits, as well as meeting at a neutral location, and consultation by phone or other media.",
+    "modes": {
+      "visit": "a political actor visiting another actor, who is hosting",
+      "third-party": "A meeting between two actors is hosted by a third actor",
+      "multilateral": "A meeting that occurs in a multilateral context, typically an alliance or IGO",
+      "phone": "Consultation that occurs via phone or some other remote medium"
+    },
+    "exemplars": [],
+    "notes": [
+      "The visitor is the ACTOR; host is RECIPIENT",
+      "If two parties make a reciprocal agreement or have a meeting, code both as ACTOR (with no RECIPIENT)",
+      "If two parties make a reciprocal agreement, code both as ACTOR (with no RECIPIENT)"
+    ],
+    "contrasts": [
+      "SUPPORT",
+      "AGREE",
+      "REJECT"
+    ]
+  },
+  "SUPPORT": {
+    "definition": "Any verbal support, verbal cooperation, approval, or finalizing a treaty or agreement. Note that this only includes verbal support. Material support or major concessions should be coded under COOPERATE, AID, or CONCEDE. This category only includes verbal support.",
+    "modes": {},
+    "exemplars": [
+      "express support for, commend",
+      "Initiate, resume, improve, or expand diplomatic cooperation",
+      "Approve policy, action, or actor",
+      "ratify, sign, or finalize an agreement or treaty",
+      "initiation of diplomatic ties with an entity for the first time."
+    ],
+    "notes": [],
+    "contrasts": [
+      "COOPERATE",
+      "AGREE",
+      "RETREAT"
+    ]
+  },
+  "CONCEDE": {
+    "definition": "Verbal concessions which have no immediate material consequences.",
+    "modes": {},
+    "exemplars": [
+      "Make a promise of future concessions",
+      "Make a promise of future easing administrative or legal restrictions on persons and organizations",
+      "Make a promise of removing curfews in the future",
+      "declarations (but not implementations) of ceasefires",
+      "promise to withdraw from territory (in the future)"
+    ],
+    "notes": [],
+    "contrasts": [
+      "RETREAT",
+      "AGREE",
+      "REQUEST"
+    ]
+  },
+  "COOPERATE": {
+    "definition": "Initiate, resume, improve, or expand mutual material cooperation or exchange. Note that this category excludes aid, which is primarily for the benefit of the recipient.",
+    "modes": {},
+    "exemplars": [
+      "Initiate, resume, improve, or expand economic exchange or cooperation",
+      "Military exchanges such as joint military games and maneuvers",
+      "Engage in cooperation on judicial matters, such as extraditions and war crimes.",
+      "Engage in voluntary exchanges or sharing of intelligence and other significant information."
+    ],
+    "notes": [],
+    "contrasts": [
+      "SUPPORT",
+      "AID",
+      "MOBILIZE"
+    ]
+  },
+  "AID": {
+    "definition": "All provisions of providing material aid whose material benefits primarily accrue to the recipient. (Activities for the benefits of both parties are defined as COOPERATION, not AID.",
+    "modes": {},
+    "exemplars": [
+      "Provide monetary aid and financial guarantees, grants, gifts and credit",
+      "Provide military and police assistance including arms and personnel.",
+      "Provide humanitarian aid such as emergency assistance.",
+      "Grant asylum, both to persons in its territories (territorial asylum) and diplomatic asylum on the premises of an embassy.",
+      "Provide debt forgiveness or loan cancellations",
+      "Rescue hostages"
+    ],
+    "notes": [],
+    "contrasts": [
+      "COOPERATE",
+      "SUPPORT",
+      "REJECT"
+    ]
+  },
+  "RETREAT": {
+    "definition": "RETREAT covers any events\u2014not just military \u201cretreat\u201d from territory\u2014which have immediate (not simply promised) material consequences. Promises of future actions do not fall under this category, only actions that have immediate consequences. This category differs from CONCEDE in that concessions are verbal concessions, while RETREAT relates to material concessions.",
+    "modes": {
+      "withdraw": "Retreat from territory",
+      "release": "Release captives",
+      "return": "Return property",
+      "disarm": "Disarm militarily or give up weapons",
+      "ceasefire": "Implement ceasefire (note: this does not include a promise of future ceasefire, just the actual implementation of a ceasefire)",
+      "access": "Allow election observers into the country",
+      "resign": "A resignation by a government official"
+    },
+    "exemplars": [],
+    "notes": [
+      "NOTE: Promises of future retreats do not apply and are coded under a separate event. Only retreats that are actually occurring/occurred count.",
+      "NOTE: Promises of future releases do not apply and are coded under a separate event. Only releases that are actually occurring/occurred count.",
+      "NOTE: Promises of future returns do not apply and are coded under a separate event. Only returns of property that are actually occurring/occurred count.",
+      "NOTE: Promises of future disarmaments do not apply and are coded under a separate event. Only retreats that are actually occurring/occurred count.",
+      "NOTE: Promises of future ceasefires do not apply and are coded under a separate event. Only ceasefires that are actually being implemented count.",
+      "NOTE: Promises of future permission to peacekeepers do not apply and are coded under a separate event. Only peacekeeping operations that are actually being implemented count.",
+      "NOTE: Promises of future resignations do not apply and are coded under a separate event. Only resignations that have already happened count."
+    ],
+    "contrasts": [
+      "CONCEDE",
+      "AGREE",
+      "SUPPORT"
+    ]
+  },
+  "REQUEST": {
+    "definition": "All requests, demands, and orders. Requests, demands, and orders are less forceful than threats and potentially carry less serious repercussions",
+    "modes": {
+      "assist": "Make a request for diplomatic relations or exchange",
+      "change": "Make a request for changes in policy, government, or institutions",
+      "yield": "Make a request for the release of prisoners",
+      "meet": "Make a request for a meeting"
+    },
+    "exemplars": [],
+    "notes": [
+      "NOTE: Protests (including protests making requests) are coded under a separate PROTEST category. Protest DO NOT fall under this category."
+    ],
+    "contrasts": [
+      "REJECT",
+      "CONCEDE",
+      "THREATEN"
+    ]
+  },
+  "ACCUSE": {
+    "definition": "ACCUSE covers a wide range of events, including any kind of accusation, disapproval or criticism, investigation, or legal accusation",
+    "modes": {
+      "disapprove": "Express disapprovals, objections, and complaints",
+      "investigate": "Any investigation, including commissions, grand juries, judicial or political",
+      "allege": "Formally or informally accuse"
+    },
+    "exemplars": [],
+    "notes": [
+      "NOTE: Protests (including protests expressing disapproval) are coded under a separate PROTEST category. Protests DO NOT fall under this category."
+    ],
+    "contrasts": [
+      "AGREE",
+      "RETREAT",
+      "ASSAULT"
+    ]
+  },
+  "REJECT": {
+    "definition": "All rejections and refusals.",
+    "modes": {
+      "assist": "reject a request for assistance",
+      "change": "reject a request for change in policy",
+      "yield": "reject a request to release prisoners or hostages",
+      "meet": "reject a request for a meeting"
+    },
+    "exemplars": [],
+    "notes": [
+      "The ACTOR is the entity making the rejection. The RECIPIENT is the target of the rejection"
+    ],
+    "contrasts": [
+      "REQUEST",
+      "AID",
+      "CONSULT"
+    ]
+  },
+  "THREATEN": {
+    "definition": "All threats, coercive or forceful warnings with serious potential repercussions. Threats are generally verbal acts except for purely symbolic material actions such as having an unarmed group place a flag on some territory.",
+    "modes": {
+      "restrict": "threaten to restrict movement of people or goods, including boycotts, strikes, blockades, and curfews",
+      "ban": "Threaten to ban political activities of particular parties or individuals",
+      "arrest": "Threaten to arrest, detain, or imprison",
+      "relations": "Threaten to suspend relations or talks",
+      "rights": "Threaten to restrict civil rights such as speech, expression, and assembly",
+      "expel": "Threaten to expel diplomats, peacekeepers, NGOs, etc",
+      "territory": "Threaten to occupy, seize control of the whole or part of a territory",
+      "violence": "Threaten violence"
+    },
+    "exemplars": [
+      "All threats, coercive or forceful warnings with serious potential repercussions. Threats are generally verbal acts except for purely symbolic material actions such as having an unarmed group place a flag on some territory."
+    ],
+    "notes": [],
+    "contrasts": [
+      "COERCE",
+      "REQUEST",
+      "RETREAT"
+    ]
+  },
+  "PROTEST": {
+    "definition": "All civilian demonstrations and other collective actions carried out as protests against the recipient.",
+    "modes": {
+      "demo": "Organized protest/demonstration. Distinct, continuous, and largely peaceful action directed toward members of a distinct \u2018other\u2019 group or government authorities",
+      "riot": "Violent riot. Distinct, continuous and violent action directed toward members of a distinct \u2018other\u2019 group or government authorities. The participants intend to cause physical injury and/or property damage",
+      "strike": "Labor strike. Members of an organization or union engage in the abandonment of work- places, either within specific sectors/industries or across sectors/industries",
+      "hunger": "Hunger strike",
+      "boycott": "The boycott of an activity, person, country, or organization via the withdrawal of commercial or social relations",
+      "obstruct": "Protest by obstructing passage or access to a particular locale"
+    },
+    "exemplars": [],
+    "notes": [],
+    "contrasts": [
+      "SANCTION",
+      "RETREAT",
+      "THREATEN"
+    ]
+  },
+  "SANCTION": {
+    "definition": "All reductions in existing, routine, or cooperative relations",
+    "modes": {
+      "convict": "Find an entity or behavior guilty, unconstitutional",
+      "expel": "Permanently or temporarily expel an entity from a group, organization, political party, or country.",
+      "withdraw": "A country withdraws itself from an organization, treaty, or group",
+      "discontinue": "Curtail, decrease, break, or terminate diplomatic, commercial, or material ex- changes"
+    },
+    "exemplars": [],
+    "notes": [],
+    "contrasts": [
+      "PROTEST",
+      "SUPPORT",
+      "THREATEN"
+    ]
+  },
+  "MOBILIZE": {
+    "definition": "All military or police moves, deployments, activations, etc. that fall short of the actual use of force. Note that the *use* of forces does not fall under this definition.",
+    "modes": {
+      "troops": "Mobilize armed personnel or units (excluding police)",
+      "weapons": "Increase readiness of weapons systems",
+      "police": "Mobilize or increase readiness of police or security units",
+      "militia": "Mobilize or increase readiness of any militia or non-state entity with significant military capability"
+    },
+    "exemplars": [],
+    "notes": [],
+    "contrasts": [
+      "RETREAT",
+      "COERCE",
+      "ASSAULT"
+    ]
+  },
+  "COERCE": {
+    "definition": "Repression, restrictions on rights, or coercive uses of power falling short of violence.",
+    "modes": {
+      "seize": "Police or other authorities executing a search",
+      "restrict": "Impose restrictions on political freedoms or movement",
+      "ban": "Ban individuals or organizations",
+      "censor": "Censor, ban or restrict access to publications or other information",
+      "curfew": "Impose state of emergency or martial law",
+      "arrest": "Arrest or detain people",
+      "deport": "Expel or deport individuals",
+      "withhold": "Withhold public goods/services",
+      "misinformation": "engage in deception/manipulation/misinformation operations",
+      "cyber": "Engage in cyber attacks and crime, including hacking, security breaches, website attacks"
+    },
+    "exemplars": [],
+    "notes": [],
+    "contrasts": [
+      "THREATEN",
+      "ASSAULT",
+      "MOBILIZE"
+    ]
+  },
+  "ASSAULT": {
+    "definition": "ASSAULT events are deliberate actions which can potentially result in substantial physical harm, including violence, battles, or assaults.",
+    "modes": {
+      "abduct": "Abduct or kidnap people",
+      "beat": "beating; physically assault by striking individuals or groups with one-off or repeated blows, typically administered manually or by blunt instrument",
+      "torture": "torture",
+      "execute": "Judicially-sanctioned execution",
+      "sexual": "sexual violence",
+      "assassinate": "Targeted assassinations (both successful and attempted) with any weapon",
+      "destroy": "Destroy property, demolish as part of a conflict",
+      "primitive": "Attack someone with primitive weapons: fire, edged weapons, rocks, farm implements",
+      "firearms": "Use firearms, including fifles, pistols, light machine guns to attack someone.",
+      "explosives": "Use mines, IEDS, car bombs (excludes suicide attacks)",
+      "suicide-attack": "Use suicide attacks, both individual attacks and suicide car bombings",
+      "aerial": "Use any manned aerial vehicles, e.g. aircraft, helicopters to carry out an attack",
+      "drone": "Use unmanned aerial vehicles (UAVs), drones to carry out an attack",
+      "heavy-weapons": "Attack someone using heavy weapons, including artillery, rocket launchers, armored vehicles, tanks, and similar weapons",
+      "crowd-control": "Use \"crowd control\" weapons, including tear gas, water cannons, firing weapons in the air, lathi charges, etc.",
+      "cleansing": "Engage in mass expulsions or deportations",
+      "massacre": "Instances of mass killing or massacres",
+      "unconventional": "Use of chemical, biological, radiation, and nuclear weapons"
+    },
+    "exemplars": [],
+    "notes": [],
+    "contrasts": [
+      "COERCE",
+      "MOBILIZE",
+      "RETREAT"
+    ]
+  }
+}

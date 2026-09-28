@@ -1,0 +1,716 @@
+{
+  "types": {
+    "ACCUSE": {
+      "precision": 0.764367816091954,
+      "recall": 0.6683417085427136,
+      "f1": 0.7131367292225201,
+      "average_precision": 0.8058145151424229,
+      "threshold": 0.6500000000000001,
+      "n": 488,
+      "n_positive": 199,
+      "base_rate": 0.4077868852459016
+    },
+    "AGREE": {
+      "precision": 0.515625,
+      "recall": 0.6875,
+      "f1": 0.5892857142857143,
+      "average_precision": 0.6543206732119935,
+      "threshold": 0.6000000000000001,
+      "n": 498,
+      "n_positive": 48,
+      "base_rate": 0.0963855421686747
+    },
+    "AID": {
+      "precision": 0.5,
+      "recall": 0.5227272727272727,
+      "f1": 0.5111111111111111,
+      "average_precision": 0.545174451451599,
+      "threshold": 0.6500000000000001,
+      "n": 499,
+      "n_positive": 44,
+      "base_rate": 0.08817635270541083
+    },
+    "ASSAULT": {
+      "precision": 0.8303571428571429,
+      "recall": 0.6888888888888889,
+      "f1": 0.7530364372469636,
+      "average_precision": 0.8654353356852585,
+      "threshold": 0.55,
+      "n": 500,
+      "n_positive": 135,
+      "base_rate": 0.27
+    },
+    "COERCE": {
+      "precision": 0.45394736842105265,
+      "recall": 0.8023255813953488,
+      "f1": 0.5798319327731093,
+      "average_precision": 0.6701819855705935,
+      "threshold": 0.5,
+      "n": 500,
+      "n_positive": 86,
+      "base_rate": 0.172
+    },
+    "CONCEDE": {
+      "precision": 0.11764705882352941,
+      "recall": 0.25,
+      "f1": 0.16,
+      "average_precision": 0.14280399509996378,
+      "threshold": 0.5,
+      "n": 500,
+      "n_positive": 8,
+      "base_rate": 0.016
+    },
+    "CONSULT": {
+      "precision": 0.5897435897435898,
+      "recall": 0.7419354838709677,
+      "f1": 0.6571428571428571,
+      "average_precision": 0.7682005617691632,
+      "threshold": 0.55,
+      "n": 500,
+      "n_positive": 62,
+      "base_rate": 0.124
+    },
+    "COOPERATE": {
+      "precision": 0.36666666666666664,
+      "recall": 0.5,
+      "f1": 0.4230769230769231,
+      "average_precision": 0.39003542528040197,
+      "threshold": 0.7000000000000001,
+      "n": 499,
+      "n_positive": 22,
+      "base_rate": 0.04408817635270541
+    },
+    "MOBILIZE": {
+      "precision": 0.5,
+      "recall": 0.6333333333333333,
+      "f1": 0.5588235294117647,
+      "average_precision": 0.5721899635413007,
+      "threshold": 0.7500000000000001,
+      "n": 499,
+      "n_positive": 30,
+      "base_rate": 0.06012024048096192
+    },
+    "PROTEST": {
+      "precision": 0.5769230769230769,
+      "recall": 0.7627118644067796,
+      "f1": 0.656934306569343,
+      "average_precision": 0.7556081347054321,
+      "threshold": 0.35000000000000003,
+      "n": 499,
+      "n_positive": 59,
+      "base_rate": 0.11823647294589178
+    },
+    "REJECT": {
+      "precision": 0.42105263157894735,
+      "recall": 0.5614035087719298,
+      "f1": 0.48120300751879697,
+      "average_precision": 0.5396079165166466,
+      "threshold": 0.6000000000000001,
+      "n": 500,
+      "n_positive": 57,
+      "base_rate": 0.114
+    },
+    "REQUEST": {
+      "precision": 0.554140127388535,
+      "recall": 0.6692307692307692,
+      "f1": 0.6062717770034843,
+      "average_precision": 0.6626201081051912,
+      "threshold": 0.5,
+      "n": 498,
+      "n_positive": 130,
+      "base_rate": 0.26104417670682734
+    },
+    "RETREAT": {
+      "precision": 0.35,
+      "recall": 0.3888888888888889,
+      "f1": 0.3684210526315789,
+      "average_precision": 0.3491556945857433,
+      "threshold": 0.5,
+      "n": 500,
+      "n_positive": 36,
+      "base_rate": 0.072
+    },
+    "SANCTION": {
+      "precision": 0.5609756097560976,
+      "recall": 0.5111111111111111,
+      "f1": 0.5348837209302325,
+      "average_precision": 0.5553604929926252,
+      "threshold": 0.7000000000000001,
+      "n": 500,
+      "n_positive": 45,
+      "base_rate": 0.09
+    },
+    "SUPPORT": {
+      "precision": 0.2782608695652174,
+      "recall": 0.6530612244897959,
+      "f1": 0.3902439024390244,
+      "average_precision": 0.38639845463282757,
+      "threshold": 0.4,
+      "n": 499,
+      "n_positive": 49,
+      "base_rate": 0.09819639278557114
+    },
+    "THREATEN": {
+      "precision": 0.3409090909090909,
+      "recall": 0.3488372093023256,
+      "f1": 0.3448275862068966,
+      "average_precision": 0.37028380505827985,
+      "threshold": 0.6500000000000001,
+      "n": 496,
+      "n_positive": 43,
+      "base_rate": 0.08669354838709678
+    }
+  },
+  "modes": {
+    "ACCUSE-allege": {
+      "precision": 0.6031746031746031,
+      "recall": 0.957983193277311,
+      "f1": 0.7402597402597403,
+      "average_precision": 0.8118794957644162,
+      "threshold": 0.1,
+      "n": 199,
+      "n_positive": 119,
+      "base_rate": 0.5979899497487438
+    },
+    "ACCUSE-disapprove": {
+      "precision": 0.7714285714285715,
+      "recall": 0.5242718446601942,
+      "f1": 0.6242774566473989,
+      "average_precision": 0.7685170500422943,
+      "threshold": 0.7000000000000001,
+      "n": 199,
+      "n_positive": 103,
+      "base_rate": 0.5175879396984925
+    },
+    "ACCUSE-investigate": {
+      "precision": 0.5151515151515151,
+      "recall": 0.68,
+      "f1": 0.5862068965517241,
+      "average_precision": 0.5563013621483525,
+      "threshold": 0.35000000000000003,
+      "n": 199,
+      "n_positive": 25,
+      "base_rate": 0.12562814070351758
+    },
+    "ASSAULT-abduct": {
+      "precision": 0.35714285714285715,
+      "recall": 0.5,
+      "f1": 0.4166666666666667,
+      "average_precision": 0.4843062988296738,
+      "threshold": 0.25,
+      "n": 135,
+      "n_positive": 10,
+      "base_rate": 0.07407407407407407
+    },
+    "ASSAULT-aerial": {
+      "precision": 0.7333333333333333,
+      "recall": 0.5238095238095238,
+      "f1": 0.6111111111111112,
+      "average_precision": 0.6692766613030985,
+      "threshold": 0.6000000000000001,
+      "n": 135,
+      "n_positive": 21,
+      "base_rate": 0.15555555555555556
+    },
+    "ASSAULT-assassinate": {
+      "precision": 0.3333333333333333,
+      "recall": 0.4666666666666667,
+      "f1": 0.3888888888888889,
+      "average_precision": 0.5115289705256418,
+      "threshold": 0.25,
+      "n": 135,
+      "n_positive": 15,
+      "base_rate": 0.1111111111111111
+    },
+    "ASSAULT-beat": {
+      "precision": 0.5,
+      "recall": 0.5333333333333333,
+      "f1": 0.5161290322580645,
+      "average_precision": 0.6175059792571314,
+      "threshold": 0.4,
+      "n": 135,
+      "n_positive": 15,
+      "base_rate": 0.1111111111111111
+    },
+    "ASSAULT-crowd-control": {
+      "precision": 0.5714285714285714,
+      "recall": 1.0,
+      "f1": 0.7272727272727273,
+      "average_precision": 1.0,
+      "threshold": 0.6500000000000001,
+      "n": 135,
+      "n_positive": 8,
+      "base_rate": 0.05925925925925926
+    },
+    "ASSAULT-destroy": {
+      "precision": 0.13157894736842105,
+      "recall": 0.45454545454545453,
+      "f1": 0.20408163265306123,
+      "average_precision": 0.1610679816949167,
+      "threshold": 0.45,
+      "n": 135,
+      "n_positive": 11,
+      "base_rate": 0.08148148148148149
+    },
+    "ASSAULT-explosives": {
+      "precision": 0.5833333333333334,
+      "recall": 0.6086956521739131,
+      "f1": 0.5957446808510638,
+      "average_precision": 0.6436084340348575,
+      "threshold": 0.6000000000000001,
+      "n": 135,
+      "n_positive": 23,
+      "base_rate": 0.17037037037037037
+    },
+    "ASSAULT-firearms": {
+      "precision": 0.5476190476190477,
+      "recall": 0.6052631578947368,
+      "f1": 0.575,
+      "average_precision": 0.6354306290837497,
+      "threshold": 0.6000000000000001,
+      "n": 135,
+      "n_positive": 38,
+      "base_rate": 0.2814814814814815
+    },
+    "ASSAULT-heavy-weapons": {
+      "precision": 0.5652173913043478,
+      "recall": 0.5652173913043478,
+      "f1": 0.5652173913043478,
+      "average_precision": 0.6415908966043797,
+      "threshold": 0.5,
+      "n": 135,
+      "n_positive": 23,
+      "base_rate": 0.17037037037037037
+    },
+    "ASSAULT-massacre": {
+      "precision": 0.15517241379310345,
+      "recall": 0.6923076923076923,
+      "f1": 0.2535211267605634,
+      "average_precision": 0.2326046823811302,
+      "threshold": 0.3,
+      "n": 135,
+      "n_positive": 13,
+      "base_rate": 0.0962962962962963
+    },
+    "ASSAULT-primitive": {
+      "precision": 0.08333333333333333,
+      "recall": 0.3333333333333333,
+      "f1": 0.13333333333333333,
+      "average_precision": 0.0744752902807614,
+      "threshold": 0.45,
+      "n": 135,
+      "n_positive": 6,
+      "base_rate": 0.044444444444444446
+    },
+    "ASSAULT-sexual": {
+      "precision": 0.7142857142857143,
+      "recall": 0.625,
+      "f1": 0.6666666666666666,
+      "average_precision": 0.6988165060745706,
+      "threshold": 0.4,
+      "n": 135,
+      "n_positive": 8,
+      "base_rate": 0.05925925925925926
+    },
+    "ASSAULT-suicide-attack": {
+      "precision": 0.7692307692307693,
+      "recall": 0.9090909090909091,
+      "f1": 0.8333333333333334,
+      "average_precision": 0.8208448117539027,
+      "threshold": 0.6000000000000001,
+      "n": 135,
+      "n_positive": 11,
+      "base_rate": 0.08148148148148149
+    },
+    "ASSAULT-torture": {
+      "precision": 0.7142857142857143,
+      "recall": 0.5555555555555556,
+      "f1": 0.625,
+      "average_precision": 0.5534391534391534,
+      "threshold": 0.45,
+      "n": 135,
+      "n_positive": 9,
+      "base_rate": 0.06666666666666667
+    },
+    "COERCE-arrest": {
+      "precision": 0.7924528301886793,
+      "recall": 0.8936170212765957,
+      "f1": 0.84,
+      "average_precision": 0.9522251431157541,
+      "threshold": 0.25,
+      "n": 86,
+      "n_positive": 47,
+      "base_rate": 0.5465116279069767
+    },
+    "COERCE-ban": {
+      "precision": 0.7272727272727273,
+      "recall": 0.5333333333333333,
+      "f1": 0.6153846153846154,
+      "average_precision": 0.7085489654799118,
+      "threshold": 0.6000000000000001,
+      "n": 86,
+      "n_positive": 15,
+      "base_rate": 0.1744186046511628
+    },
+    "COERCE-censor": {
+      "precision": 0.5,
+      "recall": 0.4,
+      "f1": 0.4444444444444444,
+      "average_precision": 0.5334604978354978,
+      "threshold": 0.25,
+      "n": 86,
+      "n_positive": 10,
+      "base_rate": 0.11627906976744186
+    },
+    "COERCE-curfew": {
+      "precision": 0.2857142857142857,
+      "recall": 0.3333333333333333,
+      "f1": 0.3076923076923077,
+      "average_precision": 0.33413865546218485,
+      "threshold": 0.45,
+      "n": 86,
+      "n_positive": 6,
+      "base_rate": 0.06976744186046512
+    },
+    "COERCE-cyber": {
+      "precision": 0.6666666666666666,
+      "recall": 0.6666666666666666,
+      "f1": 0.6666666666666666,
+      "average_precision": 0.6666666666666666,
+      "threshold": 0.7000000000000001,
+      "n": 86,
+      "n_positive": 3,
+      "base_rate": 0.03488372093023256
+    },
+    "COERCE-deport": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "average_precision": 0.3780825496342738,
+      "threshold": 0.7500000000000001,
+      "n": 86,
+      "n_positive": 4,
+      "base_rate": 0.046511627906976744
+    },
+    "COERCE-restrict": {
+      "precision": 0.4473684210526316,
+      "recall": 0.7083333333333334,
+      "f1": 0.5483870967741935,
+      "average_precision": 0.5949516928309658,
+      "threshold": 0.5,
+      "n": 86,
+      "n_positive": 24,
+      "base_rate": 0.27906976744186046
+    },
+    "COERCE-seize": {
+      "precision": 0.3333333333333333,
+      "recall": 0.1111111111111111,
+      "f1": 0.16666666666666666,
+      "average_precision": 0.18268723050670313,
+      "threshold": 0.7000000000000001,
+      "n": 86,
+      "n_positive": 9,
+      "base_rate": 0.10465116279069768
+    },
+    "COERCE-withhold": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "average_precision": 0.3709491119102103,
+      "threshold": 0.8,
+      "n": 86,
+      "n_positive": 5,
+      "base_rate": 0.05813953488372093
+    },
+    "CONSULT-multilateral": {
+      "precision": 0.625,
+      "recall": 0.6666666666666666,
+      "f1": 0.6451612903225806,
+      "average_precision": 0.6223965528589331,
+      "threshold": 0.4,
+      "n": 62,
+      "n_positive": 15,
+      "base_rate": 0.24193548387096775
+    },
+    "CONSULT-phone": {
+      "precision": 0.4,
+      "recall": 0.5,
+      "f1": 0.4444444444444444,
+      "average_precision": 0.6166666666666667,
+      "threshold": 0.5,
+      "n": 62,
+      "n_positive": 4,
+      "base_rate": 0.06451612903225806
+    },
+    "CONSULT-third-party": {
+      "precision": 0.2222222222222222,
+      "recall": 0.5,
+      "f1": 0.3076923076923077,
+      "average_precision": 0.43134920634920637,
+      "threshold": 0.3,
+      "n": 62,
+      "n_positive": 4,
+      "base_rate": 0.06451612903225806
+    },
+    "CONSULT-visit": {
+      "precision": 0.71875,
+      "recall": 0.6764705882352942,
+      "f1": 0.696969696969697,
+      "average_precision": 0.8505402727210456,
+      "threshold": 0.55,
+      "n": 62,
+      "n_positive": 34,
+      "base_rate": 0.5483870967741935
+    },
+    "MOBILIZE-police": {
+      "precision": 0.2857142857142857,
+      "recall": 0.6666666666666666,
+      "f1": 0.4,
+      "average_precision": 0.6111111111111112,
+      "threshold": 0.25,
+      "n": 30,
+      "n_positive": 3,
+      "base_rate": 0.1
+    },
+    "MOBILIZE-troops": {
+      "precision": 0.6818181818181818,
+      "recall": 0.7894736842105263,
+      "f1": 0.7317073170731707,
+      "average_precision": 0.7366831241999501,
+      "threshold": 0.35000000000000003,
+      "n": 30,
+      "n_positive": 19,
+      "base_rate": 0.6333333333333333
+    },
+    "MOBILIZE-weapons": {
+      "precision": 0.7142857142857143,
+      "recall": 0.45454545454545453,
+      "f1": 0.5555555555555556,
+      "average_precision": 0.7943925957083853,
+      "threshold": 0.45,
+      "n": 30,
+      "n_positive": 11,
+      "base_rate": 0.36666666666666664
+    },
+    "PROTEST-demo": {
+      "precision": 0.9111111111111111,
+      "recall": 0.9111111111111111,
+      "f1": 0.9111111111111111,
+      "average_precision": 0.9451164338916794,
+      "threshold": 0.45,
+      "n": 59,
+      "n_positive": 45,
+      "base_rate": 0.7627118644067796
+    },
+    "PROTEST-obstruct": {
+      "precision": 0.5,
+      "recall": 0.5,
+      "f1": 0.5,
+      "average_precision": 0.5688854489164087,
+      "threshold": 0.4,
+      "n": 59,
+      "n_positive": 4,
+      "base_rate": 0.06779661016949153
+    },
+    "PROTEST-riot": {
+      "precision": 0.5789473684210527,
+      "recall": 0.8461538461538461,
+      "f1": 0.6875,
+      "average_precision": 0.6133431325781705,
+      "threshold": 0.35000000000000003,
+      "n": 59,
+      "n_positive": 13,
+      "base_rate": 0.22033898305084745
+    },
+    "PROTEST-strike": {
+      "precision": 0.5555555555555556,
+      "recall": 0.625,
+      "f1": 0.5882352941176471,
+      "average_precision": 0.502672735760971,
+      "threshold": 0.55,
+      "n": 59,
+      "n_positive": 8,
+      "base_rate": 0.13559322033898305
+    },
+    "REJECT-assist": {
+      "precision": 0.3333333333333333,
+      "recall": 0.45454545454545453,
+      "f1": 0.38461538461538464,
+      "average_precision": 0.3423732429282845,
+      "threshold": 0.4,
+      "n": 56,
+      "n_positive": 11,
+      "base_rate": 0.19642857142857142
+    },
+    "REJECT-change": {
+      "precision": 0.6538461538461539,
+      "recall": 0.5483870967741935,
+      "f1": 0.5964912280701754,
+      "average_precision": 0.6437262549921078,
+      "threshold": 0.45,
+      "n": 56,
+      "n_positive": 31,
+      "base_rate": 0.5535714285714286
+    },
+    "REJECT-meet": {
+      "precision": 0.09090909090909091,
+      "recall": 0.16666666666666666,
+      "f1": 0.11764705882352941,
+      "average_precision": 0.28948530763656816,
+      "threshold": 0.6000000000000001,
+      "n": 56,
+      "n_positive": 6,
+      "base_rate": 0.10714285714285714
+    },
+    "REQUEST-assist": {
+      "precision": 0.3333333333333333,
+      "recall": 0.058823529411764705,
+      "f1": 0.1,
+      "average_precision": 0.2349055695866688,
+      "threshold": 0.8,
+      "n": 130,
+      "n_positive": 17,
+      "base_rate": 0.13076923076923078
+    },
+    "REQUEST-change": {
+      "precision": 0.6774193548387096,
+      "recall": 0.7325581395348837,
+      "f1": 0.7039106145251397,
+      "average_precision": 0.6809078020941688,
+      "threshold": 0.45,
+      "n": 130,
+      "n_positive": 86,
+      "base_rate": 0.6615384615384615
+    },
+    "REQUEST-meet": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "average_precision": 0.1018575766778014,
+      "threshold": 0.7500000000000001,
+      "n": 130,
+      "n_positive": 5,
+      "base_rate": 0.038461538461538464
+    },
+    "REQUEST-yield": {
+      "precision": 0.6666666666666666,
+      "recall": 0.8571428571428571,
+      "f1": 0.75,
+      "average_precision": 0.644047619047619,
+      "threshold": 0.55,
+      "n": 130,
+      "n_positive": 7,
+      "base_rate": 0.05384615384615385
+    },
+    "RETREAT-ceasefire": {
+      "precision": 0.8,
+      "recall": 1.0,
+      "f1": 0.8888888888888888,
+      "average_precision": 0.95,
+      "threshold": 0.5,
+      "n": 36,
+      "n_positive": 4,
+      "base_rate": 0.1111111111111111
+    },
+    "RETREAT-release": {
+      "precision": 0.6470588235294118,
+      "recall": 0.9166666666666666,
+      "f1": 0.7586206896551724,
+      "average_precision": 0.8923703611203612,
+      "threshold": 0.45,
+      "n": 36,
+      "n_positive": 12,
+      "base_rate": 0.3333333333333333
+    },
+    "RETREAT-resign": {
+      "precision": 1.0,
+      "recall": 1.0,
+      "f1": 1.0,
+      "average_precision": 1.0,
+      "threshold": 0.3,
+      "n": 36,
+      "n_positive": 2,
+      "base_rate": 0.05555555555555555
+    },
+    "RETREAT-withdraw": {
+      "precision": 0.8333333333333334,
+      "recall": 0.5,
+      "f1": 0.625,
+      "average_precision": 0.9208444333444333,
+      "threshold": 0.6500000000000001,
+      "n": 36,
+      "n_positive": 10,
+      "base_rate": 0.2777777777777778
+    },
+    "SANCTION-convict": {
+      "precision": 0.8461538461538461,
+      "recall": 0.9166666666666666,
+      "f1": 0.88,
+      "average_precision": 0.886154354904355,
+      "threshold": 0.6000000000000001,
+      "n": 45,
+      "n_positive": 12,
+      "base_rate": 0.26666666666666666
+    },
+    "SANCTION-discontinue": {
+      "precision": 0.6571428571428571,
+      "recall": 0.9583333333333334,
+      "f1": 0.7796610169491526,
+      "average_precision": 0.9074209341881088,
+      "threshold": 0.1,
+      "n": 45,
+      "n_positive": 24,
+      "base_rate": 0.5333333333333333
+    },
+    "SANCTION-expel": {
+      "precision": 0.2857142857142857,
+      "recall": 0.5714285714285714,
+      "f1": 0.38095238095238093,
+      "average_precision": 0.4355811239451792,
+      "threshold": 0.2,
+      "n": 45,
+      "n_positive": 7,
+      "base_rate": 0.15555555555555556
+    },
+    "SANCTION-withdraw": {
+      "precision": 0.5,
+      "recall": 0.5,
+      "f1": 0.5,
+      "average_precision": 0.2803030303030303,
+      "threshold": 0.7500000000000001,
+      "n": 45,
+      "n_positive": 2,
+      "base_rate": 0.044444444444444446
+    },
+    "THREATEN-relations": {
+      "precision": 0.07692307692307693,
+      "recall": 0.3333333333333333,
+      "f1": 0.125,
+      "average_precision": 0.08302005012531329,
+      "threshold": 0.4,
+      "n": 43,
+      "n_positive": 3,
+      "base_rate": 0.06976744186046512
+    },
+    "THREATEN-restrict": {
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "average_precision": 0.11805555555555555,
+      "threshold": 0.5,
+      "n": 43,
+      "n_positive": 2,
+      "base_rate": 0.046511627906976744
+    },
+    "THREATEN-violence": {
+      "precision": 0.5151515151515151,
+      "recall": 0.8095238095238095,
+      "f1": 0.6296296296296297,
+      "average_precision": 0.7787833217663724,
+      "threshold": 0.35000000000000003,
+      "n": 43,
+      "n_positive": 21,
+      "base_rate": 0.4883720930232558
+    }
+  }
+}

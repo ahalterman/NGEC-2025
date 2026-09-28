@@ -1,0 +1,262 @@
+[
+  {
+    "id": "east-asia_beijing-readies-2-new-aircraft-carriers",
+    "candidates": [
+      "MOBILIZE",
+      "THREATEN",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "MOBILIZE": "The deployment this year of a second aircraft carrier and construction of a third",
+      "THREATEN": "The U.S. Navy has passed ships though the sea 10 times under U.S. President Donald Trump",
+      "ACCUSE": "Beijing calls the U.S. passages violations of Chinese sovereignty"
+    }
+  },
+  {
+    "id": "usa_tiger-woods-speak-publicly-friday",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "africa_scientists-gather-aids-vaccine-2011",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "silicon-valley-technology_social-medias-year-falling-grace",
+    "candidates": [
+      "ACCUSE",
+      "PROTEST",
+      "COERCE",
+      "REQUEST"
+    ],
+    "quotes": {
+      "ACCUSE": "serving as instruments of manipulation used by powerful interests and foreign governments to rob the people",
+      "PROTEST": "Google workers staged a worldwide walkout over the treatment of female colleagues",
+      "COERCE": "tightened restrictions on the kinds of speech they tolerate on their sites",
+      "REQUEST": "Tech workers pressed managers about their company’s government contracts"
+    }
+  },
+  {
+    "id": "usa_sessions-rejects-call-appointing-2nd-special-counse",
+    "candidates": [
+      "REJECT",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "REJECT": "a special counsel was not needed to probe the case",
+      "ACCUSE": "Utah U.S. Attorney John Huber was investigating Republican lawmakers' allegations against the FBI"
+    }
+  },
+  {
+    "id": "a_car-bomb-and-gun-attack-on-pakistan-military-compound_7698526",
+    "candidates": [
+      "ASSAULT",
+      "ACCUSE",
+      "REQUEST",
+      "REJECT",
+      "CONSULT"
+    ],
+    "quotes": {
+      "ASSAULT": "a suicide bomber drove an explosive-laden vehicle into a military compound",
+      "ACCUSE": "Pakistan maintains TTP leaders and fighters orchestrated the violence from their sanctuaries on Afghan soil",
+      "REQUEST": "We urge Afghanistan to take concrete and effective action against these entities",
+      "REJECT": "Taliban government spokesperson Zabihullah Mujahid rejected the U.N. report in a statement over the weekend",
+      "CONSULT": "has been the subject of bilateral discussions with Afghanistan for the last several months"
+    }
+  },
+  {
+    "id": "africa_when-cat-catches-sun-translated-forecasts-aim-aid-africas-farmers",
+    "candidates": [
+      "AID"
+    ],
+    "quotes": {
+      "AID": "British government-funded Building Resilience and Adaptation to Climate Extremes and Disasters (BRACED) program"
+    }
+  },
+  {
+    "id": "east-asia-pacific_south-korea-proposes-high-level-talks-nor",
+    "candidates": [
+      "AGREE",
+      "REJECT",
+      "CONSULT",
+      "REQUEST"
+    ],
+    "quotes": {
+      "AGREE": "his government is ready to hold high-level talks with Pyongyang",
+      "REJECT": "improved relations are impossible as long as the government of President Lee Myung-bak stays in office",
+      "CONSULT": "Campbell, who met with South Korean officials in Seoul Thursday",
+      "REQUEST": "He also called on China - North Korea's closest ally - to use its influence"
+    }
+  },
+  {
+    "id": "press-freedom_iraq-suspends-reuters-license-over-covid-19-repor",
+    "candidates": [
+      "COERCE",
+      "ACCUSE",
+      "REQUEST",
+      "REJECT"
+    ],
+    "quotes": {
+      "COERCE": "Baghdad's Communications and Media Commission on Thursday barred the outlet and fined it 25 million",
+      "ACCUSE": "the media regulator issued a statement accusing Reuters of",
+      "REQUEST": "The regulator called on Reuters to issue a public apology",
+      "REJECT": "Reuters told VOA it stands by its story"
+    }
+  },
+  {
+    "id": "archive_argentine-farmers-launch-new-strike",
+    "candidates": [
+      "PROTEST",
+      "REQUEST",
+      "REJECT",
+      "SUPPORT"
+    ],
+    "quotes": {
+      "PROTEST": "Argentine farmers say they will start a new strike this Friday",
+      "REQUEST": "The farmers say the government has failed to respond to their demands",
+      "REJECT": "the Argentine Senate narrowly rejected the controversial tax increase",
+      "SUPPORT": "President Fernandez had defended the increase, saying the money would have been used to help"
+    }
+  },
+  {
+    "id": "a_burkina-faso-journalist-gives-voice-to-conflict-survivors-telling-difficult-stories_7386989",
+    "candidates": [
+      "ASSAULT"
+    ],
+    "quotes": {
+      "ASSAULT": "recalling interviews with women raped, sometimes by several people, in front of their children"
+    }
+  },
+  {
+    "id": "africa_rescued-chibok-girl-reunited-mother",
+    "candidates": [
+      "RETREAT",
+      "ASSAULT",
+      "MOBILIZE",
+      "PROTEST",
+      "SUPPORT",
+      "COERCE"
+    ],
+    "quotes": {
+      "RETREAT": "Nigerian soldiers rescued the girl in a village called Baale",
+      "ASSAULT": "Boko Haram has massacred civilians, burnt down villages and carried out numerous kidnappings",
+      "MOBILIZE": "The army recently launched a military offensive aimed at putting pressure on Boko Haram",
+      "PROTEST": "It sparked protests across Nigeria, as people took to the streets, imploring the government",
+      "SUPPORT": "U.N. Humanitarian chief Stephen O'Brien welcomed news of the girl's rescue",
+      "COERCE": "The man, suspected of being a Boko Haram militant, is being questioned at the same base"
+    }
+  },
+  {
+    "id": "europe_us-britain-france-accused-snubbing-anti-nuclear-nobel-prize",
+    "candidates": [
+      "ACCUSE",
+      "SUPPORT",
+      "THREATEN",
+      "COERCE"
+    ],
+    "quotes": {
+      "ACCUSE": "accused the United States, Britain and France on Wednesday of snubbing its disarmament work",
+      "SUPPORT": "which was adopted by 122 nations in July this year",
+      "THREATEN": "North Korea and the United States are exchanging threats to use nuclear weapons",
+      "COERCE": "the three nuclear states were exerting pressure on other nations"
+    }
+  },
+  {
+    "id": "usa_no-terror-cells-ny-bombing-suspect-likely-had-help",
+    "candidates": [
+      "ASSAULT",
+      "COERCE",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "ASSAULT": "a series of bombings and attempted bombings in New York and New Jersey",
+      "COERCE": "the suspect, 28-year-old Ahmad Rahami, was taken into custody after a shootout with police",
+      "ACCUSE": "investigators digging into Rahami's background will be searching for"
+    }
+  },
+  {
+    "id": "americas_chilean-police-make-first-arrest-church-abuse-scanda",
+    "candidates": [
+      "COERCE",
+      "ACCUSE",
+      "ASSAULT",
+      "RETREAT",
+      "AGREE"
+    ],
+    "quotes": {
+      "COERCE": "Chilean police have arrested a former Roman Catholic Church official",
+      "ACCUSE": "which Vatican officials accused in February of \"grave negligence\" and a cover-up in its handling",
+      "ASSAULT": "confessed earlier this year to sexually abusing at least five children",
+      "RETREAT": "they collectively offered their resignation over the sex abuse scandal",
+      "AGREE": "The Santiago Archbisopric reiterates its willingness to collaborate with the authorities in any way required"
+    }
+  },
+  {
+    "id": "a_ukraine-asks-australia-for-specialists-for-burn-victims-_7483068",
+    "candidates": [
+      "REQUEST",
+      "ASSAULT",
+      "AID",
+      "SANCTION",
+      "COERCE",
+      "REJECT"
+    ],
+    "quotes": {
+      "REQUEST": "Ukraine is urging Australia to share its world-leading approach to treating burn victims",
+      "ASSAULT": "the death toll rising from missile and drone strikes almost two years after Russia invaded",
+      "AID": "Australia is among the largest non-NATO contributors to Kyiv’s war effort, supplying missiles",
+      "SANCTION": "has imposed sanctions on hundreds of Russian politicians, including President Vladimir Putin",
+      "COERCE": "Canberra has banned imports of Russian oil, petroleum, coal and gas",
+      "REJECT": "both of which are refuted by Ukraine, the U.N., the United States and NATO"
+    }
+  },
+  {
+    "id": "east-asia-pacific_bo-xilais-wife-testifies-china-trial-continues",
+    "candidates": [
+      "REJECT",
+      "ACCUSE",
+      "COERCE",
+      "SANCTION"
+    ],
+    "quotes": {
+      "REJECT": "Thursday's hearing saw Bo firmly reject charges that he accepted millions of dollars in bribes",
+      "ACCUSE": "in an attempt to bolster the claim that he knowingly accepted bribes",
+      "COERCE": "foreign journalists have been barred, though 19 members of state media have been allowed inside",
+      "SANCTION": "Bo was stripped of his political posts and kicked out of the Communist Party"
+    }
+  },
+  {
+    "id": "world-news_middle-east-dont-use_car-bombs-kill-5-iraq",
+    "candidates": [
+      "ASSAULT"
+    ],
+    "quotes": {
+      "ASSAULT": "car bombings have killed at least five people"
+    }
+  },
+  {
+    "id": "usa_chelsea-manning-found-guilty-violating-prison-rules",
+    "candidates": [
+      "COERCE"
+    ],
+    "quotes": {
+      "COERCE": "will receive three weeks of recreational restrictions at the Kansas military prison"
+    }
+  },
+  {
+    "id": "africa_former-ruling-party-condemns-niger-coup",
+    "candidates": [
+      "ACCUSE",
+      "COERCE",
+      "SUPPORT",
+      "AGREE"
+    ],
+    "quotes": {
+      "ACCUSE": "Niger's former ruling party on Monday condemned last week's coup against President Mamadou Tandja",
+      "COERCE": "With President Tandja and his prime minister still under house arrest",
+      "SUPPORT": "We support the efforts of ECOWAS, the African Union and the United Nations to promote",
+      "AGREE": "the current coup leaders are promising to include all political parties, civil society groups"
+    }
+  }
+]

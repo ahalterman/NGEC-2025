@@ -1,0 +1,234 @@
+[
+  {
+    "id": "archive_us-lawmakers-urge-china-change-course-n-korean-defectors",
+    "candidates": [
+      "REQUEST",
+      "THREATEN",
+      "COERCE",
+      "CONSULT",
+      "ASSAULT",
+      "REJECT"
+    ],
+    "quotes": {
+      "REQUEST": "urging Beijing to take a different course",
+      "THREATEN": "threatened to quote 'exterminate three generations' of any family",
+      "COERCE": "Chinese authorities have detained dozens of North Koreans who have fled to China",
+      "CONSULT": "in meetings with Chinese Foreign Minister Yang Jiechi in South Korea last week",
+      "ASSAULT": "were beaten with the butt of a gun",
+      "REJECT": "China says it has the right to send them back"
+    }
+  },
+  {
+    "id": "archive_un-passes-resolution-end-israeli-palestinian-conflict-2002-03-13",
+    "candidates": [
+      "SUPPORT",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "SUPPORT": "Resolution 13-97 passed by a margin of 14 to nothing",
+      "ACCUSE": "was unhappy with the resolution's failure to address the question of the occupied territories"
+    }
+  },
+  {
+    "id": "archive_afghan-asylum-seekers-found-near-bali-coas",
+    "candidates": [
+      "AID",
+      "REJECT"
+    ],
+    "quotes": {
+      "AID": "a Singapore-registered tanker rescued around 120 Australia-bound asylum seekers",
+      "REJECT": "refused to get off the docked tanker for two days"
+    }
+  },
+  {
+    "id": "usa_us-issues-1-million-green-cards-naturalizes-757000-2012",
+    "candidates": [
+      "REQUEST"
+    ],
+    "quotes": {
+      "REQUEST": "Growing numbers of lawmakers are calling for a path to citizenship"
+    }
+  },
+  {
+    "id": "world-news_middle-east-dont-use_un-envoy-push-peace-plan-syria",
+    "candidates": [
+      "CONSULT",
+      "AGREE",
+      "REQUEST"
+    ],
+    "quotes": {
+      "CONSULT": "U.N. envoy Staffan de Mistura arrived in Damascus on Saturday for talks",
+      "AGREE": "the Syrian government had agreed to suspend airstrikes and artillery shelling",
+      "REQUEST": "a request for it to suspend rocket and mortar fire"
+    }
+  },
+  {
+    "id": "africa_reflections-30-years-hivaids",
+    "candidates": [
+      "AID",
+      "REQUEST"
+    ],
+    "quotes": {
+      "AID": "helping to put millions of people on antiretrovirals",
+      "REQUEST": "lawsuits demanding access to new AIDS drugs"
+    }
+  },
+  {
+    "id": "east-asia-pacific_south-china-sea-dispute-smolders-trump-administration-weighs-approac",
+    "candidates": [
+      "ACCUSE",
+      "MOBILIZE",
+      "REJECT"
+    ],
+    "quotes": {
+      "ACCUSE": "China’s militarization of the South China Sea is real",
+      "MOBILIZE": "The U.S. has been sending military planes and ships near contested islands",
+      "REJECT": "ignoring Beijing’s assertions over what it says are Chinese airspace and territorial waters"
+    }
+  },
+  {
+    "id": "east-asia_china-says-controls-internet-needed-maintain-stability",
+    "candidates": [
+      "COERCE",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "COERCE": "the Chinese government blocked access to a swathe of websites",
+      "ACCUSE": "a blunt censorship campaign"
+    }
+  },
+  {
+    "id": "africa_un-rights-chief-calls-end-worldwide-atrocities",
+    "candidates": [
+      "ACCUSE",
+      "REQUEST",
+      "ASSAULT"
+    ],
+    "quotes": {
+      "ACCUSE": "condemned the attacks on Syria’s northwestern provinces of Idlib, Aleppo and Hama",
+      "REQUEST": "calling on governments throughout the world to respect the rights and dignity of their people",
+      "ASSAULT": "increasing attacks and killings by Boko Haram, the Islamic State in West Africa group"
+    }
+  },
+  {
+    "id": "world-news_middle-east-dont-use_iran-threatens-retaliation-if-us-extends-sanctions",
+    "candidates": [
+      "THREATEN",
+      "SANCTION",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "THREATEN": "threatened Wednesday to retaliate against the United States",
+      "SANCTION": "the U.S. House of Representatives voted to renew the Iran Sanctions Act for 10 years",
+      "ACCUSE": "Iran said any sanctions would violate the spirit of the deal"
+    }
+  },
+  {
+    "id": "africa_south-sudanese-president-says-country-open-business",
+    "candidates": [
+      "AGREE",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "AGREE": "I want to invite you today to come with me to South Sudan",
+      "ACCUSE": "These companies bring these people from their country and employ them 100 percent"
+    }
+  },
+  {
+    "id": "east-asia-pacific_nato-commander-cautious-optimism-ahead-afghanistan-withdrawa",
+    "candidates": [
+      "ASSAULT",
+      "CONSULT"
+    ],
+    "quotes": {
+      "ASSAULT": "Taliban attacks continue in several parts of the country",
+      "CONSULT": "he has made numerous visits to Afghanistan to provide strategic guidance to troops and commanders"
+    }
+  },
+  {
+    "id": "student-union_separation-between-international-and-national-students-happens-everywhere",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "americas_survival-doubtful-trapped-ecuadorean-miners",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "east-asia_north-korea-seen-conducting-large-scale-military-drill-soon",
+    "candidates": [
+      "MOBILIZE",
+      "THREATEN",
+      "CONSULT",
+      "AGREE",
+      "REJECT"
+    ],
+    "quotes": {
+      "MOBILIZE": "North Korean troops, MiG-21 fighter jets and about 20 naval vessels  have assembled",
+      "THREATEN": "North Korea has been warning of military retaliation if  South Korea and the United States",
+      "CONSULT": "government officials of the two Koreas have held their",
+      "AGREE": "the United States invited a top-ranking North Korean diplomat  to New York",
+      "REJECT": "North  Korea has repeatedly denied that its torpedo sank the Cheonan warship"
+    }
+  },
+  {
+    "id": "usa_history-project-documents-jewish-life-small-town-america",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "a_6680410",
+    "candidates": [
+      "REQUEST",
+      "AID",
+      "COERCE"
+    ],
+    "quotes": {
+      "REQUEST": "Muriel Bowser has requested the deployment of military troops to assist with migrants",
+      "AID": "extended Temporary Protected Status (TPS) for Syrians living in the United States",
+      "COERCE": "The smugglers basically forced the migrants to disembark"
+    }
+  },
+  {
+    "id": "africa_positive-messaging-helps-revamp-ethiopias-image",
+    "candidates": [
+      "ACCUSE"
+    ],
+    "quotes": {
+      "ACCUSE": "accuse the government of violating basic democratic principles"
+    }
+  },
+  {
+    "id": "americas_rights-commission-mexicos-indigenous-migrant-workers-risk-enslavement-farms",
+    "candidates": [
+      "COERCE",
+      "AID",
+      "REQUEST",
+      "ASSAULT"
+    ],
+    "quotes": {
+      "COERCE": "Government raids in recent years have exposed forced labor, including child labor used in agriculture",
+      "AID": "were rescued from a cucumber farm in the Pacific state of Colima",
+      "REQUEST": "government labor inspector teams should carry out more raids on farms to rescue victims",
+      "ASSAULT": "mostly women and girls forced into sex work"
+    }
+  },
+  {
+    "id": "europe_italian-workers-stage-general-strike-amid-austerity-debate",
+    "candidates": [
+      "PROTEST",
+      "REQUEST",
+      "ACCUSE",
+      "CONSULT",
+      "AID"
+    ],
+    "quotes": {
+      "PROTEST": "workers took to the streets Tuesday to protest the massive austerity package",
+      "REQUEST": "faced calls for his resignation in recent months by opposition leaders",
+      "ACCUSE": "he is politically too weak to guide the nation through its debt crisis",
+      "CONSULT": "Coalition leaders met Tuesday to discuss possible changes to the austerity plan",
+      "AID": "the European Central Bank to buy Italian bonds to hold down yields"
+    }
+  }
+]

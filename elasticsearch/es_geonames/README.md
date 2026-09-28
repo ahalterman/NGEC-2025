@@ -1,8 +1,25 @@
 # Building / updating the GeoNames index
 
 Builds the `geonames` Elasticsearch index used by location resolution
-(mordecai3), from the [GeoNames](http://www.geonames.org/) gazetteer. Based on
-[es-geonames](https://github.com/openeventdata/es-geonames).
+(mordecai3), from the [GeoNames](http://www.geonames.org/) gazetteer.
+
+**This directory is canonical.** It descends from
+[es-geonames](https://github.com/openeventdata/es-geonames), which is now
+superseded: don't send anyone there. What changed here is the packaging, not
+the gazetteer parsing — that is still the same `documents()` generator, so the
+documents this produces are field-for-field what es-geonames produced. The
+differences:
+
+- One Python CLI with stages (`download`/`recreate`/`load`), instead of a bash
+  script calling `wget`, `unzip` and `curl`. It runs on Windows unchanged, and
+  there is no separate Windows script to keep in sync.
+- It deletes and recreates **only** the `geonames` index instead of creating an
+  index in a fresh container, so it is safe to run against the shared data
+  directory that also holds `wiki`.
+- `number_of_replicas` is 0 rather than 1, so a single-node cluster comes up
+  green instead of permanently yellow.
+- Bad ISO codes are collected into a file instead of printed once per row.
+- The index is stamped with `_meta` provenance (see below).
 
 The whole flow is one cross-platform Python tool
 ([`load_geonames_es.py`](load_geonames_es.py)) plus an Elasticsearch container.
@@ -25,9 +42,26 @@ prunes anything outside the groups you name, so an unrelated `uv sync` for
 normal work silently removes these again. Pre-fetching with `uv sync --group
 es-build` is fine, it just isn't durable on its own.
 
+> ⚠️ **Pass your install extras too.** `uv sync` is exact about extras as well
+> as groups, so `uv run --group es-build ...` on a machine installed with
+> `--extra cu12 --extra vllm` re-resolves the environment *without* them and
+> replaces your PyTorch build with the default PyPI (CUDA 13) one. On the
+> reference box `uv sync --group es-build --dry-run` reports "would uninstall
+> 146 packages". Repeat whichever extras you installed with, on every command:
+>
+> ```bash
+> uv run --extra cu12 --extra vllm --group es-build python ...
+> ```
+>
+> The extras (`cpu` / `cu12` / `cu13`, plus `models` and `vllm`) are the ones
+> in the repo-root README's install section, and they are mutually exclusive.
+
 ## Steps
 
-Takes >30 minutes for the full gazetteer.
+Measured on the reference box (2026-09-09, 13.5M gazetteer rows, ES in Docker
+on the same machine): **~1.5 minutes to download, ~23 minutes to load**, at a
+steady 8,500–10,500 rows/second. The result is ~13.3M documents and ~2 GB on
+disk. Budget half an hour.
 
 1. **Back up** the live data dir, then **stop your normal Elasticsearch
    container** — the build stack mounts the same data dir, so the two ES nodes
@@ -66,13 +100,21 @@ Takes >30 minutes for the full gazetteer.
    `all` runs three stages in order:
 
    - `download` — fetch `allCountries.zip`, `admin1CodesASCII.txt`,
-     `admin2Codes.txt` into `./geonames_data/` and unzip.
+     `admin2Codes.txt` into `./geonames_data/` and unzip. Needs no
+     Elasticsearch, so you can fetch the gazetteer before starting the
+     container.
    - `recreate` — delete **only** the `geonames` index and recreate its mapping
      (also drops replicas to 0 and relaxes disk watermarks).
    - `load` — bulk-load the gazetteer into the `geonames` index.
 
    You can run a single stage instead, e.g. `... load_geonames_es.py load`, or
-   point at a different download folder with `--data-dir`.
+   point at a different download folder with `--data-dir`. There is also
+   `reload`, which is `recreate` + `load`: use it when you already have the
+   gazetteer on disk and don't want to re-download 400 MB.
+
+   The progress bar's denominator is a hardcoded 12,237,435 rows and is now
+   about 10% low (the 2026 gazetteer has 13.46M), so the bar finishes past
+   100%. Cosmetic; the doc count at the end is the real number.
 
 4. **Verify** the `geonames` count changed and `wiki` is unchanged:
 
@@ -118,6 +160,7 @@ curl -s 'localhost:9200/geonames/_mapping' | python -m json.tool
   "gazetteer_file": "allCountries.txt",
   "dump_date": "2026-08-12",
   "build_date": "2026-08-12",
+  "code_commit": "15608d51b097c7047cd91d20fc8834d01acab05d",
   "doc_count": 12571784,
   "builder": "NGEC elasticsearch/es_geonames/load_geonames_es.py"
 }
@@ -125,6 +168,8 @@ curl -s 'localhost:9200/geonames/_mapping' | python -m json.tool
 
 `dump_date` is the modification time of `allCountries.txt` — in practice, when
 `download` fetched it. The gazetteer carries no version stamp of its own.
+`code_commit` is `git rev-parse HEAD` at build time, so an index can be traced
+back to the loader that produced it; it is omitted outside a git checkout.
 
 `recreate` on its own rebuilds the mapping, which clears `_meta` and leaves the
 index empty; the stamp is written at the end of a run that actually loads data.

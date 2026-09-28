@@ -7,14 +7,20 @@ Implemented here:
 - Installation: the ngec version and commit, the Python running it, and where
   the package is being imported from
 - Configuration: every environment variable ngec or its tooling reads, the
-  effective value, and which code actually reads it
+  effective value, and which code actually reads it (`SETTINGS`); and any key
+  in .env that is not one of them, which is usually a misspelling
 - Compute: the PyTorch build, whether it can really see the GPU that is
   present, and what `gpu=True` will do on this machine
+- Elasticsearch: whether it is reachable, and whether the `wiki` and
+  `geonames` indices are in it
+- Smoke test (only with `--smoke`): three real news stories run through the
+  whole pipeline, after checking that every model it needs is already
+  downloaded. Doctor never downloads anything; see `ngec/smoke_test.py`.
 
-Still to come, roughly in this order: spaCy models and packaged assets;
-Elasticsearch reachability and the `wiki` and `geonames` index contents; the
-available LLM backends, including whether `llama-server` is serving the model
-the Python side is prompting for.
+Still to come, roughly in this order: packaged assets; whether the index
+contents are complete and current, not merely present; the available LLM
+backends, including whether `llama-server` is serving the model the Python side
+is prompting for.
 
 The `Check` structure, and the idea that a finding has to say what it breaks
 and how to fix it, are taken from `demo/ngec_demo/resources.py::Health`, which
@@ -29,9 +35,11 @@ come back as findings. A broken install is exactly when this gets run, so
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -178,8 +186,135 @@ def _dotenv() -> Check:
     before = set(os.environ)
     load_dotenv(env_file)
     _FROM_DOTENV.update(set(os.environ) - before)
-    return Check(".env", OK, f"{len(_FROM_DOTENV)} setting(s) loaded",
+    # Doctor, the tests and the demo load .env themselves. A user's own script
+    # does not unless it calls load_dotenv() or es_client_from_env(), so a
+    # value shown below can be one their pipeline never sees.
+    return Check(".env", OK,
+                 f"{len(_FROM_DOTENV)} setting(s) loaded; your own scripts see "
+                 "them only if they load .env too",
                  note=str(env_file))
+
+
+@dataclass(frozen=True)
+class Setting:
+    """An environment variable that NGEC, its demo, or its tooling reads.
+
+    A `default` of None means "ask the code that defines it"; only the attribute
+    model uses that, because its default lives in `ngec.attribute_model` and a
+    second copy of the name here would drift. `secret` values are reported as
+    "set" and never printed. Settings with `always_shown=False` matter only to
+    the demo, to evaluation, or to building and publishing an index, so their
+    rows appear only when the variable is actually set.
+    """
+
+    name: str
+    default: str | None
+    read_by: str
+    secret: bool = False
+    always_shown: bool = True
+
+
+# Every environment variable NGEC reads, in the order the report shows them.
+# This list is what `.env` is checked against, so it has to be complete:
+# tests/test_doctor.py fails if the code reads an NGEC_ name missing from it,
+# or if .env.example documents anything other than exactly these.
+SETTINGS = [
+    Setting("NGEC_ATTRIBUTE_MODEL", None, "ngec.attribute_model"),
+    Setting("NGEC_WIKI_ENCODER", "sentence-transformers/static-retrieval-mrl-en-v1",
+            "ngec.actors", always_shown=False),
+    Setting("NGEC_AGENT_ENCODER", "BAAI/bge-small-en-v1.5", "ngec.actors",
+            always_shown=False),
+    Setting("NGEC_LLAMACPP_URL", "unset: the model runs in-process", "ngec.llm.llamacpp"),
+    Setting("NGEC_LLAMACPP_THREADS", "performance cores, at most 8", "ngec.llm.llamacpp"),
+    Setting("NGEC_ATTRIBUTE_GGUF", "the published GGUF", "ngec.llm.llamacpp"),
+    Setting("ES_HOST", "localhost", "tests, demo, smoke test"),
+    Setting("ES_PORT", "9200", "tests, demo, smoke test"),
+    Setting("ES_USER", "", "tests, demo, smoke test", secret=True),
+    Setting("ES_PASSWORD", "", "tests, demo, smoke test", secret=True),
+    # Not the same cluster setting as ES_HOST/ES_PORT, and nothing keeps them in
+    # step; see _es_agreement.
+    Setting("NGEC_WIKI_URL", "http://localhost:9200/wiki", "ngec.actors (v3 splitter)"),
+    Setting("NGEC_ES_URL", "http://localhost:9200/", "tools/, elasticsearch/"),
+    Setting("NGEC_ES_DATA", "", "elasticsearch/compose-build.yml"),
+    Setting("NGEC_ES_PORT", "9200", "elasticsearch/compose-build.yml", always_shown=False),
+    Setting("NGEC_REDIS_HOST", "localhost", "elasticsearch/es_wiki"),
+    Setting("NGEC_REDIS_PORT", "6379", "elasticsearch/es_wiki"),
+    Setting("NGEC_PUBLISH_DEST", "", "tools/publish_index.sh", always_shown=False),
+    Setting("NGEC_INDEX_LATEST_URL",
+            "https://andrewhalterman.com/files/wikigeo_index_latest.json",
+            "ngec download-index, ngec update", always_shown=False),
+    Setting("HF_HOME", "~/.cache/huggingface", "huggingface_hub"),
+    Setting("NGEC_DEMO_PASSWORD", "", "demo", secret=True, always_shown=False),
+    Setting("NGEC_DEMO_MODE", "gpu if CUDA is available, else cpu", "demo",
+            always_shown=False),
+    Setting("NGEC_DEMO_CPU_THREADS", "4", "demo", always_shown=False),
+    Setting("NGEC_DEMO_GPU_MEMORY", "0.25", "demo", always_shown=False),
+    Setting("NGEC_DEMO_CPU_BACKEND", "llamacpp", "demo", always_shown=False),
+]
+
+# A line in .env that sets a variable. A commented-out line sets nothing.
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=")
+
+
+def _keys_in(env_file: Path) -> list[str]:
+    keys: list[str] = []
+    for line in env_file.read_text(encoding="utf-8").splitlines():
+        match = _ENV_LINE.match(line)
+        if match and match.group(1) not in keys:
+            keys.append(match.group(1))
+    return keys
+
+
+def _env_keys(env_file: Path | None) -> list[Check]:
+    """Check the keys set in .env against the settings NGEC actually reads.
+
+    A misspelled name is the classic silent failure here. python-dotenv loads
+    NGEC_ATTRIBUTE_MODLE without complaint, nothing reads it, and the run quietly
+    uses the default model.
+
+    The reference is SETTINGS, not a file on disk, so this works the same for an
+    installed copy as for a clone, and a `.env.example` belonging to the user's
+    own project cannot be mistaken for NGEC's.
+
+    Only likely typos are warnings: a name close to a known one, or any NGEC_
+    name, since nothing else would use that prefix. Other keys (HF_TOKEN,
+    CUDA_VISIBLE_DEVICES, a user's own settings) are reported but not judged.
+    """
+    if env_file is None:
+        return []
+
+    known = [setting.name for setting in SETTINGS]
+    unknown = [key for key in _keys_in(env_file) if key not in known]
+    if not unknown:
+        return [Check(".env keys", OK, "every key in .env is a setting NGEC reads")]
+
+    reference = ".env.example in the NGEC repository lists every setting"
+    checks: list[Check] = []
+    others: list[str] = []
+    for key in unknown:
+        # Upper-cased so that es_host is caught as well as ES_HOTS. The match is
+        # a guess -- ES_URL comes out as ES_USER -- so the fix is worded as one.
+        close = difflib.get_close_matches(key.upper(), known, n=1, cutoff=0.75)
+        if close:
+            checks.append(Check(
+                key, WARN, f"set in .env, but nothing reads it; did you mean {close[0]}?",
+                "whatever setting it was meant to be: a misspelled name is loaded "
+                "without error and then ignored, so that setting keeps its default",
+                f"if you meant {close[0]}, rename it in {env_file}; {reference}"))
+        elif key.startswith("NGEC_"):
+            checks.append(Check(
+                key, WARN, "set in .env, but no NGEC code reads it",
+                "whatever setting it was meant to be: nothing reads this name, so "
+                "that setting keeps its default",
+                f"check the name; {reference}"))
+        else:
+            others.append(key)
+    if others:
+        checks.append(Check(
+            ".env keys", INFO,
+            f"also sets {', '.join(others)}, which NGEC does not read",
+            note="fine if something else uses them"))
+    return checks
 
 
 def _default_attribute_model() -> str:
@@ -192,18 +327,21 @@ def _default_attribute_model() -> str:
         return "the package default"
 
 
-def _setting(name: str, default: str, read_by: str, secret: bool = False) -> Check:
-    raw = os.environ.get(name)
+def _setting(setting: Setting) -> Check:
+    default = setting.default
+    if default is None:
+        default = _default_attribute_model()
+    raw = os.environ.get(setting.name)
     if raw is None:
         detail = f"unset, defaulting to {default}" if default else "unset"
-    elif secret:
+    elif setting.secret:
         # Doctor output is the sort of thing that gets pasted into an issue.
         detail = "set"
     else:
         detail = raw
-    if name in _FROM_DOTENV:
+    if setting.name in _FROM_DOTENV:
         detail += " (from .env)"
-    return Check(name, INFO, detail, note=read_by)
+    return Check(setting.name, INFO, detail, note=setting.read_by)
 
 
 def _es_agreement() -> Check:
@@ -231,24 +369,10 @@ def _es_agreement() -> Check:
 
 
 def configuration() -> list[Check]:
-    # Built here rather than at module scope so the attribute model's own
-    # default can be reported instead of a second copy of the name.
-    settings = [
-        ("NGEC_ATTRIBUTE_MODEL", _default_attribute_model(), "ngec.attribute_model", False),
-        ("NGEC_LLAMACPP_URL", "http://127.0.0.1:8080", "ngec.llm.llamacpp", False),
-        ("ES_HOST", "localhost", "tests, demo", False),
-        ("ES_PORT", "9200", "tests, demo", False),
-        ("ES_USER", "", "tests, demo", True),
-        ("ES_PASSWORD", "", "tests, demo", True),
-        ("NGEC_ES_URL", "http://localhost:9200/", "tools/, elasticsearch/", False),
-        ("NGEC_ES_DATA", "", "elasticsearch/compose-build.yml", False),
-        ("NGEC_REDIS_HOST", "localhost", "elasticsearch/es_wiki", False),
-        ("NGEC_REDIS_PORT", "6379", "elasticsearch/es_wiki", False),
-        ("HF_HOME", "~/.cache/huggingface", "huggingface_hub", False),
-    ]
-
     checks = [_dotenv()]
-    checks += [_setting(*setting) for setting in settings]
+    checks += _env_keys(_find_env_file())
+    checks += [_setting(setting) for setting in SETTINGS
+               if setting.always_shown or setting.name in os.environ]
     checks.append(_es_agreement())
     return checks
 
@@ -307,6 +431,21 @@ def compute() -> list[Check]:
                 f"GPU {i}", OK,
                 f"{properties.name}, {properties.total_memory / 1e9:.0f} GB",
                 note=f"driver {smi['driver']}" if smi else ""))
+    elif smi and os.environ.get("CUDA_VISIBLE_DEVICES") is not None:
+        # CUDA_VISIBLE_DEVICES decides which GPUs CUDA programs may use. Set to
+        # "" or "-1", or to indices that do not exist, it hides every GPU, which
+        # is the usual way to force a CPU run. torch then reports no GPU exactly
+        # as it would with a mismatched build, so name the variable instead of
+        # prescribing a reinstall.
+        hidden_by = os.environ["CUDA_VISIBLE_DEVICES"]
+        checks.append(Check(
+            "GPU", WARN,
+            f"{smi['name']} is present (driver {smi['driver']}), but hidden "
+            f"from torch by CUDA_VISIBLE_DEVICES={hidden_by!r}",
+            "gpu=True and the vllm backend; the pipeline runs on the CPU. "
+            "If that is what you meant, there is nothing to fix",
+            "unset CUDA_VISIBLE_DEVICES (or set it to the GPU's index, e.g. 0) "
+            "to use the GPU"))
     elif smi:
         checks.append(Check(
             "GPU", WARN,
@@ -314,8 +453,9 @@ def compute() -> list[Check]:
             f"{torch.__version__} does not see it",
             "gpu=True and the vllm backend; the pipeline runs on the CPU "
             "instead, at a fraction of the speed and without saying so",
-            "uv pip install torch --torch-backend=auto --reinstall-package torch"
-            " (see the PyTorch section of README.md)"))
+            "reinstall NGEC with the cu12 extra, e.g. uv add \"ngec[cu12,vllm] @ "
+            "git+https://github.com/ahalterman/ngec-2025\" (in a clone: uv sync "
+            "--extra cu12); see 'Choosing the extras' in docs/INSTALL.md"))
     elif platform.system() == "Darwin" and platform.machine() == "arm64":
         mps = getattr(torch.backends, "mps", None)
         if mps is not None and mps.is_available():
@@ -343,6 +483,214 @@ def compute() -> list[Check]:
     return checks
 
 
+# -------------------------------------------------------------- elasticsearch
+
+
+# The indices the pipeline queries: `wiki` for actor resolution
+# (ngec/actors/wiki_matcher.py) and `geonames` for mordecai3's geolocation.
+ES_INDICES = ("wiki", "geonames")
+
+
+def _es_target() -> str:
+    return f"{os.environ.get('ES_HOST', 'localhost')}:{os.environ.get('ES_PORT', '9200')}"
+
+
+def elasticsearch() -> list[Check]:
+    """Can the pipeline reach Elasticsearch, and are both indices in it?
+
+    Connects the way the tests and the demo do (ES_HOST, ES_PORT, .env), with a
+    short timeout so that an unreachable host costs seconds, not minutes.
+    """
+    try:
+        from .es_client import es_client_from_env
+
+        client = es_client_from_env(timeout=5, max_retries=0)
+    except Exception as exc:  # noqa: BLE001 - any failure to connect is the finding
+        return [Check(
+            "Elasticsearch", FAIL,
+            f"cannot connect to {_es_target()}: {type(exc).__name__}",
+            "geolocation and actor resolution, and so the pipeline as a whole",
+            "start Elasticsearch (ngec download-index --start), or point ES_HOST / ES_PORT "
+            "at the cluster you mean")]
+
+    version = client.info().get("version", {}).get("number", "unknown")
+    checks = [Check("Elasticsearch", OK, f"{_es_target()}, version {version}")]
+
+    for index in ES_INDICES:
+        if not client.indices.exists(index=index):
+            checks.append(Check(
+                f"'{index}' index", FAIL, "missing",
+                "actor resolution" if index == "wiki" else "geolocation",
+                "`ngec download-index --start` fetches the pre-built index; if "
+                "you already have it, a cluster without it is usually the wrong "
+                "volume path in `docker run -v`"))
+            continue
+        count = client.count(index=index)["count"]
+        if count == 0:
+            checks.append(Check(
+                f"'{index}' index", FAIL, "exists but is empty",
+                "actor resolution" if index == "wiki" else "geolocation",
+                "replace it with `ngec download-index` (see elasticsearch/SETUP.md)"))
+        else:
+            checks.append(Check(f"'{index}' index", OK, f"{count:,} documents"))
+
+    return checks
+
+
+# ---------------------------------------------------------------------- smoke
+
+
+def _attribute_model_is_local(name: str) -> bool:
+    """Whether the attribute model can be loaded without downloading anything."""
+    if Path(name).expanduser().is_dir():
+        return True
+    # Ask for the files loading needs, not the whole repository:
+    # snapshot_download(local_files_only=True) raises when any file of the repo
+    # is missing from the cache, and a model the pipeline fetched itself on
+    # first use only has the files it loaded, so that check failed for a model
+    # that loads fine.
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        def cached(filename):
+            return isinstance(try_to_load_from_cache(name, filename), str)
+
+        return cached("config.json") and (cached("model.safetensors")
+                                           or cached("model.safetensors.index.json"))
+    except Exception:  # noqa: BLE001 - huggingface_hub is broken
+        return False
+
+
+def _gguf_missing(model: str) -> str | None:
+    """The GGUF file the llamacpp backend would need, if that is the backend
+    in use and the file is not cached; otherwise None."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+
+        from .llm import choose_backend, llamacpp_server_url
+        from .llm.llamacpp import gguf_for_model
+    except ImportError:
+        return None
+    if (choose_backend() != "llamacpp" or llamacpp_server_url()
+            or os.environ.get("NGEC_ATTRIBUTE_GGUF")):
+        return None
+    known = gguf_for_model(model)
+    if known is None or isinstance(try_to_load_from_cache(*known), str):
+        return None
+    return f"{known[0]}/{known[1]}"
+
+
+def _last_line(text: str) -> str:
+    lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+    return lines[-1] if lines else "no output"
+
+
+def smoke() -> list[Check]:
+    """Run three real news stories through the whole pipeline.
+
+    Opt-in (`--smoke`), because it takes minutes on a CPU. It never downloads a
+    model: it first checks that the spaCy models and the attribute model are
+    already here, and then runs the pipeline in a separate process with
+    Hugging Face's offline mode on, so anything else that is missing fails
+    instead of being fetched. See `ngec/smoke_test.py` for why a separate
+    process.
+    """
+    import tempfile
+    import time
+
+    from .models import missing_spacy_models
+
+    checks: list[Check] = []
+
+    missing = missing_spacy_models()
+    if missing:
+        checks.append(Check(
+            "spaCy models", FAIL, f"not installed: {', '.join(missing)}",
+            "parsing, and so the pipeline as a whole", "ngec download-models"))
+    else:
+        checks.append(Check("spaCy models", OK, "installed"))
+
+    model = os.environ.get("NGEC_ATTRIBUTE_MODEL") or _default_attribute_model()
+    if _attribute_model_is_local(model):
+        checks.append(Check("Attribute model", OK, f"{model} is downloaded"))
+    else:
+        checks.append(Check(
+            "Attribute model", FAIL, f"{model} is not downloaded",
+            "attribute extraction, and so the pipeline as a whole",
+            "ngec download-models"))
+    gguf_missing = _gguf_missing(model)
+    if gguf_missing:
+        checks.append(Check(
+            "Attribute model GGUF", FAIL, f"{gguf_missing} is not downloaded",
+            "attribute extraction with the llamacpp backend", "ngec download-models --gguf"))
+
+    # One row rather than the whole Elasticsearch group, which a plain
+    # `--smoke` run also shows; the first failure is enough to act on.
+    es_failures = [c for c in elasticsearch() if c.status == FAIL]
+    if es_failures:
+        first = es_failures[0]
+        detail = first.detail if first.name == "Elasticsearch" \
+            else f"{first.name}: {first.detail}"
+        checks.append(Check("Elasticsearch", FAIL, detail, first.blocks, first.fix))
+    else:
+        checks.append(Check("Elasticsearch", OK, "reachable, both indices loaded"))
+
+    if any(c.status == FAIL for c in checks):
+        # INFO, not FAIL: the failures above already make the exit code
+        # non-zero, and this adds nothing to fix.
+        checks.append(Check("Pipeline", INFO, "not run: fix the problems above first"))
+        return checks
+
+    print("Running three news stories through the pipeline. This takes a few "
+          "minutes on a CPU...", file=sys.stderr)
+
+    env = dict(os.environ, HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+    with tempfile.TemporaryDirectory(prefix="ngec-smoke-") as tmp:
+        out_file = Path(tmp) / "result.json"
+        start = time.monotonic()
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "ngec.smoke_test", str(out_file)],
+                cwd=tmp, env=env, capture_output=True, text=True, timeout=3600)
+        except subprocess.TimeoutExpired:
+            checks.append(Check(
+                "Pipeline", FAIL, "still running after an hour; stopped",
+                "nothing by itself, but on three short stories this means "
+                "something is badly wrong -- check the Compute group above"))
+            return checks
+        seconds = time.monotonic() - start
+
+        if result.returncode != 0 or not out_file.exists():
+            error = _last_line(result.stderr or result.stdout)
+            offline = "offline" in error.lower() or "local_files_only" in error
+            checks.append(Check(
+                "Pipeline", FAIL, error,
+                "the pipeline as a whole",
+                "ngec download-models (the pipeline needed a model that is not "
+                "downloaded)" if offline else
+                "run the pipeline directly to see the full error: "
+                "python -m ngec.smoke_test out.json"))
+            return checks
+
+        summary = json.loads(out_file.read_text(encoding="utf-8"))
+
+    events = summary["events"]
+    if not events:
+        checks.append(Check(
+            "Pipeline", FAIL,
+            f"ran in {seconds:.0f}s but coded no events from "
+            f"{summary['stories']} stories, which should each produce some",
+            "the pipeline's output: something upstream is silently dropping "
+            "everything, e.g. the event classifier finding no event types"))
+        return checks
+
+    checks.append(Check(
+        "Pipeline", OK,
+        f"{len(events)} events from {summary['stories']} stories in {seconds:.0f}s"))
+    checks += [Check(e["story"], INFO, e["summary"]) for e in events]
+    return checks
+
+
 # --------------------------------------------------------------------- output
 
 
@@ -350,7 +698,12 @@ GROUPS: dict[str, tuple[str, object]] = {
     "install": ("Installation", installation),
     "config": ("Configuration", configuration),
     "compute": ("Compute", compute),
+    "elasticsearch": ("Elasticsearch", elasticsearch),
+    "smoke": ("Smoke test", smoke),
 }
+
+# Everything but the smoke test, which takes minutes and has to be asked for.
+DEFAULT_GROUPS = ["install", "config", "compute", "elasticsearch"]
 
 GLYPHS = {OK: ("check", "green"), INFO: ("dot", "dim"),
           WARN: ("bang", "yellow"), FAIL: ("cross", "red")}
@@ -382,8 +735,14 @@ def render(groups: list[tuple[str, list[Check]]]) -> None:
                           escape(check.note))
         console.print(table)
 
-    problems = [c for _, checks in groups for c in checks
-                if c.status in (WARN, FAIL)]
+    # The smoke test repeats an Elasticsearch failure so that `--only smoke`
+    # still says what is wrong; list it once when both groups ran.
+    problems, seen = [], set()
+    for _, checks in groups:
+        for c in checks:
+            if c.status in (WARN, FAIL) and (c.detail, c.fix) not in seen:
+                seen.add((c.detail, c.fix))
+                problems.append(c)
     if not problems:
         console.print("\n[green]No problems found.[/green]")
         return
@@ -407,9 +766,12 @@ def main(argv: list[str] | None = None) -> int:
                         help=f"run only these groups ({', '.join(GROUPS)})")
     parser.add_argument("--json", action="store_true",
                         help="machine-readable output, for pasting into a bug report")
+    parser.add_argument("--smoke", action="store_true",
+                        help="also run three news stories through the whole "
+                             "pipeline (takes a few minutes on a CPU)")
     args = parser.parse_args(argv)
 
-    selected = list(GROUPS)
+    selected = DEFAULT_GROUPS + (["smoke"] if args.smoke else [])
     if args.only:
         selected = [name.strip() for name in args.only.split(",") if name.strip()]
         unknown = [name for name in selected if name not in GROUPS]

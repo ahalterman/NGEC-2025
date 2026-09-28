@@ -9,7 +9,7 @@ import os
 import random
 import pickle
 
-from ngec.actors.wiki_matcher import WikiMatcher,
+from ngec.actors.wiki_matcher import WikiMatcher, WikiClient
 from ngec.actors.common import CountryDetector, ModelManager
 from ngec.es_client import setup_es_client
 
@@ -37,6 +37,9 @@ model_manager = ModelManager(device=device)
 wiki_matcher = WikiMatcher(device=device,
                            es_client=es_client,
                            model_manager=model_manager)
+
+# Add in a missing wiki client invocation
+wiki_client = WikiClient(es_client=es_client)
 
 # Initialize CountryDetector
 country_detector = CountryDetector()

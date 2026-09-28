@@ -12,7 +12,7 @@
 #     One record is one event (see explode_events), so 'attributes' is a single
 #     dict and the resolved value is top-level.
 
-from ngec.formatter import resolve_date, _resolve_date
+from ngec.formatter import resolve_date, resolve_date_text, _resolve_date
 
 REF = "2025-05-16"  # a Friday
 
@@ -325,6 +325,17 @@ def test_bare_weekday_naming_the_pub_day():
         assert "publication day" in res.reason, expr
 
 
+def test_weekday_with_part_of_day_naming_the_pub_day():
+    # "late Friday", "Friday night" etc. in a story filed on a Friday mean that
+    # Friday too, not the one a week earlier.
+    for expr in ["Friday evening", "Friday night", "late Friday", "early Friday",
+                 "overnight Friday", "on Friday night", "late Friday night",
+                 "Friday morning", "this Friday afternoon"]:
+        res = _resolve_date(expr, REF)
+        assert res.resolved_date.strftime("%Y-%m-%d") == "2025-05-16", expr
+        assert res.date_type == "exact" and res.granularity == "day", expr
+
+
 def test_bare_weekday_other_than_the_pub_day():
     # Every other weekday still resolves to its most recent occurrence *before*
     # publication, exactly as before.
@@ -346,10 +357,8 @@ def test_same_day_rule_is_narrow():
     assert _resolve_date("August 15", REF).resolved_date.strftime("%Y-%m-%d") == "2024-08-15"
     assert _resolve_date("15/8/2004", REF).resolved_date.strftime("%Y-%m-%d") == "2004-08-15"
     assert _resolve_date("over the weekend", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-10"
-    # A time-of-day qualifier is not a bare weekday, so "Friday evening" on a
-    # Friday still reads as the previous Friday. Left alone deliberately: the
-    # same-day fix is scoped to the bare form.
-    assert _resolve_date("Friday evening", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-09"
+    # A part-of-day qualifier on some other weekday is untouched.
+    assert _resolve_date("Thursday evening", REF).resolved_date.strftime("%Y-%m-%d") == "2025-05-15"
 
     # Empty and missing spans fall back to the pub date, flagged unresolved.
     for expr in ["", None]:
@@ -466,3 +475,90 @@ def test_resolve_date_reads_attributes_defensively():
     no_pub = resolve_date({"attributes": {"date": ["yesterday"]}})["date_resolved"]
     assert no_pub["resolved_date"] is None
     assert no_pub["date_type"] == "unresolved"
+
+
+def test_resolve_date_text():
+    # The standalone entry point returns the same dict the pipeline stores in
+    # event['date_resolved'].
+    res = resolve_date_text("last Wednesday", REF)
+    assert res["resolved_date"].strftime("%Y-%m-%d") == "2025-05-14"
+    assert res["date_type"] == "exact"
+    assert res["granularity"] == "day"
+    assert set(res) == {"resolved_date", "date_end", "granularity", "date_type", "reason"}
+
+    event = resolve_date({"pub_date": REF, "attributes": {"date": ["last Wednesday"]}})
+    assert event["date_resolved"] == res
+
+
+def test_resolve_date_text_pub_date_forms():
+    # Date objects and the common string forms all give the same answer.
+    import datetime as dt
+    import pandas as pd
+    for pub in ["2025-05-16", "May 16, 2025", "16 May 2025", "2025-05-16T23:30:00+05:00",
+                dt.date(2025, 5, 16), dt.datetime(2025, 5, 16, 10), pd.Timestamp("2025-05-16")]:
+        res = resolve_date_text("last Wednesday", pub)
+        assert res["resolved_date"] == dt.datetime(2025, 5, 14), pub
+
+
+def test_resolve_date_text_missing_inputs():
+    import pandas as pd
+
+    # No phrase: the publication date, flagged unresolved.
+    for text in [None, ""]:
+        res = resolve_date_text(text, REF)
+        assert res["resolved_date"].strftime("%Y-%m-%d") == REF
+        assert res["date_type"] == "unresolved"
+
+    # No publication date: nothing to resolve against, even for an absolute
+    # date. A pandas NaN or NaT counts as missing; dateparser would otherwise
+    # read the string "nan" as a date about a month before today.
+    for pub in [None, "", float("nan"), pd.NaT, "not a date"]:
+        for text in ["last Wednesday", "March 3, 2021"]:
+            res = resolve_date_text(text, pub)
+            assert res["resolved_date"] is None, pub
+            assert res["date_type"] == "unresolved"
+            assert res["reason"] == "<No publication date>"
+
+    # NaN as the phrase (a missing cell) is treated like no phrase.
+    assert resolve_date_text(float("nan"), REF)["date_type"] == "unresolved"
+
+
+def test_pub_date_missing_value_strings():
+    # A pub_date built with str(row.date)[:10] from a pandas column with blanks
+    # arrives as the string "nan" (or "NaT", "None"). dateparser read "nan" as
+    # a date about a month before the day of the run, so "yesterday" came back
+    # as a date in the year the code was run, marked exact.
+    for pub in ["nan", "NaN", "NaT", "None", "null", " NULL ", "N/A", "NA"]:
+        res = resolve_date_text("yesterday", pub)
+        assert res["resolved_date"] is None, pub
+        assert res["date_type"] == "unresolved"
+        assert res["reason"] == "<No publication date>"
+
+
+def test_modifier_on_previous_year_or_month():
+    # "late last year" is late in the year before the pub-date year. Stripping
+    # "last" and anchoring "late year" to the pub-date year put it in December
+    # of the pub year, after the story was published.
+    pub = "2024-03-15"
+    for expr, expected, gran in [
+            ("late last year", "2023-12-31", "year"),
+            ("early last year", "2023-01-01", "year"),
+            ("mid-last year", "2023-07-01", "year"),
+            ("the end of last year", "2023-12-31", "year"),
+            ("beginning of the previous year", "2023-01-01", "year"),
+            ("late last month", "2024-02-29", "month"),
+            ("early last month", "2024-02-01", "month"),
+            ("end of last month", "2024-02-29", "month")]:
+        res = _resolve_date(expr, pub)
+        assert res.resolved_date.strftime("%Y-%m-%d") == expected, expr
+        assert res.granularity == gran, expr
+        assert res.date_type == "approximate", expr
+    # The month before January is December of the year before.
+    assert _resolve_date("late last month", "2024-01-10").resolved_date.strftime("%Y-%m-%d") == "2023-12-31"
+    # Neighbours keep their old resolutions.
+    assert _resolve_date("late this year", pub).resolved_date.strftime("%Y-%m-%d") == "2024-12-31"
+    assert _resolve_date("early this year", pub).resolved_date.strftime("%Y-%m-%d") == "2024-01-01"
+    assert _resolve_date("last year", pub).resolved_date.strftime("%Y-%m-%d") == "2023-03-15"
+    assert _resolve_date("last month", pub).resolved_date.strftime("%Y-%m-%d") == "2024-02-15"
+    assert _resolve_date("late last week", pub).resolved_date.strftime("%Y-%m-%d") == "2024-03-08"
+    assert _resolve_date("earlier this month", pub).resolved_date.strftime("%Y-%m-%d") == "2024-03-15"

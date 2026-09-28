@@ -1,0 +1,280 @@
+[
+  {
+    "id": "a_south-korea-hits-north-korean-illegal-weapons-trade-with-new-sanctions_7277731",
+    "candidates": [
+      "SANCTION",
+      "ACCUSE",
+      "CONSULT",
+      "COOPERATE"
+    ],
+    "quotes": {
+      "SANCTION": "South Korea Thursday imposed new sanctions on 10 individuals and two entities",
+      "ACCUSE": "North Korea's illegal activities that pose a serious threat to the peace and stability",
+      "CONSULT": "Kim Jong-un, who traveled last week to Russia’s Far East for a summit meeting",
+      "COOPERATE": "raising new concerns about the military cooperation between the two countries"
+    }
+  },
+  {
+    "id": "archive_au-claims-defeat-al-shabab-mogadishu",
+    "candidates": [
+      "ASSAULT",
+      "RETREAT",
+      "MOBILIZE",
+      "AID"
+    ],
+    "quotes": {
+      "ASSAULT": "a female suicide bomber struck during ceremonies at the newly-rebuilt national theater, killing two",
+      "RETREAT": "al-Shabab fighters have fled their last strongholds on the outskirts of town",
+      "MOBILIZE": "Troops are constructing a barrier in the desert outside town to prevent",
+      "AID": "All of Mogadishu is now liberated by Somalia Defense Forces by forces supported by AMISOM"
+    }
+  },
+  {
+    "id": "a_experts-warn-of-shrinking-civic-space-as-brics-expands-membership_7249436",
+    "candidates": [
+      "COOPERATE",
+      "REQUEST",
+      "REJECT"
+    ],
+    "quotes": {
+      "COOPERATE": "announced on August 24 the admission of six countries into its fold",
+      "REQUEST": "the advocacy group wants openness on the part of BRICS leaders",
+      "REJECT": "the refusal by some countries in Asia, Africa and Latin America to join the United States"
+    }
+  },
+  {
+    "id": "archive_nigeria-bombing-kills-several-people-easter-sunday",
+    "candidates": [
+      "ASSAULT",
+      "MOBILIZE",
+      "COERCE",
+      "REQUEST"
+    ],
+    "quotes": {
+      "ASSAULT": "Gunmen opened fire on Christian traders at a busy market in Maiduguri Wednesday, killing 11 people",
+      "MOBILIZE": "Security forces in northern Nigeria have stepped up security this Easter weekend",
+      "COERCE": "Authorities said they raided two hideouts in northeastern Gombe state Thursday, seizing explosives",
+      "REQUEST": "the government asked people to stay home for three days while 30,000 volunteers went"
+    }
+  },
+  {
+    "id": "usa_american-held-iran-arrives-us-others-remain-germany",
+    "candidates": [
+      "RETREAT",
+      "COOPERATE",
+      "ACCUSE",
+      "REQUEST",
+      "AGREE"
+    ],
+    "quotes": {
+      "RETREAT": "One of the Americans freed by Iran arrived home late Sunday",
+      "COOPERATE": "In return, U.S. President Barack Obama offered clemency to seven Iranians",
+      "ACCUSE": "widespread criticism of the administration for failing to secure a firm agreement on the prisoners",
+      "REQUEST": "Obama and other senior U.S. officials have said they repeatedly demanded the release of",
+      "AGREE": "Iran agreed to try to determine the fate of Robert Levinson"
+    }
+  },
+  {
+    "id": "science-health_ebola-strains-sierra-leone-healthcare",
+    "candidates": [
+      "AID",
+      "REQUEST",
+      "COERCE"
+    ],
+    "quotes": {
+      "AID": "WHI has donated some of its vehicles to be used as ambulances",
+      "REQUEST": "World Hope International has been asked to provide borehole water wells and sanitation facilities",
+      "COERCE": "They’ve set up these quarantines across the country"
+    }
+  },
+  {
+    "id": "a_kenyan-ministers-say-government-not-banning-facebook_6682585",
+    "candidates": [
+      "THREATEN",
+      "ACCUSE",
+      "REJECT",
+      "COERCE"
+    ],
+    "quotes": {
+      "THREATEN": "gave Facebook one week to comply with regulations against ethnic hate speech or risk suspension",
+      "ACCUSE": "accusing the social media platform of failing to stop hate speech ahead of Aug. 9 elections",
+      "REJECT": "Kenyan ministers said the government has no intention of banning Facebook",
+      "COERCE": "Facebook for example has in this electioneering period has deleted over 37,000 inflammatory comments"
+    }
+  },
+  {
+    "id": "europe_putin-sworn-amid-controversy-over-protest-violence",
+    "candidates": [
+      "ASSAULT",
+      "PROTEST",
+      "COERCE",
+      "REQUEST"
+    ],
+    "quotes": {
+      "ASSAULT": "police and protesters, during a large opposition demonstration, left dozens injured on both sides",
+      "PROTEST": "opposition demonstrators clashed with police during a mass protest in Moscow",
+      "COERCE": "More than 400 people were arrested and scores of demonstrators and policemen were injured",
+      "REQUEST": "Putin submitted Dmitry Medvedev’s candidacy for the post of prime minister to the State Duma"
+    }
+  },
+  {
+    "id": "extremism-watch_afghan-taliban-resume-fighting-after-3-day-cease-fire-ends",
+    "candidates": [
+      "ASSAULT",
+      "RETREAT",
+      "THREATEN",
+      "REQUEST",
+      "AGREE",
+      "SUPPORT",
+      "REJECT"
+    ],
+    "quotes": {
+      "ASSAULT": "The Afghan Taliban attacked security forces in at least nine provinces Monday",
+      "RETREAT": "the government extended by 10 days a unilateral cease-fire",
+      "THREATEN": "The Taliban had warned in a statement that the initial three-day cease-fire would end Sunday",
+      "REQUEST": "We ask the Taliban to respond to the Afghan people’s peace call and to engage",
+      "AGREE": "The United States is prepared to support, facilitate and participate in these discussions",
+      "SUPPORT": "The NATO-led Resolute Support Mission and U.S. Forces-Afghanistan supported Ghani's extension of the cease-fire",
+      "REJECT": "U.S. officials have always denied engaging in any talks with the Taliban"
+    }
+  },
+  {
+    "id": "a_metoo-journalist-labor-activist-on-trial-for-subversion-in-china-_7280863",
+    "candidates": [
+      "ACCUSE",
+      "COERCE",
+      "REJECT",
+      "REQUEST"
+    ],
+    "quotes": {
+      "ACCUSE": "charged with \"inciting subversion of state power\" the following month",
+      "COERCE": "Authorities blocked roads around the court and prevented anyone from approaching or gathering",
+      "REJECT": "diplomats from seven Western countries, including the United States, Britain, Germany, France, and the",
+      "REQUEST": "activists criticized Chinese authorities for putting on a \"sham trial\" and calling for their immediate"
+    }
+  },
+  {
+    "id": "iddle-east_us-weighs-boosting-training-syrian-rebels",
+    "candidates": [
+      "CONSULT",
+      "AID"
+    ],
+    "quotes": {
+      "CONSULT": "Senator Lindsey Graham, who met with President Barack Obama at the White House",
+      "AID": "Saudi Arabia, Turkey, Jordan, a lot of the Gulf Arab states have been helping quietly"
+    }
+  },
+  {
+    "id": "africa_ethiopian-hero-works-restore-girls-dignity",
+    "candidates": [
+      "COOPERATE"
+    ],
+    "quotes": {
+      "COOPERATE": "Freweini has teamed up with a charitable organization, , and together they have distributed"
+    }
+  },
+  {
+    "id": "covid-19-pandemic_india-surpasses-20-million-total-covid-19-infections-catastrophic-second-wave",
+    "candidates": [
+      "ACCUSE",
+      "REQUEST",
+      "COERCE",
+      "AID",
+      "AGREE",
+      "CONCEDE",
+      "COOPERATE"
+    ],
+    "quotes": {
+      "ACCUSE": "Prime Minister Narendra Modi’s inaction “is killing many innocent people”",
+      "REQUEST": "called for a full nationwide lockdown to stop the spread of the coronavirus",
+      "COERCE": "the U.S. will stop incoming flights from India",
+      "AID": "The U.S. Defense Department said Monday it had sent two plane loads of COVID-19 supplies",
+      "AGREE": "Moderna pledged Monday to supply 500 million doses of its two-shot COVID-19 vaccine to COVAX",
+      "CONCEDE": "all state-enforced COVID-19-related capacity limits on all retail businesses will be lifted May 19",
+      "COOPERATE": "he was removing the restrictions in coordination with the neighboring state of New Jersey"
+    }
+  },
+  {
+    "id": "a_can-employers-force-teleworking-americans-back-to-the-office-_7201900",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "africa_sudanese-nomads-threaten-war-if-excluded-abyei-referendu",
+    "candidates": [
+      "THREATEN",
+      "REQUEST",
+      "CONSULT",
+      "ACCUSE"
+    ],
+    "quotes": {
+      "THREATEN": "Nomads from the contested Abyei region of Sudan have promised violence if denied a vote",
+      "REQUEST": "The group presented U.N. representatives with a set of demands that included a review",
+      "CONSULT": "United States President Barack Obama held a separate meeting between Southern President Salva Kiir",
+      "ACCUSE": "The South also has accused the north of sending members of the tribe to Abyei"
+    }
+  },
+  {
+    "id": "east-asia-pacific_controversial-olympic-outreach-sparks-korean-unification-debate",
+    "candidates": [
+      "AGREE",
+      "COOPERATE",
+      "PROTEST",
+      "ACCUSE",
+      "SUPPORT"
+    ],
+    "quotes": {
+      "AGREE": "North Korea agreed to send an over 400-member delegation to the games",
+      "COOPERATE": "Moon’s Olympic outreach reopened lines of communications with Pyongyang",
+      "PROTEST": "We're opposed to Kim Jong Un's Pyongyang Olympics!",
+      "ACCUSE": "the Moon administration “is being dragged around by Kim Jong Un’s peace offensive”",
+      "SUPPORT": "The International Olympic Committee (IOC) on Saturday agreed to allow the South to add 12"
+    }
+  },
+  {
+    "id": "africa_liberia-opens-center-albinos",
+    "candidates": [],
+    "quotes": {}
+  },
+  {
+    "id": "east-asia-pacific_russian-fighter-jets-breach-japanese-air-space-tokyo",
+    "candidates": [
+      "THREATEN",
+      "ACCUSE",
+      "REJECT",
+      "MOBILIZE",
+      "AGREE"
+    ],
+    "quotes": {
+      "THREATEN": "two Russian fighter jets briefly entered Japanese airspace near the northern island of Hokkaido",
+      "ACCUSE": "Tokyo lodged a protest with Moscow over the incident",
+      "REJECT": "A Russian defense ministry spokesperson later denied that the jets had entered Japan's airspace",
+      "MOBILIZE": "the one-minute intrusion caused Japan's air force to scramble fighter jets in response",
+      "AGREE": "Japanese Prime Minister Shinzo Abe pledged to resolve a 60-year feud with Russia over northern"
+    }
+  },
+  {
+    "id": "east-asia_burma-declares-state-emergency",
+    "candidates": [
+      "ASSAULT",
+      "MOBILIZE",
+      "COERCE",
+      "SUPPORT"
+    ],
+    "quotes": {
+      "ASSAULT": "a Buddhist mob attacked a bus and killed 10 Rohingya, mistakenly believing they were responsible",
+      "MOBILIZE": "the Burmese government sent additional security forces to Rakhine, near the border with Bangladesh",
+      "COERCE": "established a curfew, after overnight rioting between ethnic Rohingya and local Buddhists",
+      "SUPPORT": "earning approval from Western nations who had long called for change"
+    }
+  },
+  {
+    "id": "iddle-east_pentagon-confirms-killing-information-minister",
+    "candidates": [
+      "ASSAULT"
+    ],
+    "quotes": {
+      "ASSAULT": "was targeted and killed by an airstrike on September 7"
+    }
+  }
+]
