@@ -562,3 +562,68 @@ def test_modifier_on_previous_year_or_month():
     assert _resolve_date("last month", pub).resolved_date.strftime("%Y-%m-%d") == "2024-02-15"
     assert _resolve_date("late last week", pub).resolved_date.strftime("%Y-%m-%d") == "2024-03-08"
     assert _resolve_date("earlier this month", pub).resolved_date.strftime("%Y-%m-%d") == "2024-03-15"
+
+
+# ---------------------------------------------------------------------------
+# Regression tests with anchors early in a month and across a year boundary.
+# The tests above all use a mid-month anchor, which hid a dateparser bug:
+# dateparser 1.2.1 resolves a bare weekday whose most recent occurrence is in
+# the previous month to the wrong month or year, sometimes after the pub date
+# ("Sunday" from Sat 2014-02-01 -> 2014-02-26). Fixed in dateparser 1.2.2;
+# pyproject pins >=1.4.0. These tests fail on an environment below that pin.
+
+import datetime as _dt
+
+import pytest
+
+_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+@pytest.mark.parametrize("expr,ref,expected", [
+    ("Sunday", "2014-02-01", "2014-01-26"),        # dateparser 1.2.1: 2014-02-26
+    ("Saturday", "2012-01-03", "2011-12-31"),      # across the year boundary; 1.2.1: 2011-01-31
+    ("Tuesday", "2015-07-01", "2015-06-30"),       # 1.2.1: 2015-07-30
+    ("last Sunday", "2014-02-01", "2014-01-26"),
+    ("on Friday", "2016-01-01", "2016-01-01"),     # the pub day itself (a Friday)
+    ("Thursday", "2016-01-01", "2015-12-31"),
+])
+def test_weekday_early_in_month_and_across_year(expr, ref, expected):
+    assert _resolve_date(expr, ref).resolved_date.strftime("%Y-%m-%d") == expected
+
+
+def test_weekday_sweep_first_week_of_each_month():
+    """Every anchor in the first 7 days of each month of 2016 and January 2017,
+    every weekday name: the most recent occurrence on or before the anchor."""
+    anchors = [_dt.date(2016, m, d) for m in range(1, 13) for d in range(1, 8)]
+    anchors += [_dt.date(2017, 1, d) for d in range(1, 8)]
+    for a in anchors:
+        for i, name in enumerate(_WEEKDAY_NAMES):
+            want = a - _dt.timedelta(days=(a.weekday() - i) % 7)
+            got = _resolve_date(name, a.isoformat()).resolved_date.date()
+            assert got == want, (name, a, got)
+
+
+# "earlier <weekday>" naming the publication day is earlier that same day
+# (wire style), not a week before. Seen in the ECAV evaluation: "Earlier
+# Wednesday" in a story filed Wed 2004-11-03 resolved to 2004-10-27.
+@pytest.mark.parametrize("expr,ref,expected", [
+    ("Earlier Wednesday", "2004-11-03", "2004-11-03"),
+    ("earlier Saturday", "2016-03-19", "2016-03-19"),
+    ("earlier Wednesday", "2016-03-18", "2016-03-16"),  # not the pub day: most recent Wednesday
+])
+def test_earlier_weekday(expr, ref, expected):
+    assert _resolve_date(expr, ref).resolved_date.strftime("%Y-%m-%d") == expected
+
+
+# A month with "last/this year" took the pub-date year: "April 14 of last
+# year" in a 2015 story resolved to 2015-04-14.
+@pytest.mark.parametrize("expr,ref,expected,granularity", [
+    ("April 14 of last year", "2015-04-28", "2014-04-14", "day"),
+    ("January last year", "2016-03-03", "2015-01", "month"),
+    ("in January this year", "2019-03-28", "2019-01", "month"),
+    ("December 3 last year", "2016-01-10", "2015-12-03", "day"),
+])
+def test_month_with_relative_year(expr, ref, expected, granularity):
+    res = _resolve_date(expr, ref)
+    assert res.resolved_date.strftime("%Y-%m-%d").startswith(expected)
+    assert res.granularity == granularity
