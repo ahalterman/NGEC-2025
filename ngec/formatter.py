@@ -285,13 +285,14 @@ def _same_day_weekday(raw: str, base_date: datetime) -> ResolvedDate | None:
     before publication.
 
     Deliberately narrow: it fires only when the *whole* span is a weekday name,
-    optionally prefixed with "on" or "this", with "early", "late" or
+    optionally prefixed with "on", "this" or "earlier" (wire copy: "earlier
+    Wednesday" in a Wednesday story is earlier that day), with "early", "late" or
     "overnight", and optionally followed by a part of the day ("late Monday",
     "Monday night", "on Monday evening"). Anything carrying a relative modifier
     ("last Tuesday", "next Tuesday"), a month, or a digit goes through the
     cascade untouched.
     """
-    m = re.fullmatch(rf"(?:on\s+|this\s+)?(?:(?:early|late|overnight)\s+)?({_WEEKDAYS})"
+    m = re.fullmatch(rf"(?:on\s+|this\s+|earlier\s+)?(?:(?:early|late|overnight)\s+)?({_WEEKDAYS})"
                      rf"(?:\s+(?:morning|afternoon|evening|night))?",
                      raw.strip(" -,."), re.IGNORECASE)
     if m is None or _WEEKDAY_INDEX[m.group(1).lower()] != base_date.weekday():
@@ -725,6 +726,18 @@ def _resolve_core(raw: str, base_date: datetime) -> ResolvedDate | None:
                         raw.strip(" -,."), re.IGNORECASE)
     if prev:
         return _anchor_bare_period(prev.group(1), prev.group(2).lower(), base_date, previous=True)
+
+    # 10c. A month (and day) followed by "last/this/next year" ("April 14 of last
+    #     year", "January last year", "in May this year"). Step 11 would strip
+    #     "last" and resolve the rest to the pub-date year, a year late. Rewrite
+    #     the year explicitly from the pub date and resolve that instead.
+    rel_year = re.fullmatch(rf"(.*\b(?:{_MONTHS})\b.*?),?\s+(?:of\s+)?(this|last|next)\s+year",
+                            raw.strip(" -,."), re.IGNORECASE)
+    if rel_year:
+        year = base_date.year + {"this": 0, "last": -1, "next": 1}[rel_year.group(2).lower()]
+        res = recurse(f"{rel_year.group(1)} {year}", f"'{rel_year.group(2)} year' read as {year}")
+        if res is not None:
+            return res
 
     # 11. Past-tense modifiers. dateparser handles "last year/month/week/decade"
     #     natively but not the synonyms ("previous year") nor "last <weekday>".
